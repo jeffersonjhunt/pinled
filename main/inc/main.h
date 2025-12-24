@@ -36,6 +36,8 @@ namespace ooe::pinled
 
     private:
         void version();
+        bool breath();
+        bool chase();
         bool test1(uint32_t iterations);
         bool test2(uint32_t iterations);
     };

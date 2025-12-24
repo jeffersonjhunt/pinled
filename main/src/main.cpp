@@ -1,6 +1,6 @@
 #include "main.h"
 
-#define PIXEL_COUNT  5
+#define PIXEL_COUNT  10
 #define NEOPIXEL_PIN GPIO_NUM_15
 
 #if !defined(MAX)
@@ -52,8 +52,10 @@ namespace ooe::pinled
     {
         ESP_LOGI(TAG, "tick");
         vTaskDelay(1000 * 1 / portTICK_PERIOD_MS);
-        test1(1);
-        test2(1);
+        // test1(5);
+        // test2(50);
+        //breath();
+        chase();
     }
 
     /**
@@ -65,13 +67,85 @@ namespace ooe::pinled
     }
 
 
+    bool Main::breath()
+    {
+       tNeopixelContext neopixel = neopixel_Init(PIXEL_COUNT, NEOPIXEL_PIN);
+       uint32_t refreshRate, taskDelay;
+
+       if(NULL == neopixel)
+       {
+          ESP_LOGE(TAG, "[%s] Initialization failed\n", __func__);
+          return false;
+       }
+
+       refreshRate = neopixel_GetRefreshRate(neopixel);
+       taskDelay = MAX(1, pdMS_TO_TICKS(1000UL / refreshRate));
+       ESP_LOGI(TAG, "[%s] Starting", __func__);
+       ESP_LOGI(TAG, "[%s] Refresh rate: %d Hz, task delay: %d ticks", __func__, refreshRate, taskDelay);
+       for(uint32_t i = 25; i < 100; ++i)
+       {
+          tNeopixel pixel[PIXEL_COUNT];
+          for(int px = 0; px < PIXEL_COUNT; ++px)
+          {
+              pixel[px].index = px;
+              pixel[px].rgb = NP_RGB(i, i, i);
+          }
+          neopixel_SetPixel(neopixel, pixel, ARRAY_SIZE(pixel));
+          vTaskDelay(taskDelay);
+       }
+        for(uint32_t i = 99; i > 24; --i)
+       {
+          tNeopixel pixel[PIXEL_COUNT];
+          for(int px = 0; px < PIXEL_COUNT; ++px)
+          {
+              pixel[px].index = px;
+              pixel[px].rgb = NP_RGB(i, i, i);
+          }
+          neopixel_SetPixel(neopixel, pixel, ARRAY_SIZE(pixel));
+          vTaskDelay(taskDelay);
+       }
+       ESP_LOGI(TAG, "[%s] Finished", __func__);
+       neopixel_Deinit(neopixel);
+       return true;
+    }
+
+bool Main::chase()
+{
+   tNeopixelContext neopixel = neopixel_Init(PIXEL_COUNT, NEOPIXEL_PIN);
+   uint32_t refreshRate, taskDelay;
+
+   if(NULL == neopixel)
+   {
+      ESP_LOGE(TAG, "[%s] Initialization failed\n", __func__);
+      return false;
+   }
+
+   refreshRate = neopixel_GetRefreshRate(neopixel);
+   taskDelay = MAX(1, pdMS_TO_TICKS(1000UL / refreshRate));
+   ESP_LOGI(TAG, "[%s] Starting", __func__);
+   ESP_LOGI(TAG, "[%s] Refresh rate: %d Hz, task delay: %d ticks", __func__, refreshRate, taskDelay);
+   for(uint32_t i = 0; i < PIXEL_COUNT; ++i)
+   {
+      tNeopixel pixel[] =
+      {
+          { i % PIXEL_COUNT, NP_RGB(50, 50, 50) },
+          { (i+PIXEL_COUNT-1) % PIXEL_COUNT, NP_RGB(0, 0, 0) },
+      };
+      neopixel_SetPixel(neopixel, pixel, ARRAY_SIZE(pixel));
+      vTaskDelay(taskDelay);
+   }
+   ESP_LOGI(TAG, "[%s] Finished", __func__);
+   neopixel_Deinit(neopixel);
+   return true;
+}
+
 bool Main::test1(uint32_t iterations)
 {
    tNeopixelContext neopixel = neopixel_Init(PIXEL_COUNT, NEOPIXEL_PIN);
    tNeopixel pixel[] =
    {
-       { 0, NP_RGB(50, 0,  0) }, /* red */
-       { 0, NP_RGB(0,  50, 0) }, /* green */
+       { 0, NP_RGB(50, 0,  0) }, /* green */
+       { 0, NP_RGB(0,  50, 0) }, /* red */
        { 0, NP_RGB(0,  0, 50) }, /* blue */
        { 0, NP_RGB(0,  0,  0) }, /* off */
    };
@@ -88,7 +162,7 @@ bool Main::test1(uint32_t iterations)
       for(int i = 0; i < ARRAY_SIZE(pixel); ++i)
       {
          neopixel_SetPixel(neopixel, &pixel[i], 1);
-         vTaskDelay(pdMS_TO_TICKS(200));
+         vTaskDelay(pdMS_TO_TICKS(1000));
       }
    }
    ESP_LOGI(TAG, "[%s] Finished", __func__);
@@ -111,12 +185,21 @@ bool Main::test2(uint32_t iterations)
    refreshRate = neopixel_GetRefreshRate(neopixel);
    taskDelay = MAX(1, pdMS_TO_TICKS(1000UL / refreshRate));
    ESP_LOGI(TAG, "[%s] Starting", __func__);
-   for(uint32_t i = 0; i < iterations * PIXEL_COUNT; ++i)
+   ESP_LOGI(TAG, "[%s] Refresh rate: %d Hz, task delay: %d ticks", __func__, refreshRate, taskDelay);
+   for(uint32_t i = 0; i < iterations; ++i)
    {
       tNeopixel pixel[] =
       {
-          { (i)   % PIXEL_COUNT, NP_RGB(0, 0,  0) },
-          { (i+5) % PIXEL_COUNT, NP_RGB(0, 50, 0) }, /* green */
+          { 0, NP_RGB(i, 0, 0) },
+          { 1, NP_RGB(0, i, 0) },
+          { 2, NP_RGB(0, 0, i) },
+          { 3, NP_RGB(i, i, 0) },
+          { 4, NP_RGB(i, i, i) },
+          { 5, NP_RGB(50-i, 0, 0) },
+          { 6, NP_RGB(0, 50-i, 0) },
+          { 7, NP_RGB(0, 0, 50-i) },
+          { 8, NP_RGB(50-i, 50-i, 0) },
+          { 9, NP_RGB(50-i, 50-i, 50-i) },
       };
       neopixel_SetPixel(neopixel, pixel, ARRAY_SIZE(pixel));
       vTaskDelay(taskDelay);
