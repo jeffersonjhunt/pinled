@@ -31,6 +31,8 @@ namespace ooe::pinled
     class Main
     {
     public:
+        int pinId;
+
         esp_err_t init();
         void run();
 
@@ -38,7 +40,10 @@ namespace ooe::pinled
         void version();
         bool breath();
         bool chase();
+        bool count();
+        bool check_state();
         bool test1(uint32_t iterations);
         bool test2(uint32_t iterations);
+        bool counter_reset();
     };
 } // namespace pinled
