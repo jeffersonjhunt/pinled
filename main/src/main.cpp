@@ -7,6 +7,8 @@
 #include "main.h"
 
 #include <cstring>
+#include <memory>
+#include <new>
 
 #include "esp_rom_sys.h"
 
@@ -96,9 +98,15 @@ namespace ooe::pinled
                 profiler_.observe(frame, num_channels_);
         }
 
-        ChannelProfile profiles[LampScan::MAX_CHANNELS]{};
-        FilamentParams params[LampScan::MAX_CHANNELS]{};
-        if (profiler_.classify(profiles, params, num_channels_) == ESP_OK)
+        // Heap-allocated: MAX_CHANNELS-sized arrays overflow the main task stack.
+        std::unique_ptr<ChannelProfile[]> profiles(new (std::nothrow) ChannelProfile[num_channels_]());
+        std::unique_ptr<FilamentParams[]> params(new (std::nothrow) FilamentParams[num_channels_]());
+        if (!profiles || !params)
+        {
+            ESP_LOGE(TAG, "auto-profiling skipped: out of memory");
+            return;
+        }
+        if (profiler_.classify(profiles.get(), params.get(), num_channels_) == ESP_OK)
         {
             for (size_t ch = 0; ch < num_channels_; ++ch)
                 filament_.set_params(ch, params[ch]);
