@@ -18,9 +18,7 @@
         "IDF_PATH": "/home/jhunt/.espressif/v5.5/esp-idf",
         "IDF_TOOLS_PATH": "/home/jhunt/.espressif/tools",
         "IDF_PYTHON_ENV_PATH": "/home/jhunt/.espressif/tools/python/v5.5/venv",
-        "PATH": "/home/jhunt/.espressif/tools/python/v5.5/venv/bin:/home/jhunt/.espressif/tools/cmake/3.30.2/bin:/home/jhunt/.espressif/tools/esp-clang/esp-19.1.2_20250312/esp-clang/bin:/home/jhunt/.espressif/tools/esp-rom-elfs/20241011/:/home/jhunt/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/bin:/home/jhunt/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/esp32ulp-elf/bin:/home/jhunt/.espressif/tools/ninja/1.12.1/:/home/jhunt/.espressif/tools/openocd-esp32/v0.12.0-esp32-20250422/openocd-esp32/bin:/home/jhunt/.espressif/tools/riscv32-esp-elf-gdb/16.2_20250324/riscv32-esp-elf-gdb/bin:/home/jhunt/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20241119/riscv32-esp-elf/bin:/home/jhunt/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20241119/riscv32-esp-elf/riscv32-esp-elf/bin:/home/jhunt/.espressif/tools/xtensa-esp-elf-gdb/16.2_20250324/xtensa-esp-elf-gdb/bin:/home/jhunt/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin:/home/jhunt/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/bin:$penv{PATH}",
-        "ESP_ROM_ELF_DIR": "/home/jhunt/.espressif/tools/esp-rom-elfs/20241011/",
-        "OPENOCD_SCRIPTS": "/home/jhunt/.espressif/tools/openocd-esp32/v0.12.0-esp32-20250422/openocd-esp32/share/openocd/scripts"
+        "PATH": "/home/jhunt/.espressif/tools/python/v5.5/venv/bin:/home/jhunt/.espressif/tools/cmake/3.30.2/bin:/home/jhunt/.espressif/tools/esp-clang/esp-19.1.2_20250312/esp-clang/bin:/home/jhunt/.espressif/tools/ninja/1.12.1/:/home/jhunt/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin:/home/jhunt/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/bin:$penv{PATH}"
       }
     },
     {
@@ -35,9 +33,7 @@
         "IDF_PATH": "/home/jhunt/.espressif/v6.0/esp-idf",
         "IDF_TOOLS_PATH": "/home/jhunt/.espressif/tools",
         "IDF_PYTHON_ENV_PATH": "/home/jhunt/.espressif/tools/python/v6.0/venv",
-        "PATH": "/home/jhunt/.espressif/tools/python/v6.0/venv/bin:/home/jhunt/.espressif/tools/cmake/4.0.3/bin:/home/jhunt/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin:/home/jhunt/.espressif/tools/esp-rom-elfs/20241011/:/home/jhunt/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/bin:/home/jhunt/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/esp32ulp-elf/bin:/home/jhunt/.espressif/tools/ninja/1.12.1/:/home/jhunt/.espressif/tools/openocd-esp32/v0.12.0-esp32-20251215/openocd-esp32/bin:/home/jhunt/.espressif/tools/riscv32-esp-elf-gdb/16.3_20250913/riscv32-esp-elf-gdb/bin:/home/jhunt/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/bin:/home/jhunt/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20251204/riscv32-esp-elf/riscv32-esp-elf/bin:/home/jhunt/.espressif/tools/xtensa-esp-elf-gdb/16.3_20250913/xtensa-esp-elf-gdb/bin:/home/jhunt/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin:/home/jhunt/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/xtensa-esp-elf/bin:$penv{PATH}",
-        "ESP_ROM_ELF_DIR": "/home/jhunt/.espressif/tools/esp-rom-elfs/20241011/",
-        "OPENOCD_SCRIPTS": "/home/jhunt/.espressif/tools/openocd-esp32/v0.12.0-esp32-20251215/openocd-esp32/share/openocd/scripts"
+        "PATH": "/home/jhunt/.espressif/tools/python/v6.0/venv/bin:/home/jhunt/.espressif/tools/cmake/4.0.3/bin:/home/jhunt/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin:/home/jhunt/.espressif/tools/ninja/1.12.1/:/home/jhunt/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/bin:/home/jhunt/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/xtensa-esp-elf/bin:$penv{PATH}"
       }
     }
   ]

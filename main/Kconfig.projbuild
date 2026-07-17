@@ -1,0 +1,57 @@
+menu "pinled configuration"
+
+    menu "GPIO assignment (QT Py ESP32 Pico defaults)"
+        config PINLED_CLK_GPIO
+            int "74HC161 CLK GPIO (shared)"
+            default 25
+        config PINLED_MR_GPIO
+            int "74HC161 /MR reset GPIO (shared, active low)"
+            default 27
+        config PINLED_DATA0_GPIO
+            int "Module 0 DATA_IN GPIO"
+            default 26
+        config PINLED_LED_GPIO
+            int "WS2812B/SK6812 data GPIO (RMT)"
+            default 15
+    endmenu
+
+    menu "Scan geometry"
+        config PINLED_NUM_MODULES
+            int "Number of 16-channel modules on the bus"
+            range 1 8
+            default 1
+        config PINLED_CHANNELS_PER_MODULE
+            int "Channels per module (8 = single mux, 16 = dual '251)"
+            range 8 16
+            default 16
+        config PINLED_ACTIVE_LOW
+            bool "Front end is active-low (inverting FET stage)"
+            default y
+    endmenu
+
+    menu "Timing"
+        config PINLED_SAMPLE_RATE_HZ
+            int "Per-channel raw sample rate (Hz)"
+            default 2000
+        config PINLED_REFRESH_HZ
+            int "LED frame rate (Hz)"
+            range 30 240
+            default 90
+    endmenu
+
+    menu "Filament model defaults"
+        config PINLED_ATTACK_MS
+            int "Filament attack time constant (ms)"
+            default 30
+        config PINLED_DECAY_MS
+            int "Filament decay time constant (ms)"
+            default 40
+    endmenu
+
+    menu "LED string"
+        config PINLED_LED_COUNT
+            int "Number of addressable LEDs"
+            default 16
+    endmenu
+
+endmenu

@@ -1,0 +1,16 @@
+# pinled v2 build defaults (ESP-IDF 5.5.x, target esp32)
+
+CONFIG_IDF_TARGET="esp32"
+
+# Custom partition table with an NVS partition for machine profiles
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# A little more main-task stack for init
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
+
+# FreeRTOS tick at 1 kHz eases sub-ms task timing during bring-up
+CONFIG_FREERTOS_HZ=1000
+
+# Compiler
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
