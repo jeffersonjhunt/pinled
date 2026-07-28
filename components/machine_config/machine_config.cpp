@@ -22,7 +22,10 @@ namespace ooe::pinled
         MachineConfig c{};
         c.clk_pin = static_cast<gpio_num_t>(CONFIG_PINLED_CLK_GPIO);
         c.mr_pin = static_cast<gpio_num_t>(CONFIG_PINLED_MR_GPIO);
-        c.data_pins[0] = static_cast<gpio_num_t>(CONFIG_PINLED_DATA0_GPIO);
+        // One shared DATA_IN for the whole chain. The data_pins[] array is a
+        // leftover from the per-module topology and collapses to a single
+        // data_pin in M1a; until then only [0] is meaningful.
+        c.data_pins[0] = static_cast<gpio_num_t>(CONFIG_PINLED_DATA_GPIO);
         c.led_pin = static_cast<gpio_num_t>(CONFIG_PINLED_LED_GPIO);
         c.num_modules = CONFIG_PINLED_NUM_MODULES;
         c.channels_per_module = CONFIG_PINLED_CHANNELS_PER_MODULE;

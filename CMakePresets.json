@@ -8,11 +8,11 @@
   "configurePresets": [
     {
       "name": "esp-idf-v5.5",
-      "displayName": "ESP-IDF v5.5 (esp32)",
+      "displayName": "ESP-IDF v5.5 (esp32s3)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
-        "IDF_TARGET": "esp32"
+        "IDF_TARGET": "esp32s3"
       },
       "environment": {
         "IDF_PATH": "/home/jhunt/.espressif/v5.5/esp-idf",
@@ -23,11 +23,11 @@
     },
     {
       "name": "esp-idf-v6.0",
-      "displayName": "ESP-IDF v6.0 (esp32)",
+      "displayName": "ESP-IDF v6.0 (esp32s3)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
-        "IDF_TARGET": "esp32"
+        "IDF_TARGET": "esp32s3"
       },
       "environment": {
         "IDF_PATH": "/home/jhunt/.espressif/v6.0/esp-idf",

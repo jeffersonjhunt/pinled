@@ -1,6 +1,13 @@
-# pinled v2 build defaults (ESP-IDF 5.5.x, target esp32)
+# pinled v2 build defaults (ESP-IDF 5.5.x, target esp32s3)
+# Board: Adafruit QT Py ESP32-S3, 8 MB flash, no PSRAM (chip marking FN8C0).
 
-CONFIG_IDF_TARGET="esp32"
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# The QT Py ESP32-S3 has no USB-UART bridge — USB-C goes straight to the S3's
+# native USB. Without this the console is on UART0 and `idf.py monitor` shows
+# nothing.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # Custom partition table with an NVS partition for machine profiles
 CONFIG_PARTITION_TABLE_CUSTOM=y
