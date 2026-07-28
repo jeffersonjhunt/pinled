@@ -34,7 +34,7 @@ namespace ooe::pinled
         gpio_num_t led_pin{GPIO_NUM_NC};
         size_t num_modules{1};
         size_t channels_per_module{16};
-        bool active_low{true};
+        bool active_low{false}; ///< non-inverting front end (HW-1); see docs/TIMING.md §4.2
 
         // --- timing ---
         float sample_rate_hz{2000.0f}; ///< per-channel raw sample rate target

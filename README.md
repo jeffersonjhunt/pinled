@@ -29,13 +29,23 @@ machine.
 
 ## Hardware (per 16-channel module)
 
-- **74HC161** synchronous counter — `Q0..Q2` select the mux channel, `Q3` bank-selects.
-- **2× 74HC251** — 8:1 muxes with **tri-state** outputs, bussed onto one `DATA_IN` line.
-- **16× N-ch MOSFET + diode** — per-channel level-shift (5-20 V, AC/DC) + protection.
-- **ESP32** (POC: Adafruit QT Py ESP32 Pico) — 3 GPIO/module (`CLK`, `/MR`, `DATA_IN`) + 1 GPIO for the whole LED string.
+- **74LVC161** synchronous counter — `Q0..Q2` select the mux channel, `Q3` bank-selects.
+- **2× 74LVC251** — 8:1 muxes with **tri-state** outputs, bussed onto one `DATA` line.
+- **16× N-ch MOSFET + inverting Schmitt trigger** — per-channel level-shift
+  (5-20 V, AC/DC), protection, and hysteresis. Two inversions cancel: lamp on
+  reads as logic high.
+- **ESP32-S3** (Adafruit QT Py ESP32-S3) — **3 GPIO total**, not per module,
+  plus 1 GPIO for the whole LED string.
+
+Modules chain 1..8 on a 5-pin JST-SH harness (`CLK`, `/MR`, `DATA`, `GND`,
+`VIN`) in 100 mm hops, giving **8 to 128 channels on the same four pins**.
+Counters cascade via the carry bit and unaddressed modules park their muxes in
+high-Z, so every module shares one data line.
 
 Why '251 not '151: the '151 is push-pull and can't share a data line; the '251
-is tri-state and can. See [`docs/HARDWARE.md`](docs/HARDWARE.md).
+is tri-state and can — which is what scales from 2 drivers to 16. See
+[`docs/HARDWARE.md`](docs/HARDWARE.md) and
+[`docs/TIMING.md`](docs/TIMING.md).
 
 ## Firmware layout
 
@@ -47,32 +57,43 @@ components/
   profiler/            drive-scheme auto-classifier
   lamp_map/            channel -> LED mapping + WS2812B (RMT) render
   machine_config/      NVS profiles + Kconfig defaults
-docs/                  DOSSIER, FIRMWARE_PLAN, REQUIREMENTS, HARDWARE
+docs/                  DOSSIER, FIRMWARE_PLAN, REQUIREMENTS, HARDWARE, TIMING
 ```
 
-Two FreeRTOS tasks: `scan_task` samples fast and feeds the integrators;
-`render_task` pushes LED frames at 60-120 Hz. The integrator decouples the two
-rates (and kills matrix-strobe aliasing).
+Two FreeRTOS tasks: `scan_task` samples every channel at a fixed 10 kHz and
+feeds the integrators; `render_task` pushes LED frames at 60-120 Hz. The
+integrator decouples the two rates (and kills matrix-strobe aliasing).
+
+The scan rate is deliberately fixed rather than free-running: frame time is
+linear in channel count (3.2 µs at 16 channels, 23.5 µs at 128), so pacing is
+what makes a filament time constant mean the same thing on a bench rig and a
+full playfield. See [`docs/TIMING.md`](docs/TIMING.md).
 
 ## Build
 
 Requires ESP-IDF **5.5.x** (a v6.0 preset is also provided).
 
 ```sh
-idf.py set-target esp32
+idf.py set-target esp32s3
 idf.py menuconfig      # pins, channel count, timing under "pinled configuration"
 idf.py build flash monitor
 ```
 
-Pins default to the QT Py ESP32 Pico mapping (`CLK`=25, `/MR`=27, `DATA_IN`=26,
-`LED`=15) and are overridable in `menuconfig`.
+Pins default to the QT Py ESP32-S3 mapping (`CLK`=18/A0, `/MR`=17/A1,
+`DATA_IN`=9/A2, `LED`=8/A3) and are overridable in `menuconfig`.
 
 ## Status
 
 First-cut v2. `lamp_scan` and `filament` are implemented; `profiler`,
 `lamp_map`, and `machine_config` have working interfaces with documented
-algorithms and TODOs for v1. See [`docs/FIRMWARE_PLAN.md`](docs/FIRMWARE_PLAN.md)
-for the bring-up milestones.
+algorithms and TODOs for v1.
+
+The design is planned through to the chained-module architecture (8-128
+channels) — see [`docs/TIMING.md`](docs/TIMING.md) — but the code has not caught
+up yet: it still targets `esp32` with the old pin map, reads one `DATA_IN` per
+module rather than a shared bus, and free-runs the scan loop. Those are
+milestones M0.5-M1c in
+[`docs/FIRMWARE_PLAN.md`](docs/FIRMWARE_PLAN.md).
 
 ## License
 

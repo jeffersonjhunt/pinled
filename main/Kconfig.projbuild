@@ -25,8 +25,17 @@ menu "pinled configuration"
             range 8 16
             default 16
         config PINLED_ACTIVE_LOW
-            bool "Front end is active-low (inverting FET stage)"
-            default y
+            bool "Front end is active-low (inverting)"
+            default n
+            help
+                The v2 front end is a level-shift MOSFET (inverting) followed by
+                an inverting Schmitt trigger, so it is non-inverting overall:
+                lamp on reads as logic high. Leave this off for v2 hardware.
+
+                This must stay consistent with the orientation of the DATA_IN
+                bias resistor: a floating or unpopulated bus has to read "lamp
+                off", which for a non-inverting front end means a pull-down.
+                See docs/TIMING.md section 4.2.
     endmenu
 
     menu "Timing"

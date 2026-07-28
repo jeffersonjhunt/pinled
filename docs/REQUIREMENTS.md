@@ -8,13 +8,16 @@ desired, "MAY" = optional.
 
 | ID | Req | Status |
 |---|---|---|
-| FR-SCAN-1 | The system SHALL scan lamp channels via a 74HC161 counter driving one or more 74HC251 muxes, reading channel state on ESP32 GPIO. | MVP |
+| FR-SCAN-1 | The system SHALL scan lamp channels via a 74x161 counter driving one or more 74x251 muxes, reading channel state on ESP32 GPIO. | MVP |
 | FR-SCAN-2 | The system SHALL support 16 channels per module (dual '251, Q3 bank-select on a shared tri-state `DATA_IN`). | MVP |
-| FR-SCAN-3 | The system SHALL support N modules on a shared `CLK`/`/MR` bus, one dedicated `DATA_IN` GPIO per module. | v1 |
-| FR-SCAN-4 | A scan frame SHALL assert `/MR`, then read-then-clock counts 0..(channels-1). | MVP |
-| FR-SCAN-5 | Per-channel raw sample rate SHALL be configurable and default to ≥ 2 kHz. | MVP |
-| FR-SCAN-6 | Channel active polarity SHALL be configurable (`ACTIVE_LOW` default, for inverting FET front end). | MVP |
-| FR-SCAN-7 | The scan loop SHOULD be movable off bit-bang to a timer/`dedic_gpio`/RMT-driven clock without changing the integrator interface. | future |
+| FR-SCAN-3 | The system SHALL support 1..8 modules chained on one bus — counters cascaded via TC, module index decoded from the counter's upper bits, unaddressed '251s in high-Z — sharing a single `CLK`, `/MR`, and `DATA_IN`. | MVP |
+| FR-SCAN-4 | A scan frame SHALL assert `/MR`, then read-then-clock counts 0..(channels-1) across the whole chain. Any module count 1..8 SHALL be legal. | MVP |
+| FR-SCAN-5 | Per-channel raw sample rate SHALL be configurable and default to 10 kHz. | MVP |
+| FR-SCAN-6 | Channel active polarity SHALL be configurable, defaulting to **active-high** (FET + inverting Schmitt trigger = non-inverting front end). | MVP |
+| FR-SCAN-7 | The scan loop SHALL use the S3 `dedic_gpio` peripheral for `CLK`/`/MR`/`DATA_IN`, with the bundle created on the scan task's own core. | MVP |
+| FR-SCAN-8 | Sampling SHALL be paced to a fixed configured rate independent of channel count, not free-run. | MVP |
+| FR-SCAN-9 | The driver SHALL measure actual frame time at boot, clamp the configured rate to what the hardware sustains at ≤ 60% core occupancy, and publish the resulting rate as the authoritative Fs for all downstream time-constant math. | MVP |
+| FR-SCAN-10 | Settle timing SHALL be two-tier: a short in-module settle and a longer settle at module boundaries and frame start. | MVP |
 
 ## 2. Filament (brightness reconstruction)
 
@@ -34,6 +37,8 @@ desired, "MAY" = optional.
 | FR-PROF-2 | Profiling SHALL run at boot and be re-armable at runtime. | v1 |
 | FR-PROF-3 | Classifier output `{class, duty_norm, period_est, confidence}` SHALL seed each channel's integrator gain/attack/decay. | v1 |
 | FR-PROF-4 | A machine profile MAY override or lock per-channel class/params. | v1 |
+| FR-PROF-5 | The observation window SHALL be specified in milliseconds (default 500 ms–1 s) and the frame count derived from the measured Fs, so the window spans several AC and matrix periods at any channel count. | v1 |
+| FR-PROF-6 | The classifier SHOULD be robust to correlated false edges from solenoid-induced ground bounce (e.g. discard frames in which an implausible fraction of channels transition together). | v1 |
 
 ## 4. LED output / mapping
 
@@ -44,6 +49,9 @@ desired, "MAY" = optional.
 | FR-LED-3 | LED frame/refresh rate SHALL be configurable (default 60–120 Hz) and decoupled from scan rate. | MVP |
 | FR-LED-4 | Per-lamp color/tint (e.g. warm-white for GI, colored inserts) SHALL be configurable. | v1 |
 | FR-LED-5 | The renderer SHOULD gamma-correct and dither low levels to avoid visible stepping. | v1 |
+| FR-LED-6 | The renderer SHALL build one frame and issue a single strip transmit per refresh, not one transmit per channel. | MVP |
+| FR-LED-7 | A global brightness/current cap SHALL bound worst-case LED draw (~6 A at 128 LEDs full-on). | v1 |
+| FR-LED-8 | `led_count` × per-LED transmit time SHALL be validated against `refresh_hz` at boot and the refresh rate clamped if it does not fit. | MVP |
 
 ## 5. Configuration / profiles
 
@@ -58,14 +66,31 @@ desired, "MAY" = optional.
 
 | ID | Req | Status |
 |---|---|---|
-| NFR-1 | Target ESP-IDF **5.5.x**, IDF_TARGET `esp32` (S3 compatible). | MVP |
+| NFR-1 | Target ESP-IDF **5.5.x**, IDF_TARGET `esp32s3` (Adafruit QT Py ESP32-S3). | MVP |
 | NFR-2 | Reusable logic (scan, filament, profiler) SHALL be ESP-IDF components with public headers under `include/`. | MVP |
 | NFR-3 | Code style SHALL follow the existing repos: C++, `ooe::pinled` namespace, Doxygen headers, `esp_err_t` returns, `ESP_LOG*` with per-file `TAG`, `ESP_ERROR_CHECK`. | MVP |
 | NFR-4 | No dynamic allocation in per-sample / per-frame hot paths. | v1 |
 | NFR-5 | BOM target ≤ ~$25/strip; original ESP32-class MCU. | v1 |
 | NFR-6 | License MIT; third-party attributions retained under `licenses/`. | MVP |
 
-## 7. Out of scope (first cut)
+## 7. Hardware contract
+
+Properties of the board the firmware depends on. Changing one of these is a
+firmware change, not just a hardware change — see `TIMING.md` for derivations.
+
+| ID | Req | Status |
+|---|---|---|
+| HW-1 | The front end SHALL be non-inverting overall (level-shift MOSFET followed by an *inverting* Schmitt trigger, e.g. 74LVC14): lamp on → logic high. This sets the `active_low` default. | MVP |
+| HW-2 | The shared `DATA_IN` SHALL carry a ~1 kΩ bias resistor oriented so that a floating or unpopulated bus reads *lamp off* — a pull-**down**, given HW-1. HW-1 and HW-2 are one decision. | MVP |
+| HW-3 | Muxes and counters SHALL be LVC/LV family at 3.3 V. HC at 3.3 V cannot hold a valid output level against the 1 kΩ bias. | MVP |
+| HW-4 | Modules SHALL chain on a 5-pin JST-SH harness: `CLK`, `/MR`, `DATA`, `GND`, `VIN`, in ~100 mm hops, up to 8 modules / 800 mm. | MVP |
+| HW-5 | Each module SHALL carry local decoupling (100 nF per IC + ~10 µF bulk); `CLK` SHALL have ~100 Ω series termination at the source. | MVP |
+| HW-6 | pinled ground SHALL tie to the machine's lamp-return ground at a single point near the lamp matrix return. | MVP |
+| HW-7 | The input SHALL survive rail sag from solenoid firing (series Schottky + bulk capacitance + kickback clamping) without an MCU brownout reset. | MVP |
+| HW-8 | Distribution SHOULD be 5 V with local 3.3 V LDOs; higher rails require a single switching regulator at the controller, not per-module switchers adjacent to the sense bus. | v1 |
+| HW-9 | The LED data line SHOULD be level-shifted to meet WS2812B V_IH (0.7 × VDD), or the strip run at a reduced VDD. | v1 |
+
+## 8. Out of scope (first cut)
 - OTA / Wi-Fi provisioning UI, web config portal.
 - Reverse-engineering per-title lamp tables (baseline behavior comes from
   sensing, not decoding ROM state).

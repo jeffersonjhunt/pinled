@@ -37,7 +37,7 @@ namespace ooe::pinled
         gpio_num_t data_pins[LAMPSCAN_MAX_MODULES]{}; ///< one DATA_IN per module
         size_t num_modules{1};             ///< number of modules on the bus
         size_t channels_per_module{16};    ///< 8 (single '151/'251) or 16 (dual '251)
-        bool active_low{true};             ///< inverting FET front end -> true
+        bool active_low{false};            ///< MOSFET + inverting Schmitt = non-inverting (HW-1)
         uint32_t settle_ns{50};            ///< mux/counter settle before sampling
     };
 

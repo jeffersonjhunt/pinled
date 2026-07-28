@@ -11,46 +11,60 @@ flowchart LR
     subgraph FE["Front end (×16 per module)"]
       TAP["Lamp socket tap<br/>5–20 V AC/DC"] --> DIV["divider + diode<br/>+ clamp to 3V3"]
       DIV --> FET["N-ch MOSFET<br/>(inverting)"]
+      FET --> ST["74LVC14 Schmitt<br/>(inverting) → net non-inverting"]
     end
 
-    subgraph MUX["Scan (one module)"]
-      A["74HC251 #A<br/>ch 0–7 (tri-state Y)"]
-      B["74HC251 #B<br/>ch 8–15 (tri-state Y)"]
-      C161["74HC161 counter"]
+    subgraph MUX["Scan (one module, ×1..8 chained)"]
+      A["74LVC251 #A<br/>ch 0–7 (tri-state Y)"]
+      B["74LVC251 #B<br/>ch 8–15 (tri-state Y)"]
+      C161["74LVC161 counter<br/>Q0..Q2 addr, Q3 bank"]
       INV["inverter (Q3)"]
+      SEL["module select<br/>(wrap count vs strapped ID)"]
       C161 -- "Q0..Q2 select" --> A
       C161 -- "Q0..Q2 select" --> B
       C161 -- "Q3 → /OE" --> A
       C161 -- "Q3" --> INV -- "/OE" --> B
+      C161 -- "carry" --> SEL
+      SEL -- "/OE gate (high-Z when not addressed)" --> A
+      SEL -- "/OE gate" --> B
     end
 
-    FET --> A
-    FET --> B
-    A -- "Y (bussed)" --> DATA["DATA_IN"]
+    ST --> A
+    ST --> B
+    A -- "Y (bussed)" --> DATA["DATA (shared by all modules)"]
     B -- "Y (bussed)" --> DATA
+    BIAS["1 kΩ bias → GND<br/>floating bus reads 'off'"] --- DATA
 
-    subgraph ESP["ESP32"]
-      SCAN["scan_task"] -- "CLK" --> C161
+    subgraph ESP["ESP32-S3 (QT Py)"]
+      SCAN["scan_task<br/>dedic_gpio, 10 kHz paced"] -- "CLK" --> C161
       SCAN -- "/MR" --> C161
       DATA --> SCAN
       SCAN --> FIL["filament integrators"]
       FIL --> REN["render_task"]
     end
 
-    REN -- "1 GPIO (RMT)" --> LED["WS2812B / SK6812 string"]
+    REN -- "1 GPIO (RMT)" --> LED["WS2812B / SK6812 string<br/>1:1 with channels"]
 ```
 
 ## ESP32 pin budget
 
-| Signal | Direction | Scope | POC default (QT Py ESP32 Pico) |
+| Signal | Direction | Scope | GPIO (QT Py ESP32-S3) |
 |---|---|---|---|
-| `CLK` | out | shared bus (all modules) | GPIO25 (A1) |
-| `/MR` (reset) | out | shared bus (all modules) | GPIO27 (A2) |
-| `DATA_IN` | in | one per module | GPIO26 (A0) |
-| `LED` | out (RMT) | whole string | GPIO15 (A3) |
+| `CLK` | out | shared bus (all modules) | 18 (A0) |
+| `/MR` (reset) | out | shared bus (all modules) | 17 (A1) |
+| `DATA_IN` | in | **shared bus (all modules)** | 9 (A2) |
+| `LED` | out (RMT) | whole string | 8 (A3) |
+| status pixel | out (RMT) | onboard | 39 (power enable 38) |
+| profiler re-arm | in | onboard | 0 (BOOT button) |
 
-Per-module cost = **1 GPIO** (`DATA_IN`); `CLK`/`/MR`/`LED` are shared. So a
-64-lamp game ≈ 4 modules ≈ **6 input-side GPIO + 1 LED GPIO**.
+Per-module GPIO cost = **zero**. Every module hangs off the same three-wire bus,
+so 1 module and 8 modules cost the same 3 input-side GPIO + 1 LED GPIO. A
+64-lamp game (4 modules) and a 128-lamp game (8 modules) are the same pin
+budget.
+
+> The POC pins (QT Py ESP32 Pico: 25/27/26/15) are **superseded and unusable
+> here** — GPIO 26 and 27 are SPI flash pins on the ESP32-S3, and 15 and 25 are
+> not broken out on this board.
 
 ## 74HC251 vs 74HC151 (why the swap)
 
@@ -65,6 +79,12 @@ The tri-state output is what lets two '251s share `DATA_IN`. This is the
 open-drain/tri-state distinction from the design discussion applied: you can't
 wire-share push-pull outputs, you *can* wire-share high-Z ones.
 
+The same property is what lets **all 8 modules** share one `DATA` line, not just
+the two '251s within a module — the argument scales from 2 drivers to 16. Note
+the table compares HC parts because that is the classic reference; v2 uses the
+**LVC** equivalents for the drive and speed reasons in "Shared `DATA` bus"
+above.
+
 ## 74HC161 usage
 
 - Synchronous 4-bit binary counter, **asynchronous** active-low clear (`/MR`).
@@ -73,20 +93,114 @@ wire-share push-pull outputs, you *can* wire-share high-Z ones.
 - `CEP`/`CET` tied high (count enabled), `PE`/`/LOAD` tied high (no parallel load).
 - `/MR` low pulse zeroes the count with no clock edge → clean frame start.
 
+## Chaining modules
+
+Modules chain on a **5-pin JST-SH harness in ~100 mm hops**, up to 8 modules /
+800 mm (HW-4):
+
+| Pin | Signal |
+|---|---|
+| 1 | `CLK` |
+| 2 | `/MR` |
+| 3 | `DATA` |
+| 4 | `GND` |
+| 5 | `VIN` (labelled `VIN`, not `3V3` — see Power) |
+
+Note what is *not* on the harness: no mux address lines and no inter-module
+carry. Every module therefore has to derive both its channel address and its own
+"am I selected right now" state locally, from nothing but the shared `CLK` and
+`/MR`. Only the addressed module's '251s drive `DATA`; the rest sit in high-Z.
+
+> **To confirm.** The reading that fits a 5-pin harness: each module carries its
+> own address counter (0..15, in lockstep with every other module since they
+> share `CLK`/`/MR`) plus a second counter chained off the first's carry, which
+> counts address-counter wraps. That wrap count is compared against a
+> strapped/jumpered module ID, and the match drives `/OE` on that module's two
+> '251s. No inter-module carry wire needed — each module independently computes
+> which module should be active. If the mechanism is different, the firmware
+> timing model is unaffected (it is still one serial walk with a handoff every
+> 16 channels), but the failure modes below change.
+>
+> Firmware-visible consequence either way: **module ID is set in hardware, so
+> physical harness order must match the strapped IDs.** A missing ID leaves a
+> 16-channel span reading the bias level (all-off, quietly), and a duplicated ID
+> causes bus contention on that span. Both are detectable at boot and worth a
+> diagnostic.
+
+## Shared `DATA` bus
+
+All modules bus their '251 outputs onto one line, so the bus needs defining when
+nobody drives it — during the `/OE` handoff between modules, and across any
+unpopulated span.
+
+- **~1 kΩ bias resistor** (HW-2). Orientation follows front-end polarity: a
+  floating bus must read *lamp off*, which with the non-inverting front end
+  (HW-1) means a **pull-down**. Also gives a safe pre-boot state — bus low, all
+  lamps dark, before firmware runs. If the front end is ever changed to
+  inverting, this resistor flips too; they are one decision.
+- **LVC/LV family, not HC** (HW-3). 1 kΩ against 3.3 V is 3.3 mA of standing
+  load on whichever '251 is driving; an HC part at 3.3 V has roughly a 3 mA
+  budget and may not reach a valid output level. LVC also slews the ~150 pF bus
+  in ~20 ns against HC's ~124 ns, which is most of the module-boundary settle
+  budget. A 4.7 kΩ bias with HC is the alternative and costs ~1.5 µs per
+  boundary — roughly double the 128-channel frame time.
+- **~100 Ω series termination on `CLK` at the source** (HW-5) — single ground
+  return next to a fast clock in a 5-conductor harness.
+- **Local decoupling is mandatory** (HW-5): 100 nF per IC + ~10 µF bulk per
+  module. 800 mm of thin wire is ~0.5–0.8 µH of loop inductance; a '251 slamming
+  150 pF cannot source that transient down the harness.
+
+Estimated bus load at full extension is ~150 pF and the resulting settle budget
+is ~100 ns in-module / ~200 ns at a boundary. Those are the load-bearing numbers
+for the whole scan-rate model — see `TIMING.md` §2.3 and §4.
+
 ## Front-end (per channel) checklist
 
 - **Level shift** 5–20 V lamp drive → 3.3 V logic. Common-source N-FET is
-  simple and **inverts** (firmware `active_low`).
+  simple and **inverts**.
+- **Schmitt trigger** after the FET, *inverting* type (74LVC14 hex, or '1G14
+  singles — a '17 is the non-inverting buffer and would leave the signal
+  inverted). Two inversions cancel, so the front end is **non-inverting
+  overall: lamp on → logic high** (HW-1), and firmware `active_low` defaults
+  **off**. 16 channels needs 3× '14.
+- **Hysteresis** comes from that Schmitt (V_hys ≈ 0.4–0.6 V at 3.3 V), and it is
+  the primary defense against solenoid-induced ground bounce walking every
+  channel's threshold at once. See `TIMING.md` §5.4.
 - **AC handling:** diode steers/rectifies AC taps. Do **not** RC-filter to DC in
   hardware — keep the digital pulse train fast so firmware recovers duty.
-- **Trip point:** add hysteresis so dim/marginal drive doesn't chatter; design
-  the divider for the full era voltage span (≈6.3 V GI to ≈18–20 V feature).
+- **Trip point:** design the divider for the full era voltage span (≈6.3 V GI to
+  ≈18–20 V feature).
+- The Schmitt costs nothing in scan timing: it sits *before* the mux, so its
+  ~10 ns t_pd has long settled by the time the counter addresses that channel.
 - **Protection:** gate series resistor, clamp FET output to 3V3 (Schottky/TVS or
   input protection diodes via series R). Respect HC abs-max VCC + 0.5 V.
 - **Decoupling:** 0.1 µF at every IC VCC; keep logic ground away from
   high-current solenoid returns.
 
 ## Power
-- Onboard 3V3 regulator from the machine's 5–12 V rail for logic.
+
+Regulation is independent of the QT Py; the board's own regulator runs only the
+S3. Full derivation in `TIMING.md` §5.
+
+- **Distribute 5 V, regulate 3.3 V locally per module** (HW-8). At a placeholder
+  3 mA/channel the chain draws ~400 mA / 1.4 W, and 800 mm of 28–32 AWG drops
+  136–340 mV — on a directly-distributed 3.3 V rail that is 10% of the budget
+  spent for nothing; at 5 V in, the LDO's headroom absorbs it. Local LDO
+  dissipation is ~85 mW/module. JST-SH is rated 1 A/contact.
+- **An LDO to 5 V is only viable off the machine's existing +5 V rail.** From
+  +12 V it burns 2.8 W; from the unregulated solenoid rail (~18–25 V, sagging to
+  ~12 V on a coil fire) ~6 W. Either needs a buck — but *one* buck at the
+  controller, whose output can be filtered before entering the harness, not
+  eight per-module switchers sitting next to the sense bus.
+- EM games may have no DC logic rail (6.3 VAC + ~25 VDC) → rectify-and-buck.
+- **Ride-through** (HW-7): series Schottky + bulk electrolytic + kickback
+  clamping at the input. The filament model smooths a signal glitch; it does not
+  smooth an MCU brownout reset, which blacks out every lamp at once.
+- **Grounding** (HW-6): not a star — the harness is a daisy chain and that is
+  fine. What matters is a *single-point tie* between pinled ground and the
+  machine's lamp-return ground, made near the lamp matrix return rather than at
+  the PSU. Powering from the machine makes that tie the power tap itself.
 - LED string power sized separately for the WS2812B/SK6812 count (≈60 mA/LED
-  worst case white) — do not run the string off the logic regulator.
+  worst case white; ~6 A at 128 LEDs) — do not run the string off the logic
+  regulator. Level-shift the LED data line or run the strip at reduced VDD
+  (HW-9): WS2812B wants V_IH ≥ 0.7 × VDD = 3.5 V, above a 3.3 V S3 output.
