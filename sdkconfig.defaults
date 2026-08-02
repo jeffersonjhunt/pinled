@@ -21,3 +21,7 @@ CONFIG_FREERTOS_HZ=1000
 
 # Compiler
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# TIMING.md section 2 derives every scan-budget number from a 240 MHz LX7.
+# The esp32s3 default is 160 MHz, which inflates the frame budget by 1.5x.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
