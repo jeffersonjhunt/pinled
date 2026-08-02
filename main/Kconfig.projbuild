@@ -111,6 +111,27 @@ menu "pinled configuration"
                 While non-zero, scan_task is NOT started -- the slow walk owns
                 the counter -- so the filament model and the LED string do not
                 update. Set back to 0 for normal operation.
+
+        config PINLED_SCAN_HOLD_CH
+            int "Park the counter on one channel (-1 = disabled)"
+            default -1
+            range -1 127
+            help
+                Bring-up only, and takes precedence over the slow-step walk.
+
+                Pulses /MR, clocks the counter to this channel, then stops and
+                never clocks again, sampling DATA_IN at 2 Hz. The address lines
+                hold a fixed value, so every node in the chain becomes a static
+                DC level you can measure with an ordinary meter:
+
+                  - '161 Q outputs   -> the channel number in binary
+                  - '151 A/B/C       -> the low three bits of it
+                  - '151 D<n>        -> your input, follow it with the button
+                  - '151 Y (pin 5)   -> should equal D<n> while /E is low
+                  - the MCU DATA pin -> should equal Y
+
+                Whichever link in that chain stops tracking is the fault. Set
+                back to -1 for normal operation.
     endmenu
 
 endmenu

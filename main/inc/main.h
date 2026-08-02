@@ -47,6 +47,12 @@ namespace ooe::pinled
         static void scan_task(void *arg);
         static void render_task(void *arg);
 
+#if CONFIG_PINLED_SCAN_HOLD_CH >= 0
+        /// Bring-up only: park the counter on one channel so every node in the
+        /// chain is a static level a meter can read. Never returns.
+        void hold_channel();
+#endif
+
 #if CONFIG_PINLED_SCAN_STEP_MS > 0
         /// Bring-up only: walk the counter one channel at a time, slowly enough
         /// to watch. Owns the counter, so scan_task is not started. Never returns.

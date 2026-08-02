@@ -116,10 +116,10 @@ namespace ooe::pinled
 
     esp_err_t Main::start_tasks()
     {
-#if CONFIG_PINLED_SCAN_STEP_MS > 0
-        // The slow walk in run() owns the counter; a concurrent scan_task would
-        // fight it for the count position.
-        ESP_LOGW(TAG, "slow-step mode: scan_task not started, LEDs will not update");
+#if CONFIG_PINLED_SCAN_STEP_MS > 0 || CONFIG_PINLED_SCAN_HOLD_CH >= 0
+        // The bring-up walk/hold in run() owns the counter; a concurrent
+        // scan_task would fight it for the count position.
+        ESP_LOGW(TAG, "bring-up scan mode: scan_task not started, LEDs will not update");
 #else
         if (xTaskCreatePinnedToCore(scan_task, "pinled_scan", 4096, this,
                                     configMAX_PRIORITIES - 2, &scan_task_, 1) != pdPASS)
@@ -207,6 +207,28 @@ namespace ooe::pinled
     }
 #endif
 
+#if CONFIG_PINLED_SCAN_HOLD_CH >= 0
+    void Main::hold_channel()
+    {
+        const unsigned ch = CONFIG_PINLED_SCAN_HOLD_CH;
+
+        scan_.reset_counter();
+        for (unsigned i = 0; i < ch; ++i)
+            scan_.step_counter();
+
+        ESP_LOGI(TAG, "counter parked on channel %u; Q3..Q0 = %u%u%u%u, '151 C/B/A = %u%u%u",
+                 ch, (ch >> 3) & 1, (ch >> 2) & 1, (ch >> 1) & 1, ch & 1,
+                 (ch >> 2) & 1, (ch >> 1) & 1, ch & 1);
+        ESP_LOGI(TAG, "address lines are now static -- measure D%u -> Y -> MCU DATA pin", ch);
+
+        for (;;)
+        {
+            ESP_LOGI(TAG, "hold ch %u  DATA=%d", ch, scan_.sample_now(0) ? 1 : 0);
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+    }
+#endif
+
 #if CONFIG_PINLED_SCAN_STEP_MS > 0
     void Main::step_walk()
     {
@@ -236,7 +258,9 @@ namespace ooe::pinled
 
     void Main::run()
     {
-#if CONFIG_PINLED_SCAN_STEP_MS > 0
+#if CONFIG_PINLED_SCAN_HOLD_CH >= 0
+        hold_channel(); // never returns; takes precedence over the walk
+#elif CONFIG_PINLED_SCAN_STEP_MS > 0
         step_walk(); // never returns
 #endif
 #ifdef CONFIG_PINLED_SCAN_DEBUG
