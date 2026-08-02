@@ -140,6 +140,14 @@ namespace ooe::pinled
                 for (size_t ch = 0; ch < self->num_channels_; ++ch)
                     self->filament_.update(ch, frame[ch]);
                 self->filament_.snapshot(self->levels_, self->num_channels_);
+
+#ifdef CONFIG_PINLED_SCAN_DEBUG
+                for (size_t ch = 0; ch < self->num_channels_; ++ch)
+                {
+                    self->raw_snapshot_[ch] = frame[ch];
+                    (frame[ch] ? self->seen_high_ : self->seen_low_)[ch] = 1;
+                }
+#endif
             }
 
             // Keep the task WDT fed during bring-up. Replace with a hardware
@@ -163,13 +171,53 @@ namespace ooe::pinled
         }
     }
 
+#ifdef CONFIG_PINLED_SCAN_DEBUG
+    // Bring-up aid. "raw" is the pre-filament frame straight off the bus; "tog"
+    // marks channels that have been observed BOTH high and low since boot. A
+    // channel stuck at '-' is either unconnected, unpopulated, or held by the
+    // bus bias -- it is never a channel that is merely idle, because an idle
+    // lamp still reads a stable 0 and gets its low seen on the first frame.
+    void Main::log_scan_debug()
+    {
+        constexpr size_t kMax = LampScan::MAX_CHANNELS;
+        char raw[kMax + kMax / 8 + 2];
+        char tog[kMax + kMax / 8 + 2];
+        size_t r = 0, t = 0;
+
+        for (size_t ch = 0; ch < num_channels_; ++ch)
+        {
+            if (ch && (ch % 8) == 0)
+            {
+                raw[r++] = ' ';
+                tog[t++] = ' ';
+            }
+            raw[r++] = raw_snapshot_[ch] ? '1' : '0';
+            tog[t++] = (seen_high_[ch] && seen_low_[ch]) ? 'T' : '-';
+        }
+        raw[r] = '\0';
+        tog[t] = '\0';
+
+        ESP_LOGI(TAG, "raw [%s]  tog [%s]", raw, tog);
+    }
+#endif
+
     void Main::run()
     {
+#ifdef CONFIG_PINLED_SCAN_DEBUG
+        // Tasks do the work; report the raw bus so bring-up has something to
+        // look at that does not depend on the LED path working.
+        for (;;)
+        {
+            log_scan_debug();
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+#else
         // Tasks do the work; keep app_main alive and emit a slow heartbeat.
         for (;;)
         {
             ESP_LOGD(TAG, "tick");
             vTaskDelay(pdMS_TO_TICKS(5000));
         }
+#endif
     }
 } // namespace ooe::pinled

@@ -40,8 +40,20 @@ namespace ooe::pinled
                 ESP_LOGE(TAG, "module %u has no DATA_IN pin", (unsigned)m);
                 return ESP_ERR_INVALID_ARG;
             }
-            gpio_reset_pin(d);
-            gpio_set_direction(d, GPIO_MODE_INPUT);
+            // gpio_reset_pin() leaves the internal pull-UP enabled and
+            // gpio_set_direction() does not clear it. That fights the module's
+            // 1 kOhm bias resistor and, with the non-inverting front end, makes
+            // an undriven bus read "lamp on" -- the opposite of what HW-2
+            // requires. Bias follows polarity: the two are one decision.
+            gpio_config_t io{};
+            io.pin_bit_mask = 1ULL << static_cast<uint32_t>(d);
+            io.mode = GPIO_MODE_INPUT;
+            io.pull_up_en = cfg_.active_low ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE;
+            io.pull_down_en = cfg_.active_low ? GPIO_PULLDOWN_DISABLE : GPIO_PULLDOWN_ENABLE;
+            io.intr_type = GPIO_INTR_DISABLE;
+            const esp_err_t err = gpio_config(&io);
+            if (err != ESP_OK)
+                return err;
         }
 
         initialized_ = true;

@@ -77,4 +77,22 @@ menu "pinled configuration"
             default 16
     endmenu
 
+    menu "Diagnostics"
+        config PINLED_SCAN_DEBUG
+            bool "Log raw scan frames (bring-up aid)"
+            default y
+            help
+                Prints the raw pre-filament channel bitmap twice a second, plus
+                a per-channel flag showing whether that channel has ever been
+                observed both high and low since boot.
+
+                Use this to prove the scan bus is alive independently of the
+                filament model and the LED string: press a test input and watch
+                the corresponding bit move. A channel that never toggles is
+                unconnected, unpopulated, or pinned by the bus bias.
+
+                Turn off for production -- it costs an array write per channel
+                per frame inside the scan loop.
+    endmenu
+
 endmenu

@@ -16,6 +16,8 @@
 #define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
 #include "esp_log.h"
 
+#include "sdkconfig.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -44,6 +46,16 @@ namespace ooe::pinled
 
         static void scan_task(void *arg);
         static void render_task(void *arg);
+
+#ifdef CONFIG_PINLED_SCAN_DEBUG
+        /// Bring-up aid: dump the raw pre-filament frame. Removed by M1a, which
+        /// replaces scan_task wholesale.
+        void log_scan_debug();
+
+        uint8_t raw_snapshot_[LampScan::MAX_CHANNELS]{}; ///< last raw frame
+        uint8_t seen_high_[LampScan::MAX_CHANNELS]{};    ///< channel ever read 1
+        uint8_t seen_low_[LampScan::MAX_CHANNELS]{};     ///< channel ever read 0
+#endif
 
         MachineConfig cfg_{};
         MachineConfigStore store_{};
