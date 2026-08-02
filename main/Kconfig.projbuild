@@ -93,6 +93,24 @@ menu "pinled configuration"
 
                 Turn off for production -- it costs an array write per channel
                 per frame inside the scan loop.
+
+        config PINLED_SCAN_STEP_MS
+            int "Slow-step the scan (ms per channel, 0 = normal speed)"
+            default 0
+            range 0 2000
+            help
+                Bring-up only. At normal speed the scan runs tens of thousands
+                of frames per second, so the '161 Q outputs toggle far too fast
+                to watch and indicator LEDs on them just look steadily lit.
+
+                Set this to e.g. 250 and the scan advances one channel every
+                250 ms instead, logging the count, the Q pattern to expect, and
+                the DATA_IN level at each step. The counter then walks slowly
+                enough to read by eye or follow with a meter.
+
+                While non-zero, scan_task is NOT started -- the slow walk owns
+                the counter -- so the filament model and the LED string do not
+                update. Set back to 0 for normal operation.
     endmenu
 
 endmenu

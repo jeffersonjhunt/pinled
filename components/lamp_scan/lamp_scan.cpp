@@ -84,6 +84,19 @@ namespace ooe::pinled
         return cfg_.active_low ? (raw == 0) : (raw != 0);
     }
 
+    void LampScan::step_counter()
+    {
+        if (initialized_)
+            clock_pulse();
+    }
+
+    bool LampScan::sample_now(size_t module)
+    {
+        if (!initialized_ || module >= cfg_.num_modules)
+            return false;
+        return sample(module);
+    }
+
     esp_err_t LampScan::read_frame(bool *out, size_t n)
     {
         if (!initialized_)

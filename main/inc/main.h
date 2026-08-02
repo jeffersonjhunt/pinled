@@ -47,6 +47,12 @@ namespace ooe::pinled
         static void scan_task(void *arg);
         static void render_task(void *arg);
 
+#if CONFIG_PINLED_SCAN_STEP_MS > 0
+        /// Bring-up only: walk the counter one channel at a time, slowly enough
+        /// to watch. Owns the counter, so scan_task is not started. Never returns.
+        void step_walk();
+#endif
+
 #ifdef CONFIG_PINLED_SCAN_DEBUG
         /// Bring-up aid: dump the raw pre-filament frame. Removed by M1a, which
         /// replaces scan_task wholesale.

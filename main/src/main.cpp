@@ -116,9 +116,15 @@ namespace ooe::pinled
 
     esp_err_t Main::start_tasks()
     {
+#if CONFIG_PINLED_SCAN_STEP_MS > 0
+        // The slow walk in run() owns the counter; a concurrent scan_task would
+        // fight it for the count position.
+        ESP_LOGW(TAG, "slow-step mode: scan_task not started, LEDs will not update");
+#else
         if (xTaskCreatePinnedToCore(scan_task, "pinled_scan", 4096, this,
                                     configMAX_PRIORITIES - 2, &scan_task_, 1) != pdPASS)
             return ESP_FAIL;
+#endif
         if (xTaskCreatePinnedToCore(render_task, "pinled_render", 4096, this,
                                     5, &render_task_, 0) != pdPASS)
             return ESP_FAIL;
@@ -201,8 +207,38 @@ namespace ooe::pinled
     }
 #endif
 
+#if CONFIG_PINLED_SCAN_STEP_MS > 0
+    void Main::step_walk()
+    {
+        ESP_LOGI(TAG, "slow-step scan: %d ms/channel, %u channels",
+                 CONFIG_PINLED_SCAN_STEP_MS, (unsigned)num_channels_);
+        ESP_LOGI(TAG, "watch the '161 Q outputs; 'expect' is the count they should show");
+
+        for (;;)
+        {
+            scan_.reset_counter();
+            ESP_LOGI(TAG, "--- /MR pulsed, counter should now read 0000 ---");
+
+            for (size_t ch = 0; ch < num_channels_; ++ch)
+            {
+                vTaskDelay(pdMS_TO_TICKS(CONFIG_PINLED_SCAN_STEP_MS));
+                const bool v = scan_.sample_now(0);
+                ESP_LOGI(TAG, "count %2u  expect Q3..Q0 = %u%u%u%u  DATA=%d",
+                         (unsigned)ch,
+                         (unsigned)((ch >> 3) & 1), (unsigned)((ch >> 2) & 1),
+                         (unsigned)((ch >> 1) & 1), (unsigned)(ch & 1),
+                         v ? 1 : 0);
+                scan_.step_counter();
+            }
+        }
+    }
+#endif
+
     void Main::run()
     {
+#if CONFIG_PINLED_SCAN_STEP_MS > 0
+        step_walk(); // never returns
+#endif
 #ifdef CONFIG_PINLED_SCAN_DEBUG
         // Tasks do the work; report the raw bus so bring-up has something to
         // look at that does not depend on the LED path working.

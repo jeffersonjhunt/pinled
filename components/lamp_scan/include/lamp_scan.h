@@ -65,6 +65,15 @@ namespace ooe::pinled
         /// Pulse /MR low to zero the counter (async clear -> count 0).
         void reset_counter();
 
+        /// @name Bring-up helpers
+        /// Drive the counter one step at a time so the '161 Q outputs can be
+        /// watched by eye or probed with a meter. MUST NOT be used concurrently
+        /// with read_frame() -- both own the counter position.
+        /// @{
+        void step_counter();                ///< one CLK pulse: advance the count by 1
+        bool sample_now(size_t module = 0); ///< read DATA_IN now, polarity-corrected
+        /// @}
+
     private:
         inline void clock_pulse();
         inline bool sample(size_t module);
