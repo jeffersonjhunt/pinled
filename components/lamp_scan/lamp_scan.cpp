@@ -145,6 +145,36 @@ namespace ooe::pinled
         return gpio_config(&io);
     }
 
+    esp_err_t LampScan::set_clock(int hz)
+    {
+#if LAMPSCAN_BITBANG
+        (void)hz;
+        return ESP_ERR_NOT_SUPPORTED;
+#else
+        if (!initialized_ || !spi_)
+            return ESP_ERR_INVALID_STATE;
+
+        spi_bus_remove_device(spi_);
+        spi_ = nullptr;
+
+        spi_device_interface_config_t dev{};
+        dev.clock_speed_hz = hz;
+        dev.mode = cfg_.spi_mode;
+        dev.spics_io_num = -1;
+        dev.queue_size = 1;
+
+        const esp_err_t err = spi_bus_add_device(cfg_.spi_host, &dev, &spi_);
+        if (err != ESP_OK)
+            return err;
+
+        int actual_khz = 0;
+        cfg_.spi_hz = (spi_device_get_actual_freq(spi_, &actual_khz) == ESP_OK)
+                          ? actual_khz * 1000
+                          : hz;
+        return ESP_OK;
+#endif
+    }
+
     void LampScan::deinit()
     {
         if (spi_)

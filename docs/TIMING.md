@@ -306,6 +306,27 @@ The HC failure is chain-length dependent, which makes it the worst kind: a
 4-module chain works and an 8-module chain does not, with nothing obviously
 wrong in between. **Use LVC.**
 
+**Measured (bench, single module).** A clock sweep on the '161 + '151 rig — HC
+parts, breadboard, plus an extra 74HC14 in the clock path — found the endpoint
+delay directly:
+
+| Clock | Period | Result |
+|---|---|---|
+| 1–16 MHz | ≥ 62.5 ns | 256/256 stable, correct channel |
+| 20–26.7 MHz | ≤ 50 ns | 256/256 stable, **off by one channel** |
+| 40 MHz | 25 ns | unstable |
+
+The break between 62.5 ns and 50 ns puts the round-trip delay at **~55–60 ns**
+for that rig, which is consistent with `delay < T_clk` — the same inequality
+this section applies to chain skew. Production swaps HC for LVC at the endpoint
+but adds 8 modules of forwarding, so the chain, not the endpoint, should remain
+the binding term.
+
+**The failure mode is the finding.** Past the ceiling the reads do not become
+noisy — they stay perfectly stable and return `line[k-1]`, i.e. every lamp maps
+one socket over, 256 times out of 256. Exceeding the clock ceiling looks like a
+wiring or mapping error, not a timing error.
+
 Because LVC is not a 5 V part, the harness carries 5 V and every module
 regulates 3.3 V locally (HW-8). `DATA` and `CLK` are therefore 3.3 V signals
 throughout and the S3's lack of 5 V tolerance never becomes an issue.

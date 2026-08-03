@@ -158,6 +158,22 @@ menu "pinled configuration"
                 the counter -- so the filament model and the LED string do not
                 update. Set back to 0 for normal operation.
 
+        config PINLED_SPI_SWEEP
+            bool "Sweep the chain clock and report where it breaks"
+            default n
+            help
+                Bring-up only. Steps the SPI clock through a fixed ladder and,
+                at each rate, reads a burst of frames and reports how many were
+                identical plus the union of every bit seen.
+
+                Hold one test input down and let it run: a rate is good when the
+                burst is 100% stable and the union shows only that one channel.
+                Instability or extra bits in the union is the ceiling.
+
+                This is TIMING.md section 7 item 3 -- the clock-skew estimate is
+                datasheet arithmetic and wants measuring. Suppresses scan_task,
+                so the LEDs do not update.
+
         config PINLED_SCAN_HOLD_CH
             int "Park the counter on one channel (-1 = disabled)"
             default -1

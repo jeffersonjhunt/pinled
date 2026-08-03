@@ -47,6 +47,12 @@ namespace ooe::pinled
         static void scan_task(void *arg);
         static void render_task(void *arg);
 
+#ifdef CONFIG_PINLED_SPI_SWEEP
+        /// Bring-up only: step the chain clock and report where reads stop
+        /// being stable. Owns the scan hardware; never returns.
+        void spi_sweep();
+#endif
+
 #if CONFIG_PINLED_SCAN_HOLD_CH >= 0
         /// Bring-up only: park the counter on one channel so every node in the
         /// chain is a static level a meter can read. Never returns.

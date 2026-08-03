@@ -13,6 +13,7 @@ raised, and they take **increasing** ownership of the scan hardware.
 | `PINLED_SCAN_DEBUG` | `y` | Is any channel responding at all? |
 | `PINLED_SCAN_STEP_MS` | `0` (off) | Is the counter actually counting? |
 | `PINLED_SCAN_HOLD_CH` | `-1` (off) | Where exactly does the signal die? |
+| `PINLED_SPI_SWEEP` | `n` (off) | How fast can the chain be clocked? |
 
 `SCAN_HOLD_CH` takes precedence over `SCAN_STEP_MS`. Either one suppresses
 `scan_task` — they own the counter position and would otherwise race it — so
@@ -120,6 +121,25 @@ On a **chained** rig, add these:
 | Frame tail duplicates the head | a mid-frame stall let `ACT` decay and the chain reset partway through; should be impossible with DMA |
 | Far modules wrong, near modules fine, worse as modules are added | accumulated clock skew — HC parts, or the SPI clock is too fast (`TIMING.md` §4.3) |
 | First channel of module 1 unreliable | `ACT` still charging during the first half-period; clock one dummy bit and discard |
+| **Every channel off by one, perfectly stable** | chain clock above the ceiling. Past it the mux output has not propagated when the master samples, so `sample[k]` returns `line[k-1]` — stable and wrong, which reads as a mapping error rather than a timing one. Lower `PINLED_SPI_HZ`. |
+
+## 4b. `PINLED_SPI_SWEEP` — how fast can it go?
+
+Steps the chain clock through a ladder from 1 to 40 MHz, and at each rate reads
+256 frames and reports how many agreed plus the union of every bit seen. A pass
+takes a few milliseconds and repeats every 3 s, so there is no timing to
+coordinate — hold one input down and read the last pass.
+
+```
+  8000000 Hz (actual  8000000): stable 256/256  [00001000]  union=0x10
+ 20000000 Hz (actual 20000000): stable 256/256  [00000100]  union=0x20
+ 40000000 Hz (actual 40000000): stable  32/256  [00000000]  union=0x40
+```
+
+A rate is good when it is `256/256` **and** the pattern shows the channel you
+are actually holding. Both conditions matter: above the ceiling the reads stay
+fully stable and simply shift by one, so stability alone will happily certify a
+broken rate.
 
 ## 5. Bench substitutions
 

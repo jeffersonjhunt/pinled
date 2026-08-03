@@ -96,6 +96,14 @@ namespace ooe::pinled
         /// Bits clocked per frame; always a whole number of bytes.
         size_t frame_bits() const { return total_channels(); }
 
+        /// Re-open the SPI device at a new clock rate. Diagnostic use: lets a
+        /// sweep find the chain's ceiling without a reflash per step. No-op on
+        /// the bit-bang backend.
+        esp_err_t set_clock(int hz);
+
+        /// Clock the hardware actually produces, after divider rounding.
+        int actual_hz() const { return cfg_.spi_hz; }
+
         /// Pulse `/MR` low to zero the counter. No-op when `mr_pin` is unset,
         /// which is the production case — there the idle gap resets the chain.
         void reset_counter();

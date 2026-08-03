@@ -117,9 +117,9 @@ namespace ooe::pinled
 
     esp_err_t Main::start_tasks()
     {
-#if CONFIG_PINLED_SCAN_STEP_MS > 0 || CONFIG_PINLED_SCAN_HOLD_CH >= 0
-        // The bring-up walk/hold in run() owns the counter; a concurrent
-        // scan_task would fight it for the count position.
+#if CONFIG_PINLED_SCAN_STEP_MS > 0 || CONFIG_PINLED_SCAN_HOLD_CH >= 0 || defined(CONFIG_PINLED_SPI_SWEEP)
+        // The bring-up walk/hold/sweep in run() owns the scan hardware; a
+        // concurrent scan_task would fight it.
         ESP_LOGW(TAG, "bring-up scan mode: scan_task not started, LEDs will not update");
 #else
         if (xTaskCreatePinnedToCore(scan_task, "pinled_scan", 4096, this,
@@ -208,6 +208,74 @@ namespace ooe::pinled
     }
 #endif
 
+#ifdef CONFIG_PINLED_SPI_SWEEP
+    // Step the chain clock and report, per rate, whether repeated reads agree.
+    // Hold one test input down: a good rate gives a fully stable burst whose
+    // union of observed bits is exactly that one channel. Instability, or extra
+    // bits in the union, is the ceiling.
+    void Main::spi_sweep()
+    {
+        static const int kRates[] = {
+            1000000, 2000000, 4000000, 6000000, 8000000,
+            10000000, 13000000, 16000000, 20000000, 26000000, 40000000};
+        constexpr int kFramesPerRate = 256;
+        constexpr int kDiscard = 8; // let the new divider settle
+
+        bool frame[LampScan::MAX_CHANNELS];
+        char bits[LampScan::MAX_CHANNELS + 2];
+
+        for (;;)
+        {
+            ESP_LOGI(TAG, "=== chain clock sweep: %u channels, hold one input down ===",
+                     (unsigned)num_channels_);
+
+            for (int r = 0; r < (int)(sizeof(kRates) / sizeof(kRates[0])); ++r)
+            {
+                if (scan_.set_clock(kRates[r]) != ESP_OK)
+                {
+                    ESP_LOGW(TAG, "%9d Hz: rejected by driver", kRates[r]);
+                    continue;
+                }
+
+                for (int i = 0; i < kDiscard; ++i)
+                    scan_.read_frame(frame, num_channels_);
+
+                uint64_t first = 0, any = 0, all = ~0ULL;
+                int stable = 0, reads = 0;
+                for (int i = 0; i < kFramesPerRate; ++i)
+                {
+                    if (scan_.read_frame(frame, num_channels_) != ESP_OK)
+                        continue;
+                    uint64_t m = 0;
+                    for (size_t ch = 0; ch < num_channels_ && ch < 64; ++ch)
+                        if (frame[ch])
+                            m |= 1ULL << ch;
+                    if (reads == 0)
+                        first = m;
+                    any |= m;
+                    all &= m;
+                    if (m == first)
+                        ++stable;
+                    ++reads;
+                }
+
+                size_t b = 0;
+                for (size_t ch = 0; ch < num_channels_ && ch < 64; ++ch)
+                    bits[b++] = (first >> ch) & 1 ? '1' : '0';
+                bits[b] = '\0';
+
+                ESP_LOGI(TAG, "%9d Hz (actual %8d): stable %3d/%3d  [%s]  union=0x%llx  common=0x%llx",
+                         kRates[r], scan_.actual_hz(), stable, reads, bits,
+                         (unsigned long long)any,
+                         (unsigned long long)(reads ? all : 0));
+            }
+
+            ESP_LOGI(TAG, "=== sweep pass complete ===");
+            vTaskDelay(pdMS_TO_TICKS(3000));
+        }
+    }
+#endif
+
 #if CONFIG_PINLED_SCAN_HOLD_CH >= 0
     void Main::hold_channel()
     {
@@ -259,7 +327,9 @@ namespace ooe::pinled
 
     void Main::run()
     {
-#if CONFIG_PINLED_SCAN_HOLD_CH >= 0
+#ifdef CONFIG_PINLED_SPI_SWEEP
+        spi_sweep(); // never returns
+#elif CONFIG_PINLED_SCAN_HOLD_CH >= 0
         hold_channel(); // never returns; takes precedence over the walk
 #elif CONFIG_PINLED_SCAN_STEP_MS > 0
         step_walk(); // never returns
