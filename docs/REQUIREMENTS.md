@@ -62,18 +62,31 @@ desired, "MAY" = optional.
 | FR-CFG-3 | Profiles SHOULD be loadable/exportable as a human-readable text/JSON blob. | future |
 | FR-CFG-4 | The system SHALL boot to sane defaults with no stored profile. | MVP |
 
-## 6. Non-functional
+## 6. Diagnostics
+
+Bring-up aids. All default to off/normal so production behavior is unchanged;
+see `BRINGUP.md` for how they are used together.
 
 | ID | Req | Status |
 |---|---|---|
-| NFR-1 | Target ESP-IDF **5.5.x**, IDF_TARGET `esp32s3` (Adafruit QT Py ESP32-S3). | MVP |
+| FR-DIAG-1 | The firmware SHALL be able to log the raw pre-filament channel bitmap plus a sticky per-channel "has been seen both high and low" flag (`PINLED_SCAN_DEBUG`), isolating the sense bus from the filament model and the LED string. | MVP |
+| FR-DIAG-2 | The firmware SHALL be able to advance the scan at a human-visible rate (`PINLED_SCAN_STEP_MS`), logging each count and the counter state to expect, because at full speed the counter outputs toggle far too fast to observe. | MVP |
+| FR-DIAG-3 | The firmware SHALL be able to park the counter on a single channel indefinitely (`PINLED_SCAN_HOLD_CH`) so every node from the counter outputs to the MCU pin is a static level a meter can read. | MVP |
+| FR-DIAG-4 | Modes that take ownership of the counter SHALL suppress `scan_task` rather than race it, and SHALL say so in the log. | MVP |
+
+## 7. Non-functional
+
+| ID | Req | Status |
+|---|---|---|
+| NFR-1 | Target ESP-IDF **5.5.x**, IDF_TARGET `esp32s3`. Reference board is the Adafruit QT Py ESP32-S3; the ESP32-S3-DevKitC-1 is a supported bring-up board (same GPIO numbers, see `HARDWARE.md`). Neither is the shipping form factor — the product places a bare S3 on the mainboard. | MVP |
 | NFR-2 | Reusable logic (scan, filament, profiler) SHALL be ESP-IDF components with public headers under `include/`. | MVP |
 | NFR-3 | Code style SHALL follow the existing repos: C++, `ooe::pinled` namespace, Doxygen headers, `esp_err_t` returns, `ESP_LOG*` with per-file `TAG`, `ESP_ERROR_CHECK`. | MVP |
 | NFR-4 | No dynamic allocation in per-sample / per-frame hot paths. | v1 |
 | NFR-5 | BOM target ≤ ~$25/strip; original ESP32-class MCU. | v1 |
 | NFR-6 | License MIT; third-party attributions retained under `licenses/`. | MVP |
+| NFR-7 | The CPU SHALL run at 240 MHz (`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240`). Every figure in `TIMING.md` §2 derives from it and the IDF default for `esp32s3` is 160 MHz, which inflates the frame budget by 1.5×. | MVP |
 
-## 7. Hardware contract
+## 8. Hardware contract
 
 Properties of the board the firmware depends on. Changing one of these is a
 firmware change, not just a hardware change — see `TIMING.md` for derivations.
@@ -81,7 +94,7 @@ firmware change, not just a hardware change — see `TIMING.md` for derivations.
 | ID | Req | Status |
 |---|---|---|
 | HW-1 | The front end SHALL be non-inverting overall (level-shift MOSFET followed by an *inverting* Schmitt trigger, e.g. 74LVC14): lamp on → logic high. This sets the `active_low` default. | MVP |
-| HW-2 | The shared `DATA_IN` SHALL carry a ~1 kΩ bias resistor oriented so that a floating or unpopulated bus reads *lamp off* — a pull-**down**, given HW-1. HW-1 and HW-2 are one decision. | MVP |
+| HW-2 | The shared `DATA_IN` SHALL carry a ~1 kΩ bias resistor oriented so that a floating or unpopulated bus reads *lamp off* — a pull-**down**, given HW-1. The MCU's internal pull on that pin SHALL be configured to match rather than left at the `gpio_reset_pin()` default (pull-up). HW-1, HW-2 and the internal pull are one decision. | MVP |
 | HW-3 | Muxes and counters SHALL be LVC/LV family at 3.3 V. HC at 3.3 V cannot hold a valid output level against the 1 kΩ bias. | MVP |
 | HW-4 | Modules SHALL chain on a 5-pin JST-SH harness: `CLK`, `/MR`, `DATA`, `GND`, `VIN`, in ~100 mm hops, up to 8 modules / 800 mm. | MVP |
 | HW-5 | Each module SHALL carry local decoupling (100 nF per IC + ~10 µF bulk); `CLK` SHALL have ~100 Ω series termination at the source. | MVP |
@@ -90,7 +103,7 @@ firmware change, not just a hardware change — see `TIMING.md` for derivations.
 | HW-8 | Distribution SHOULD be 5 V with local 3.3 V LDOs; higher rails require a single switching regulator at the controller, not per-module switchers adjacent to the sense bus. | v1 |
 | HW-9 | The LED data line SHOULD be level-shifted to meet WS2812B V_IH (0.7 × VDD), or the strip run at a reduced VDD. | v1 |
 
-## 8. Out of scope (first cut)
+## 9. Out of scope (first cut)
 - OTA / Wi-Fi provisioning UI, web config portal.
 - Reverse-engineering per-title lamp tables (baseline behavior comes from
   sensing, not decoding ROM state).

@@ -65,6 +65,14 @@ Moving to the S3 is what promotes FR-SCAN-7 from *future* to baseline.
 is bound to whichever core created it. The bundle must be created **inside the
 scan task after it is pinned**, not in `init()` from `app_main` on core 0.
 
+**Gotcha:** every number in this section assumes the LX7 is running at **240
+MHz**, and ESP-IDF's default for `esp32s3` is **160 MHz**. At 160 MHz the
+per-op cost goes ~8 ns → ~12.5 ns and the whole of §2.4 inflates by 1.5× — a
+128-channel frame becomes ~35 µs rather than 23.5 µs. `sdkconfig.defaults` must
+therefore set `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y` explicitly (NFR-7). This
+was not set on the first S3 bring-up build and the boot log read `cpu freq:
+160000000 Hz`; confirm it there rather than assuming it.
+
 ### 2.3 Settle time (bench)
 
 Two tiers, because a module boundary is a different event from an address
@@ -211,6 +219,14 @@ gives a safe pre-boot state: bus low, all lamps dark, before firmware runs.
 
 If the front end were ever changed to inverting, the pull must flip to up and
 `active_low` must flip with it. These two choices are one decision, not two.
+
+There is a **third** thing bound to that same decision: the MCU's *internal*
+pull on `DATA_IN`. `gpio_reset_pin()` leaves the internal pull-**up** enabled
+and `gpio_set_direction()` does not clear it, so the naive setup contradicts the
+rule above and an undriven bus reads *lamp on*. `lamp_scan::init()` therefore
+configures the pin explicitly and derives the internal pull from `active_low`,
+so all three flip together. The internal pull is ~45 kΩ and does not replace the
+1 kΩ external bias — it only ensures the MCU is not fighting it.
 
 ### 4.3 Logic family (HW-3)
 

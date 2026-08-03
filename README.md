@@ -57,7 +57,7 @@ components/
   profiler/            drive-scheme auto-classifier
   lamp_map/            channel -> LED mapping + WS2812B (RMT) render
   machine_config/      NVS profiles + Kconfig defaults
-docs/                  DOSSIER, FIRMWARE_PLAN, REQUIREMENTS, HARDWARE, TIMING
+docs/                  DOSSIER, FIRMWARE_PLAN, REQUIREMENTS, HARDWARE, TIMING, BRINGUP
 ```
 
 Two FreeRTOS tasks: `scan_task` samples every channel at a fixed 10 kHz and
@@ -89,11 +89,18 @@ First-cut v2. `lamp_scan` and `filament` are implemented; `profiler`,
 algorithms and TODOs for v1.
 
 The design is planned through to the chained-module architecture (8-128
-channels) — see [`docs/TIMING.md`](docs/TIMING.md) — but the code has not caught
-up yet: it still targets `esp32` with the old pin map, reads one `DATA_IN` per
-module rather than a shared bus, and free-runs the scan loop. Those are
-milestones M0.5-M1c in
-[`docs/FIRMWARE_PLAN.md`](docs/FIRMWARE_PLAN.md).
+channels) — see [`docs/TIMING.md`](docs/TIMING.md) — and the code is partway
+there. The `esp32s3` retarget and pin map are done and verified on hardware
+(M0.5), and the sense path is proven end to end on a single breadboard module:
+counter, address decode, mux, and polarity all confirmed. See
+[`docs/BRINGUP.md`](docs/BRINGUP.md).
+
+Still outstanding: the scan driver reads one `DATA_IN` per module rather than a
+shared bus, free-runs instead of pacing to a fixed rate, and the renderer issues
+one strip transmit per channel instead of one per frame. Those are milestone
+M1a in [`docs/FIRMWARE_PLAN.md`](docs/FIRMWARE_PLAN.md). Module chaining is
+blocked on 74x251 parts — the bench module currently uses a push-pull '151,
+which cannot share a bus.
 
 ## License
 

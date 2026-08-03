@@ -66,6 +66,37 @@ budget.
 > here** — GPIO 26 and 27 are SPI flash pins on the ESP32-S3, and 15 and 25 are
 > not broken out on this board.
 
+### Bring-up on an ESP32-S3-DevKitC-1
+
+The DevKit uses the **same GPIO numbers**, so firmware moves between the two
+boards unchanged; only the physical location and the silkscreen differ. All four
+signals plus power land on the single header opposite `IO19`/`IO20`:
+
+| Signal | GPIO | QT Py label | DevKitC-1 (J1, counting from the antenna end) |
+|---|---|---|---|
+| `/MR` | 17 | `A1` | pin 10 |
+| `CLK` | 18 | `A0` | pin 11 |
+| `LED` | 8 | `A3` | pin 12 |
+| `DATA_IN` | 9 | `A2` | pin 15 |
+| `5V` | — | — | pin 21 |
+| `GND` | — | — | pin 22 (plus 3× on the far header) |
+
+Wire by the printed `IO` number, not by position — the header order above is a
+counting aid. Note that `IO3` and `IO46` sit between `LED` and `DATA_IN`, which
+is the easiest place to miscount.
+
+Pins to keep clear on the DevKit:
+
+- **33–37** — octal PSRAM on `N8R8` parts. In-package; broken out but unusable.
+- **19/20** — native USB. These carry the flashing and console connection.
+- **0, 3, 45, 46** — strapping pins. `GPIO 0` matters most: `DATA_IN` carries a
+  1 kΩ pull-down (HW-2), and a 1 kΩ pull-down on `GPIO 0` forces ROM download
+  mode at every boot.
+
+The shipping product places a bare S3 on the mainboard, so the final pin map is
+a free choice — but the same exclusions apply, and the `GPIO 0` trap in
+particular is a function of the bias resistor, not of the dev board.
+
 ## 74HC251 vs 74HC151 (why the swap)
 
 | | 74HC151 | 74HC251 |
@@ -138,6 +169,14 @@ unpopulated span.
   (HW-1) means a **pull-down**. Also gives a safe pre-boot state — bus low, all
   lamps dark, before firmware runs. If the front end is ever changed to
   inverting, this resistor flips too; they are one decision.
+- **The MCU's internal pull must agree.** `gpio_reset_pin()` leaves the internal
+  pull-**up** enabled and `gpio_set_direction()` does not clear it, so the
+  obvious setup silently contradicts HW-2. `lamp_scan::init()` configures the
+  pin explicitly and derives the internal pull from `active_low`. At ~45 kΩ it
+  does not substitute for the 1 kΩ external bias; it only stops the MCU
+  fighting it. During bench work with a **push-pull** mux ('151 rather than
+  '251) the external bias should be omitted entirely — there is no high-Z state
+  to define and it just loads the driver.
 - **LVC/LV family, not HC** (HW-3). 1 kΩ against 3.3 V is 3.3 mA of standing
   load on whichever '251 is driving; an HC part at 3.3 V has roughly a 3 mA
   budget and may not reach a valid output level. LVC also slews the ~150 pF bus

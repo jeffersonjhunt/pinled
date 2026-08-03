@@ -194,6 +194,14 @@ GPIO 26/27 are SPI flash pins on the S3, and 15/25 are not broken out.
 This leaves I2C/STEMMA QT (6/7, 40/41), SPI (35/36/37), and the UART (5/16)
 free.
 
+The **ESP32-S3-DevKitC-1** is also supported for bring-up and uses the *same
+GPIO numbers*, so no firmware change is needed to move between the two — only
+the silkscreen labels differ (`IO18`/`IO17`/`IO9`/`IO8` instead of `A0`..`A3`).
+Two DevKit-specific cautions: on `N8R8` parts the octal PSRAM occupies GPIO
+33–37, so the "SPI free" note above does **not** apply there, and the onboard
+RGB LED is on a different pin with no power-enable. Physical positions are in
+`HARDWARE.md`.
+
 **Boot-time validation** (FR-SCAN-9, FR-LED-8) — config is checked against
 measured reality rather than trusted, so a mis-specified profile fails loudly
 instead of quietly corrupting every time constant:
@@ -210,7 +218,13 @@ instead of quietly corrupting every time constant:
    LED string shows a heartbeat. *(done)*
 2. **M0.5 — retarget to S3.** `IDF_TARGET=esp32s3` in `sdkconfig.defaults` and
    both CMake presets; remap the four GPIOs per §4; confirm `zorxx/neopixel`
-   builds on S3; light the onboard status pixel.
+   builds on S3. *(done — verified on an ESP32-S3-DevKitC-1: 8 MB flash
+   detected, partition table loaded, both tasks running, `active_high`
+   confirmed, no watchdog trips. Bring-up also forced `CONFIG_ESP_DEFAULT_CPU_
+   FREQ_MHZ_240` per NFR-7, which was silently 160 MHz.)* **Not done:** the
+   onboard status pixel is still unlit, and its pin differs between the QT Py
+   (39, power-enable 38) and the DevKitC-1 — it needs a board-conditional pin
+   or dropping from the milestone.
 3. **M1a — real time base.** `lamp_scan` rewritten for the shared serial bus
    (single `DATA_IN`, two-tier settle), `dedic_gpio` bundle created inside the
    pinned scan task, `gptimer` pacing at 10 kHz, and the boot feasibility check
@@ -219,7 +233,11 @@ instead of quietly corrupting every time constant:
 4. **M1b — one module, live.** 16 channels off real lamp taps driving LEDs.
    Scope the bus at a module boundary to validate the 200 ns settle and confirm
    the bias resistor is fitted pull-down. Validate against a steady lamp and a
-   matrixed lamp.
+   matrixed lamp. *(partially done — the sense path is proven end to end on a
+   breadboard module: counter counts, address decode is correct, the mux drives
+   `DATA_IN`, and test inputs read at the right channel indices with correct
+   polarity. See `BRINGUP.md`. The remainder is '251-dependent: `Q3` bank
+   select, the 1 kΩ bias, real lamp taps, and the settle measurement.)*
 5. **M1c — full chain.** 8 modules / 128 channels. Confirm settle holds at the
    far end of 800 mm and that Fs stays at 10 kHz. Compare measured frame time at
    1, 4, and 8 modules against the `TIMING.md` §2.4 model.

@@ -1,28 +1,30 @@
 menu "pinled configuration"
 
-    menu "GPIO assignment (QT Py ESP32-S3 defaults)"
+    menu "GPIO assignment (ESP32-S3 defaults)"
         config PINLED_CLK_GPIO
             int "74x161 CLK GPIO (shared bus)"
             default 18
             help
-                A0 on the QT Py ESP32-S3.
+                A0 on the QT Py ESP32-S3; IO18 on the S3-DevKitC-1.
         config PINLED_MR_GPIO
             int "74x161 /MR reset GPIO (shared bus, active low)"
             default 17
             help
-                A1 on the QT Py ESP32-S3.
+                A1 on the QT Py ESP32-S3; IO17 on the S3-DevKitC-1.
         config PINLED_DATA_GPIO
             int "DATA_IN GPIO (shared by every module on the chain)"
             default 9
             help
-                A2 on the QT Py ESP32-S3. All modules bus their tri-state '251
-                outputs onto this one line; only the addressed module drives it.
-                This is not per-module — chaining costs no additional GPIO.
+                A2 on the QT Py ESP32-S3; IO9 on the S3-DevKitC-1.
+
+                All modules bus their tri-state '251 outputs onto this one
+                line; only the addressed module drives it. This is not
+                per-module — chaining costs no additional GPIO.
         config PINLED_LED_GPIO
             int "WS2812B/SK6812 data GPIO (RMT)"
             default 8
             help
-                A3 on the QT Py ESP32-S3.
+                A3 on the QT Py ESP32-S3; IO8 on the S3-DevKitC-1.
 
         # Note: the POC defaults (25/27/26/15) are unusable here. GPIO 26 and 27
         # are SPI flash pins on the ESP32-S3, and 15 and 25 are not broken out
@@ -49,6 +51,8 @@ menu "pinled configuration"
                 This must stay consistent with the orientation of the DATA_IN
                 bias resistor: a floating or unpopulated bus has to read "lamp
                 off", which for a non-inverting front end means a pull-down.
+                lamp_scan also derives the MCU's internal pull on DATA_IN from
+                this setting, so all three flip together.
                 See docs/TIMING.md section 4.2.
     endmenu
 
