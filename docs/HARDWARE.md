@@ -43,7 +43,7 @@ flowchart LR
     GATE -- "CLK_OUT = CLK_IN AND DONE" --> NEXT["next module (J2)"]
 
     subgraph ESP["ESP32-S3"]
-      SPI["SPI master + DMA<br/>mode 1, 2 MHz, 16·N bits"] -- "SCLK = CLK" --> C161
+      SPI["SPI master + DMA<br/>mode 0, 2 MHz, 16·N bits"] -- "SCLK = CLK" --> C161
       DATA -- "MISO" --> SPI
       SPI --> FIL["filament integrators"]
       FIL --> REN["render_task"]

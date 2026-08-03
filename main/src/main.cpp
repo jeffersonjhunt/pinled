@@ -49,9 +49,10 @@ namespace ooe::pinled
         // 2. Scan driver.
         LampScanConfig sc{};
         sc.clk_pin = cfg_.clk_pin;
+        sc.data_pin = cfg_.data_pin;
         sc.mr_pin = cfg_.mr_pin;
-        for (size_t m = 0; m < cfg_.num_modules; ++m)
-            sc.data_pins[m] = cfg_.data_pins[m];
+        sc.spi_hz = cfg_.spi_hz;
+        sc.spi_mode = cfg_.spi_mode;
         sc.num_modules = cfg_.num_modules;
         sc.channels_per_module = cfg_.channels_per_module;
         sc.active_low = cfg_.active_low;

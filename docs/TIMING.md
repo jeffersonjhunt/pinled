@@ -80,12 +80,17 @@ SPI removes the question. A DMA transaction is gapless by construction:
 |---|---|
 | `SCLK` | `CLK` |
 | `MISO` | `DATA` |
-| Mode | 1 (`CPOL=0, CPHA=1`) |
+| Mode | 0 (`CPOL=0, CPHA=0`) |
 
-Mode 1 shifts on the rising edge and samples on the falling — exactly the
-"sample just before each falling edge" the protocol requires, since the sampled
-value is the pre-edge one. `CPOL=0` idles `SCLK` low between transactions, which
-*is* the frame reset. 16·N bits is always a whole number of bytes.
+Mode 0 samples on the rising edge. Because the counter advances on the
+**falling** edge, that puts the sample in the middle of each line's data window
+rather than on its boundary — mode 1 would sample exactly on the counter
+transition. `CPOL=0` idles `SCLK` low between transactions, which *is* the frame
+reset. 16·N bits is always a whole number of bytes.
+
+This was measured, not assumed: on a rig clocking the '161 directly, both modes
+sampled after the counter advanced and shifted every channel by one. The
+Schmitt inversion in a real module is what creates the stable window.
 
 This deletes work rather than adding it: no `dedic_gpio` bundle to pin to a
 core, and no separate pacing timer, because the transaction cadence sets Fs

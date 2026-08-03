@@ -21,11 +21,14 @@ namespace ooe::pinled
     {
         MachineConfig c{};
         c.clk_pin = static_cast<gpio_num_t>(CONFIG_PINLED_CLK_GPIO);
-        c.mr_pin = static_cast<gpio_num_t>(CONFIG_PINLED_MR_GPIO);
-        // One shared DATA_IN for the whole chain. The data_pins[] array is a
-        // leftover from the per-module topology and collapses to a single
-        // data_pin in M1a; until then only [0] is meaningful.
-        c.data_pins[0] = static_cast<gpio_num_t>(CONFIG_PINLED_DATA_GPIO);
+        // Production modules reset on the clock-idle timeout and have no /MR
+        // conductor; a negative Kconfig value means "not fitted".
+        c.mr_pin = CONFIG_PINLED_MR_GPIO >= 0
+                       ? static_cast<gpio_num_t>(CONFIG_PINLED_MR_GPIO)
+                       : GPIO_NUM_NC;
+        c.data_pin = static_cast<gpio_num_t>(CONFIG_PINLED_DATA_GPIO);
+        c.spi_hz = CONFIG_PINLED_SPI_HZ;
+        c.spi_mode = CONFIG_PINLED_SPI_MODE;
         c.led_pin = static_cast<gpio_num_t>(CONFIG_PINLED_LED_GPIO);
         c.num_modules = CONFIG_PINLED_NUM_MODULES;
         c.channels_per_module = CONFIG_PINLED_CHANNELS_PER_MODULE;
@@ -62,6 +65,9 @@ namespace ooe::pinled
         ESP_LOGI(TAG, "loaded defaults: %u module(s) x %u ch, %.0f Hz sample, %u Hz refresh",
                  (unsigned)out.num_modules, (unsigned)out.channels_per_module,
                  out.sample_rate_hz, (unsigned)out.refresh_hz);
+        ESP_LOGI(TAG, "  chain: SPI %d Hz mode %u, /MR %s",
+                 out.spi_hz, (unsigned)out.spi_mode,
+                 out.mr_pin == GPIO_NUM_NC ? "not fitted (idle-gap reset)" : "fitted");
         return ESP_OK;
     }
 

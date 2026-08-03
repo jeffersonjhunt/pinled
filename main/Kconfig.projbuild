@@ -7,10 +7,16 @@ menu "pinled configuration"
             help
                 A0 on the QT Py ESP32-S3; IO18 on the S3-DevKitC-1.
         config PINLED_MR_GPIO
-            int "74x161 /MR reset GPIO (shared bus, active low)"
-            default 17
+            int "74x161 /MR reset GPIO (-1 = not fitted)"
+            default -1
+            range -1 48
             help
                 A1 on the QT Py ESP32-S3; IO17 on the S3-DevKitC-1.
+
+                Production modules have NO reset conductor: the chain resets on
+                a clock-idle timeout, so leave this at -1 and the pin stays
+                free. Set it only for a bench rig whose '161 has no activity
+                detector to clear it. See docs/CHAINING.md.
         config PINLED_DATA_GPIO
             int "DATA_IN GPIO (shared by every module on the chain)"
             default 9
@@ -54,6 +60,42 @@ menu "pinled configuration"
                 lamp_scan also derives the MCU's internal pull on DATA_IN from
                 this setting, so all three flip together.
                 See docs/TIMING.md section 4.2.
+    endmenu
+
+    menu "Chain clock (SPI)"
+        config PINLED_SPI_HZ
+            int "Chain clock rate (Hz)"
+            default 2000000
+            range 100000 10000000
+            help
+                SCLK rate for the scan burst. 2 MHz gives a 500 ns bit slot,
+                against ~100 ns of accumulated clock skew across 8 LVC modules
+                (docs/TIMING.md section 4.3).
+
+                Raising this shortens the frame and buys idle-gap margin;
+                lowering it is the first thing to try if far modules read wrong
+                while near ones are fine.
+
+        config PINLED_SPI_MODE
+            int "SPI mode (0 or 1)"
+            default 0
+            range 0 1
+            help
+                Leave this at 0 for production hardware.
+
+                A module Schmitt-inverts its incoming clock, so the '161 counts
+                on the FALLING edge and line n is valid from fall(n) to
+                fall(n+1). Mode 0 (CPOL=0, CPHA=0) samples on rising edges --
+                the middle of that window, with margin on both sides.
+
+                Mode 1 samples on the falling edge, which is exactly the counter
+                transition. It is wrong for this hardware.
+
+                Measured caveat: on a bench rig that clocks the '161 directly,
+                the counter advances on the same rising edges SPI samples, and
+                NEITHER mode aligns -- every sample reads line[k+1] and line 0
+                is unreachable. Add an inverter in the CLK path to make such a
+                rig behave like production.
     endmenu
 
     menu "Timing"

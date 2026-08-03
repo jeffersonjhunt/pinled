@@ -94,7 +94,9 @@ The whole frame is one receive-only SPI transaction (FR-SCAN-7):
 
 ```
 // Once, at init:
-//   SPI mode 1 (CPOL=0, CPHA=1): shift on rising, sample on falling.
+//   SPI mode 0 (CPOL=0, CPHA=0): sample on rising. The counter advances on
+//   the falling edge, so this samples mid-window. Mode 1 would sample on the
+//   counter transition itself. Verified on hardware.
 //   CPOL=0 idles SCLK low, and that idle IS the frame reset.
 //   No CS (spics_io_num = -1), no MOSI.
 
@@ -244,7 +246,7 @@ instead of quietly corrupting every time constant:
    (39, power-enable 38) and the DevKitC-1 — it needs a board-conditional pin
    or dropping from the milestone.
 3. **M1a — real time base.** `lamp_scan` rewritten around SPI + DMA: drop
-   `mr_pin` and the bit-bang loop, one receive-only mode-1 transaction per
+   `mr_pin` and the bit-bang loop, one receive-only mode-0 transaction per
    frame, unpack 16·N bits, and enforce the reset gap `1/Fs − 16·N/f_spi ≥ 5τ`
    at init. Add the boot feasibility check that feeds the *measured* Fs to
    `Filament::init()` and `Profiler::init()`. Batch the LED frame into one

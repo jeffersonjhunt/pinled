@@ -140,7 +140,8 @@ not from a CPU loop — see `TIMING.md`.
 ## Master protocol
 
 1. Hold `CLK` low ≥ 5τ (28 µs) to reset the chain.
-2. Issue exactly **16·N clocks**, sampling `DATA` just before each falling edge.
+2. Issue exactly **16·N clocks**, sampling `DATA` on each rising edge
+   (mid-window, since the counter advances on the falling edge).
 3. Repeat.
 
 Sample *n* (1-based) is line `(n−1) mod 16` of module `⌈n/16⌉`.
@@ -155,12 +156,23 @@ The burst maps onto a single SPI transaction with no CPU involvement:
 | `MISO` | `DATA` |
 | `MOSI` | unused (receive-only transaction) |
 | `CS` | unused (`spics_io_num = -1`) |
-| Mode | **1** (`CPOL=0, CPHA=1`) — shift on rising, sample on falling |
+| Mode | **0** (`CPOL=0, CPHA=0`) — sample on rising |
 
-Mode 1 samples on the falling edge, which is exactly "just before the falling
-edge" once setup time is accounted for: the sampled value is the pre-edge one,
-so sample 1 is line 0 of module 1 as specified. `CPOL=0` also means `SCLK` idles
-low between transactions, which *is* the frame reset.
+Mode 0 is correct because the counter advances on the **falling** edge, so line
+*n* is valid from `fall(n)` to `fall(n+1)` and a rising-edge sample lands in the
+*middle* of that window with margin on both sides. Mode 1 would sample on the
+falling edge — exactly the counter transition — and is wrong.
+
+`CPOL=0` also means `SCLK` idles low between transactions, which *is* the frame
+reset.
+
+> **Measured.** This was verified empirically rather than reasoned from the SPI
+> spec, after an earlier revision of this document specified mode 1. On a bench
+> rig that clocks the '161 *directly* (no Schmitt inversion, so the counter
+> advances on the rising edge), modes 0 and 1 produced an identical one-channel
+> shift — the sample lands after the counter has advanced in both cases, and
+> line 0 is unreachable by any mode. That rig is why the falling-edge clocking
+> in a real module is load-bearing rather than stylistic.
 
 16·N bits is always a whole number of bytes (2·N), and with MSB-first ordering:
 

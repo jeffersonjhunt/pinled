@@ -28,10 +28,12 @@ namespace ooe::pinled
     struct MachineConfig
     {
         // --- scan geometry ---
-        gpio_num_t clk_pin{GPIO_NUM_NC};
-        gpio_num_t mr_pin{GPIO_NUM_NC};
-        gpio_num_t data_pins[8]{};
+        gpio_num_t clk_pin{GPIO_NUM_NC};  ///< chain CLK, driven as SPI SCLK
+        gpio_num_t data_pin{GPIO_NUM_NC}; ///< shared DATA bus, read as SPI MISO
+        gpio_num_t mr_pin{GPIO_NUM_NC};   ///< optional '161 clear; bench rigs only
         gpio_num_t led_pin{GPIO_NUM_NC};
+        int spi_hz{2 * 1000 * 1000}; ///< chain clock rate
+        uint8_t spi_mode{0};         ///< 0 = sample mid-window (falling-edge counter)
         size_t num_modules{1};
         size_t channels_per_module{16};
         bool active_low{false}; ///< non-inverting front end (HW-1); see docs/TIMING.md §4.2
