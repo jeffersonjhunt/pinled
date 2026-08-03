@@ -252,7 +252,9 @@ instead of quietly corrupting every time constant:
    `Filament::init()` and `Profiler::init()`. Batch the LED frame into one
    transmit (`lamp_map::render()` currently issues one strip transmit per
    channel, which is FR-LED-6's exact anti-pattern). Needs no chained hardware —
-   a single module exercises the whole path.
+   a single module exercises the whole path. *(SPI driver done and validated on
+   the bench rig at 1 MHz, including the mode-0 sampling phase; pacing and the
+   reset-gap check still outstanding. See `BRINGUP.md` §7.)*
 4. **M1b — one module, live.** 16 channels off real lamp taps driving LEDs.
    Scope the bus at a module boundary to validate the 200 ns settle and confirm
    the bias resistor is fitted pull-down. Validate against a steady lamp and a

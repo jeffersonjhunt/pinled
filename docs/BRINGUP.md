@@ -137,6 +137,13 @@ Until the '251s arrive, a **74x151** works for a single module, with caveats:
 - **Check the supply rail.** GPIO 9 is **not 5 V tolerant**. A '151 on 5 V
   drives 5 V into the S3. A 74LS part needs 5 V and therefore needs level
   shifting; use LVC (HW-3).
+- **Add an inverter in the `CLK` path.** Without one the rig clocks its '161
+  directly, so the counter advances on the same rising edges SPI samples: every
+  sample reads `line[k+1]` and line 0 is unreachable *by any SPI mode*. One
+  spare Schmitt section between the MCU `SCLK` pin and the '161 `CLK` makes the
+  counter advance on the falling edge, which is what a real module does — and
+  then mode 0 aligns exactly. Worth doing: it turns the rig from "validates
+  plumbing" into "validates the production sampling phase".
 
 ## 6. Tooling traps
 
@@ -174,10 +181,17 @@ Verified on an ESP32-S3-DevKitC-1 (`N8R8`) against a breadboard module built
 around a 74x151:
 
 - Counter counts, `/MR` clears, address decode correct at all 16 counts.
-- Mux drives `DATA_IN`; test inputs read at the right channel indices.
+- Mux drives `DATA`; test inputs read at the right channel indices.
 - Polarity confirmed non-inverting: input high → logic 1, `active_low = n`
   (HW-1).
 - No crosstalk onto unconnected channels; stable across 40+ minutes.
+- **SPI + DMA scan path** at 1 MHz: peripheral config, GPIO-matrix routing of
+  `SCLK`/`MISO`, receive-only transaction, MSB-first unpack, and actual-vs-
+  requested clock rate.
+- **Mode 0 sampling phase**, with a 74HC14 added in the `CLK` path so the '161
+  advances on the falling edge as a real module does. Inputs on D4–D7 read at
+  channels 4–7 with no shift, confirming the sample lands mid-window and line 0
+  is captured. Before the inverter, modes 0 and 1 both shifted by one — see §5.
 
 Outstanding, all dependent on rev B modules: `QD` bank select, the 1 kΩ bias at
 the master, module chaining, real lamp taps, and the chain-specific measurements
