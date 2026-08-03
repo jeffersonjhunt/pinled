@@ -4,17 +4,17 @@ First-cut architecture for the v2 firmware that replaces the single-mux POC.
 Pairs with `REQUIREMENTS.md` (req IDs referenced inline), `TIMING.md` (scan/LED
 budgets and bus electrical), and `DOSSIER.md` (design rationale).
 
-Target board: **Adafruit QT Py ESP32-S3**. The S3 matters: `dedic_gpio` gives
-~8 ns GPIO access where ESP32 classic tops out at ~25 ns of direct register
-access, which is what makes a single fixed sample rate viable across the whole
-8..128 channel range.
+Target board: **Adafruit QT Py ESP32-S3**. The scan bus is clocked by SPI + DMA
+rather than by software, which is what makes a single fixed sample rate viable
+across the whole 8..128 channel range — and, more importantly, what keeps the
+clock burst gapless, which the chain requires to hold its bus arbitration.
 
 ## 1. Module map
 
 ```
 main/                         app entry, task wiring, config glue (ooe::pinled::Main)
 components/
-  lamp_scan/                  74HC161 + dual 74HC251 scan driver  → raw per-channel samples
+  lamp_scan/                  chained '161 + dual '251 scan over SPI → raw per-channel samples
   filament/                   per-channel leaky integrator        → brightness 0..255
   profiler/                   drive-scheme classifier             → per-channel {class,params}
   lamp_map/                   channel → LED index/color + WS2812B (RMT) render
@@ -25,7 +25,7 @@ Dependency direction (no cycles):
 
 ```
 main ─▶ machine_config
-main ─▶ lamp_scan ─▶ (gpio)
+main ─▶ lamp_scan ─▶ (spi_master + DMA)
 main ─▶ filament
 main ─▶ profiler  ─▶ filament (seeds params)
 main ─▶ lamp_map  ─▶ (neopixel/RMT)
@@ -41,16 +41,15 @@ Two cooperating tasks plus optional profiler, decoupled by a shared brightness
 buffer (`uint8_t level[NUM_CHANNELS]`, one writer / one reader — lock-free, the
 integrator owns writes):
 
-- **`scan_task`** (pinned to core 1, paced by `gptimer` → task notification):
-  one frame per tick — `reset → for each channel: read → integrator.update(ch,
-  sample) → clock`. Fixed **10 kHz/channel regardless of channel count**
-  (FR-SCAN-5/8); at the 128-channel maximum a frame is ~23.5 µs, or 23.5% of
-  core 1. Not free-running: a fixed rate is what makes the filament time
-  constants mean the same thing on an 8-channel bench rig and a 128-channel
-  install, and uniform `dt` is what the integrator assumes. The `dedic_gpio`
-  bundle is created *inside this task*, because on the S3 a bundle is bound to
-  the core that created it. This is where the POC's `count()` / `check_state()`
-  live, generalized to the chained-module bus.
+- **`scan_task`** (pinned to core 1): one receive-only SPI transaction per
+  frame — `transmit → unpack 16·N bits → integrator.update(ch, sample)`. Fixed
+  **10 kHz/channel regardless of channel count** (FR-SCAN-5/8); at the
+  128-channel maximum the DMA burst is 64 µs and the CPU share is 6.4% of one
+  core. A fixed rate is what makes the filament time constants mean the same
+  thing on a 16-channel bench rig and a 128-channel install, and uniform `dt` is
+  what the integrator assumes. The transaction cadence supplies the pacing, so
+  there is no separate timer; the gap between transactions is also the chain's
+  frame reset and must stay above 5τ.
 - **`render_task`** (60–120 Hz): reads `level[]`, applies `lamp_map` (channel →
   LED index, color, gamma), pushes the WS2812B frame via RMT (FR-LED-1/3).
 - **`profiler`** (boot + on-demand): observes raw transitions for a window,
@@ -84,38 +83,54 @@ params change.
 
 ### 3.2 Scan driver (`lamp_scan`)
 
-Generalizes the POC to the chained bus. Config:
-`{clk_pin, mr_pin, data_pin, num_modules, channels_per_module, active_low}`.
+Config: `{spi_host, sclk_pin, data_pin, spi_hz, num_modules, channels_per_module,
+active_low}`. Note there is no `mr_pin` — the chain has no reset conductor.
 
-The counters cascade via TC → ENT/ENP, so the chain is one wide binary counter:
-bits 0–2 select the mux channel, bit 3 bank-selects the two '251s in a module,
-bits 4+ are the module index. Each module decodes its own index and puts its
-'251s in high-Z when unaddressed, so **all modules share one `DATA_IN`** —
-a single serial walk, not a parallel read per module (FR-SCAN-3):
+Modules are identical and unaddressed; each forwards the clock only once it has
+scanned its own 16 lines, so the clock is the token and the master just issues
+16·N pulses (FR-SCAN-3). Protocol in `CHAINING.md`.
+
+The whole frame is one receive-only SPI transaction (FR-SCAN-7):
 
 ```
-mr_pulse();                        // async clear → whole chain to count 0
-settle(BOUNDARY);                  // module 0 /OE turning on into a floating bus
-for (ch = 0; ch < total_channels; ++ch){
-    raw[ch] = read(data_pin) ^ active_low;
-    clk_pulse();                   // advance the whole chain one count
-    settle(is_boundary(ch) ? BOUNDARY : IN_MODULE);
-}
+// Once, at init:
+//   SPI mode 1 (CPOL=0, CPHA=1): shift on rising, sample on falling.
+//   CPOL=0 idles SCLK low, and that idle IS the frame reset.
+//   No CS (spics_io_num = -1), no MOSI.
+
+// Per frame — the gap since the previous transaction must be >= 5*tau:
+spi_device_transmit(dev, &{ .rxlength = 16 * num_modules, .rx_buffer = rx });
+
+for (ch = 0; ch < total_channels; ++ch)
+    raw[ch] = ((rx[ch / 8] >> (7 - (ch % 8))) & 1) ^ active_low;
 ```
 
-The cascade is synchronous, so the module-index bits are valid in one CLK→Q, not
-N of them; TC propagation only caps clock frequency at ~18 MHz, three orders of
-magnitude above where we run. Because `/MR` clears the chain every frame, the
-counter never has to wrap to self-align and **any module count 1..8 is legal**,
-including non-power-of-two counts like 6 modules / 96 channels.
+16·N bits is always a whole number of bytes (2·N), and MSB-first ordering puts
+sample 1 — line 0 of module 1 — in the top bit of `rx[0]`, so the unpack is a
+shift rather than a lookup.
 
-Settle is two-tier (FR-SCAN-10): ~100 ns within a module, ~200 ns at a module
-boundary where a `/OE` handoff has to recharge the ~150 pF bus through the 1 kΩ
-bias. See `TIMING.md` §2.3–2.4.
+Three properties follow from using DMA rather than a CPU loop, and the first is
+a correctness requirement, not an optimization:
 
-Frame time is linear in total channel count — 3.2 µs at 16 channels, 23.5 µs at
-128 — which is exactly why the sample rate is paced and boot-validated rather
-than assumed (FR-SCAN-8/9) instead of taken from a Kconfig constant.
+- **The burst is gapless.** The chain holds its bus grant on a capacitor that
+  releases after ~6 µs without a clock edge, so a mid-frame stall silently
+  resets every counter in the chain and produces a plausible-looking frame whose
+  tail is re-read from module 1. A bit-banged loop on FreeRTOS cannot guarantee
+  6 µs.
+- **No pacing timer.** The transaction cadence *is* Fs (FR-SCAN-8). Jitter in
+  *starting* a transaction only lengthens the idle gap, which is harmless.
+- **The CPU cost is just the unpack plus the integrator** — 6.4% of one core at
+  128 channels, against 23.5% for the bit-banged design this replaces.
+
+The one hard constraint the driver must enforce is the reset gap: `1/Fs −
+16·N/f_spi ≥ 5τ`. If it does not hold, the chain never clears between frames,
+so `init()` refuses to start rather than clamping (FR-SCAN-9, `TIMING.md` §2.6).
+At the default 2 MHz and 10 kHz the gap runs from 92 µs at one module to 36 µs
+at eight, against a 28 µs floor.
+
+The inter-module handoff needs no settle handling (FR-SCAN-10): the high-Z
+window falls between sample slots by construction, so the old two-tier
+in-module/boundary settle model is gone.
 
 ### 3.3 Profiler (classifier)
 
@@ -184,15 +199,18 @@ GPIO 26/27 are SPI flash pins on the S3, and 15/25 are not broken out.
 
 | Signal | GPIO | Board name |
 |---|---|---|
-| `CLK` | 18 | A0 |
-| `/MR` | 17 | A1 |
-| `DATA_IN` | 9 | A2 |
+| `CLK` (SPI `SCLK`) | 18 | A0 |
+| `DATA` (SPI `MISO`) | 9 | A2 |
 | LED string | 8 | A3 |
 | Status pixel | 39 (power enable 38, drive high) | onboard NeoPixel |
 | Profiler re-arm | 0 | BOOT button |
 
-This leaves I2C/STEMMA QT (6/7, 40/41), SPI (35/36/37), and the UART (5/16)
-free.
+GPIO 17 (`A1`) is **free** — it was `/MR`, and the chain has no reset
+conductor. The sense bus now costs two pins.
+
+`SCLK` and `MISO` can be routed to any pins through the GPIO matrix; they do not
+need to be the default SPI pads. This leaves I2C/STEMMA QT (6/7, 40/41) and the
+UART (5/16) free.
 
 The **ESP32-S3-DevKitC-1** is also supported for bring-up and uses the *same
 GPIO numbers*, so no firmware change is needed to move between the two — only
@@ -225,11 +243,14 @@ instead of quietly corrupting every time constant:
    onboard status pixel is still unlit, and its pin differs between the QT Py
    (39, power-enable 38) and the DevKitC-1 — it needs a board-conditional pin
    or dropping from the milestone.
-3. **M1a — real time base.** `lamp_scan` rewritten for the shared serial bus
-   (single `DATA_IN`, two-tier settle), `dedic_gpio` bundle created inside the
-   pinned scan task, `gptimer` pacing at 10 kHz, and the boot feasibility check
-   that measures frame time and feeds the *measured* Fs to `Filament::init()`
-   and `Profiler::init()`. Batch the LED frame into one transmit.
+3. **M1a — real time base.** `lamp_scan` rewritten around SPI + DMA: drop
+   `mr_pin` and the bit-bang loop, one receive-only mode-1 transaction per
+   frame, unpack 16·N bits, and enforce the reset gap `1/Fs − 16·N/f_spi ≥ 5τ`
+   at init. Add the boot feasibility check that feeds the *measured* Fs to
+   `Filament::init()` and `Profiler::init()`. Batch the LED frame into one
+   transmit (`lamp_map::render()` currently issues one strip transmit per
+   channel, which is FR-LED-6's exact anti-pattern). Needs no chained hardware —
+   a single module exercises the whole path.
 4. **M1b — one module, live.** 16 channels off real lamp taps driving LEDs.
    Scope the bus at a module boundary to validate the 200 ns settle and confirm
    the bias resistor is fitted pull-down. Validate against a steady lamp and a
@@ -238,9 +259,11 @@ instead of quietly corrupting every time constant:
    `DATA_IN`, and test inputs read at the right channel indices with correct
    polarity. See `BRINGUP.md`. The remainder is '251-dependent: `Q3` bank
    select, the 1 kΩ bias, real lamp taps, and the settle measurement.)*
-5. **M1c — full chain.** 8 modules / 128 channels. Confirm settle holds at the
-   far end of 800 mm and that Fs stays at 10 kHz. Compare measured frame time at
-   1, 4, and 8 modules against the `TIMING.md` §2.4 model.
+5. **M1c — full chain.** 8 modules / 128 channels. The chain-specific risks all
+   live here: accumulated clock skew at module 8 (`TIMING.md` §4.3), `ACT` fall
+   time against the 5τ gap, the handoff window landing between sample slots, and
+   whether Fs holds at 10 kHz with only 36 µs of idle margin. Compare measured
+   frame period at 1, 4, and 8 modules against §2.4.
 6. **M2 — profiler.** Time-based observation window, inter-edge histogram for
    period estimation, AC_DIMMED vs AC_STEADY, ground-bounce robustness. Boot
    classification seeds integrator params; verify a matrixed lamp reads as

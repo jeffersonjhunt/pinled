@@ -29,18 +29,26 @@ machine.
 
 ## Hardware (per 16-channel module)
 
-- **74LVC161** synchronous counter — `Q0..Q2` select the mux channel, `Q3` bank-selects.
+- **74LVC161** synchronous counter — `QA..QC` select the mux channel, `QD` bank-selects.
 - **2× 74LVC251** — 8:1 muxes with **tri-state** outputs, bussed onto one `DATA` line.
+- **74LVC109 + 74LVC10 + 74LVC14** — DONE latch, gating, and Schmitt inversion
+  that make chaining work.
 - **16× N-ch MOSFET + inverting Schmitt trigger** — per-channel level-shift
   (5-20 V, AC/DC), protection, and hysteresis. Two inversions cancel: lamp on
   reads as logic high.
-- **ESP32-S3** (Adafruit QT Py ESP32-S3) — **3 GPIO total**, not per module,
-  plus 1 GPIO for the whole LED string.
+- **3.3 V LDO** — every module regulates locally from the 5 V harness rail.
+- **ESP32-S3** (Adafruit QT Py ESP32-S3) — **2 GPIO total** for sensing, not per
+  module, plus 1 GPIO for the whole LED string.
 
-Modules chain 1..8 on a 5-pin JST-SH harness (`CLK`, `/MR`, `DATA`, `GND`,
-`VIN`) in 100 mm hops, giving **8 to 128 channels on the same four pins**.
-Counters cascade via the carry bit and unaddressed modules park their muxes in
-high-Z, so every module shares one data line.
+Modules chain 1..8 on a **4-pin JST-SH harness** (`VCC`, `GND`, `DATA`, `CLK`)
+in 100 mm hops, giving **8 to 128 channels on the same two pins**. Modules are
+identical and unaddressed: each holds the forwarded clock until it has scanned
+its own 16 lines, so the clock itself is the token. There is no reset wire —
+idling the clock resets the chain. See [`docs/CHAINING.md`](docs/CHAINING.md).
+
+The master clocks the whole frame as one **SPI + DMA** transaction (`SCLK`=`CLK`,
+`MISO`=`DATA`). That is a correctness requirement, not an optimization: the chain
+holds its bus arbitration on a capacitor and a mid-frame stall would reset it.
 
 Why '251 not '151: the '151 is push-pull and can't share a data line; the '251
 is tri-state and can — which is what scales from 2 drivers to 16. See
@@ -52,22 +60,22 @@ is tri-state and can — which is what scales from 2 drivers to 16. See
 ```
 main/                  app entry + task wiring (ooe::pinled::Main)
 components/
-  lamp_scan/           74HC161 + dual 74HC251 scan driver
+  lamp_scan/           chained '161 + dual '251 scan driver (SPI + DMA)
   filament/            per-channel leaky integrator (filament model)
   profiler/            drive-scheme auto-classifier
   lamp_map/            channel -> LED mapping + WS2812B (RMT) render
   machine_config/      NVS profiles + Kconfig defaults
-docs/                  DOSSIER, FIRMWARE_PLAN, REQUIREMENTS, HARDWARE, TIMING, BRINGUP
+docs/                  DOSSIER, FIRMWARE_PLAN, REQUIREMENTS, HARDWARE, CHAINING, TIMING, BRINGUP
 ```
 
 Two FreeRTOS tasks: `scan_task` samples every channel at a fixed 10 kHz and
 feeds the integrators; `render_task` pushes LED frames at 60-120 Hz. The
 integrator decouples the two rates (and kills matrix-strobe aliasing).
 
-The scan rate is deliberately fixed rather than free-running: frame time is
-linear in channel count (3.2 µs at 16 channels, 23.5 µs at 128), so pacing is
-what makes a filament time constant mean the same thing on a bench rig and a
-full playfield. See [`docs/TIMING.md`](docs/TIMING.md).
+The scan rate is deliberately fixed rather than free-running: the DMA burst is
+linear in channel count (8 µs at 16 channels, 64 µs at 128), so pacing is what
+makes a filament time constant mean the same thing on a bench rig and a full
+playfield. See [`docs/TIMING.md`](docs/TIMING.md).
 
 ## Build
 
@@ -79,8 +87,8 @@ idf.py menuconfig      # pins, channel count, timing under "pinled configuration
 idf.py build flash monitor
 ```
 
-Pins default to the QT Py ESP32-S3 mapping (`CLK`=18/A0, `/MR`=17/A1,
-`DATA_IN`=9/A2, `LED`=8/A3) and are overridable in `menuconfig`.
+Pins default to the QT Py ESP32-S3 mapping (`CLK`=18/A0, `DATA`=9/A2,
+`LED`=8/A3) and are overridable in `menuconfig`.
 
 ## Status
 
@@ -95,12 +103,13 @@ there. The `esp32s3` retarget and pin map are done and verified on hardware
 counter, address decode, mux, and polarity all confirmed. See
 [`docs/BRINGUP.md`](docs/BRINGUP.md).
 
-Still outstanding: the scan driver reads one `DATA_IN` per module rather than a
-shared bus, free-runs instead of pacing to a fixed rate, and the renderer issues
-one strip transmit per channel instead of one per frame. Those are milestone
-M1a in [`docs/FIRMWARE_PLAN.md`](docs/FIRMWARE_PLAN.md). Module chaining is
-blocked on 74x251 parts — the bench module currently uses a push-pull '151,
-which cannot share a bus.
+Still outstanding: the scan driver bit-bangs one `DATA_IN` per module rather
+than clocking a shared bus over SPI, free-runs instead of pacing to a fixed
+rate, and the renderer issues one strip transmit per channel instead of one per
+frame. Those are milestone M1a in
+[`docs/FIRMWARE_PLAN.md`](docs/FIRMWARE_PLAN.md). Module chaining additionally
+needs rev B modules — the bench rig uses a push-pull '151, which cannot share a
+bus, and has none of the chaining logic.
 
 ## License
 

@@ -14,32 +14,38 @@ flowchart LR
       FET --> ST["74LVC14 Schmitt<br/>(inverting) → net non-inverting"]
     end
 
-    subgraph MUX["Scan (one module, ×1..8 chained)"]
-      A["74LVC251 #A<br/>ch 0–7 (tri-state Y)"]
-      B["74LVC251 #B<br/>ch 8–15 (tri-state Y)"]
-      C161["74LVC161 counter<br/>Q0..Q2 addr, Q3 bank"]
-      INV["inverter (Q3)"]
-      SEL["module select<br/>(wrap count vs strapped ID)"]
-      C161 -- "Q0..Q2 select" --> A
-      C161 -- "Q0..Q2 select" --> B
-      C161 -- "Q3 → /OE" --> A
-      C161 -- "Q3" --> INV -- "/OE" --> B
-      C161 -- "carry" --> SEL
-      SEL -- "/OE gate (high-Z when not addressed)" --> A
-      SEL -- "/OE gate" --> B
+    subgraph MOD["One module (×1..8 chained, identical)"]
+      A["74LVC251 #A<br/>lines 0–7 (3-state Y)"]
+      B["74LVC251 #B<br/>lines 8–15 (3-state Y)"]
+      C161["74LVC161 counter<br/>QA..QC addr, QD bank<br/>ENP = /DONE"]
+      FF["74LVC109 DONE latch<br/>J = RCO, K̄ = 1"]
+      ACT["activity detector<br/>D1 + 12kΩ/470pF<br/>τ ≈ 5.6 µs"]
+      GATE["74LVC10 NAND<br/>/E_A, /E_B, CLK_OUT"]
+      LDO["3V3 LDO<br/>(local, from 5 V)"]
+      C161 -- "QA..QC select" --> A
+      C161 -- "QA..QC select" --> B
+      C161 -- "QD → bank" --> GATE
+      C161 -- "RCO" --> FF
+      FF -- "DONE" --> GATE
+      ACT -- "ACT" --> GATE
+      ACT -- "async clear" --> C161
+      ACT -- "async clear" --> FF
+      GATE -- "/E_A (high-Z unless active)" --> A
+      GATE -- "/E_B" --> B
     end
 
     ST --> A
     ST --> B
-    A -- "Y (bussed)" --> DATA["DATA (shared by all modules)"]
+    A -- "Y (bussed)" --> DATA["DATA (shared, whole chain)"]
     B -- "Y (bussed)" --> DATA
-    BIAS["1 kΩ bias → GND<br/>floating bus reads 'off'"] --- DATA
+    BIAS["1 kΩ bias → GND<br/>at the MASTER only"] --- DATA
 
-    subgraph ESP["ESP32-S3 (QT Py)"]
-      SCAN["scan_task<br/>dedic_gpio, 10 kHz paced"] -- "CLK" --> C161
-      SCAN -- "/MR" --> C161
-      DATA --> SCAN
-      SCAN --> FIL["filament integrators"]
+    GATE -- "CLK_OUT = CLK_IN AND DONE" --> NEXT["next module (J2)"]
+
+    subgraph ESP["ESP32-S3"]
+      SPI["SPI master + DMA<br/>mode 1, 2 MHz, 16·N bits"] -- "SCLK = CLK" --> C161
+      DATA -- "MISO" --> SPI
+      SPI --> FIL["filament integrators"]
       FIL --> REN["render_task"]
     end
 
@@ -50,17 +56,16 @@ flowchart LR
 
 | Signal | Direction | Scope | GPIO (QT Py ESP32-S3) |
 |---|---|---|---|
-| `CLK` | out | shared bus (all modules) | 18 (A0) |
-| `/MR` (reset) | out | shared bus (all modules) | 17 (A1) |
-| `DATA_IN` | in | **shared bus (all modules)** | 9 (A2) |
+| `CLK` (SPI `SCLK`) | out | chain input; forwarded module to module | 18 (A0) |
+| `DATA` (SPI `MISO`) | in | **shared bus (all modules)** | 9 (A2) |
 | `LED` | out (RMT) | whole string | 8 (A3) |
 | status pixel | out (RMT) | onboard | 39 (power enable 38) |
 | profiler re-arm | in | onboard | 0 (BOOT button) |
 
-Per-module GPIO cost = **zero**. Every module hangs off the same three-wire bus,
-so 1 module and 8 modules cost the same 3 input-side GPIO + 1 LED GPIO. A
-64-lamp game (4 modules) and a 128-lamp game (8 modules) are the same pin
-budget.
+Per-module GPIO cost = **zero**, and the sense side now costs just **two** pins:
+`CLK` and `DATA`. GPIO 17, previously `/MR`, is free — the frame reset is a
+clock-idle timeout, so there is no reset conductor. A 64-lamp game (4 modules)
+and a 128-lamp game (8 modules) are the same pin budget.
 
 > The POC pins (QT Py ESP32 Pico: 25/27/26/15) are **superseded and unusable
 > here** — GPIO 26 and 27 are SPI flash pins on the ESP32-S3, and 15 and 25 are
@@ -74,7 +79,6 @@ signals plus power land on the single header opposite `IO19`/`IO20`:
 
 | Signal | GPIO | QT Py label | DevKitC-1 (J1, counting from the antenna end) |
 |---|---|---|---|
-| `/MR` | 17 | `A1` | pin 10 |
 | `CLK` | 18 | `A0` | pin 11 |
 | `LED` | 8 | `A3` | pin 12 |
 | `DATA_IN` | 9 | `A2` | pin 15 |
@@ -116,53 +120,67 @@ the table compares HC parts because that is the classic reference; v2 uses the
 **LVC** equivalents for the drive and speed reasons in "Shared `DATA` bus"
 above.
 
-## 74HC161 usage
+## '161 usage
 
-- Synchronous 4-bit binary counter, **asynchronous** active-low clear (`/MR`).
-- `Q0..Q2` → both '251 select inputs (A/B/C).
-- `Q3` → '251#A `/OE` directly, and via one inverter → '251#B `/OE` (bank select).
-- `CEP`/`CET` tied high (count enabled), `PE`/`/LOAD` tied high (no parallel load).
-- `/MR` low pulse zeroes the count with no clock edge → clean frame start.
+- Synchronous 4-bit binary counter, **asynchronous** active-low clear driven by
+  the activity detector (not by any external wire).
+- Clocked on the **falling** edge of `CLK` (the incoming clock is Schmitt-
+  inverted), which is what keeps the handoff free of runt pulses.
+- `QA..QC` → both '251 select inputs.
+- `QD` → bank select, gated into `/E_A` / `/E_B` rather than driving them directly.
+- `ENT` tied high; **`ENP` = `/DONE`**, so the counter parks at 0 after its wrap
+  instead of running a second lap.
+- `/LOAD` tied high, load inputs grounded (no parallel load).
+- `RCO` goes only to the DONE latch's `J` input — never to a clock or an async
+  control. See `CHAINING.md` for why that distinction matters.
 
 ## Chaining modules
 
-Modules chain on a **5-pin JST-SH harness in ~100 mm hops**, up to 8 modules /
-800 mm (HW-4):
+Modules chain on a **4-pin JST-SH harness in ~100 mm hops**, up to 8 modules /
+800 mm (HW-4). Full protocol in [`CHAINING.md`](CHAINING.md).
 
 | Pin | Signal |
 |---|---|
-| 1 | `CLK` |
-| 2 | `/MR` |
+| 1 | `VCC` (5 V — each module regulates 3.3 V locally, HW-8) |
+| 2 | `GND` |
 | 3 | `DATA` |
-| 4 | `GND` |
-| 5 | `VIN` (labelled `VIN`, not `3V3` — see Power) |
+| 4 | `CLK` |
 
-Note what is *not* on the harness: no mux address lines and no inter-module
-carry. Every module therefore has to derive both its channel address and its own
-"am I selected right now" state locally, from nothing but the shared `CLK` and
-`/MR`. Only the addressed module's '251s drive `DATA`; the rest sit in high-Z.
+**There is no reset conductor and no addressing.** Modules are identical and
+interchangeable; nothing is strapped, jumpered, or configured per module.
 
-> **To confirm.** The reading that fits a 5-pin harness: each module carries its
-> own address counter (0..15, in lockstep with every other module since they
-> share `CLK`/`/MR`) plus a second counter chained off the first's carry, which
-> counts address-counter wraps. That wrap count is compared against a
-> strapped/jumpered module ID, and the match drives `/OE` on that module's two
-> '251s. No inter-module carry wire needed — each module independently computes
-> which module should be active. If the mechanism is different, the firmware
-> timing model is unaffected (it is still one serial walk with a handoff every
-> 16 channels), but the failure modes below change.
->
-> Firmware-visible consequence either way: **module ID is set in hardware, so
-> physical harness order must match the strapped IDs.** A missing ID leaves a
-> 16-channel span reading the bias level (all-off, quietly), and a duplicated ID
-> causes bus contention on that span. Both are detectable at boot and worth a
-> diagnostic.
+Each module forwards the clock only once it has finished its own 16 lines:
+
+```
+CLK_OUT = CLK_IN AND DONE
+```
+
+so a module that is still counting starves everything downstream, and the act of
+receiving a clock *is* the grant. The master issues 16xN clocks and every line
+appears on `DATA` exactly once, in order. A `/MR` wire is unnecessary because the
+frame reset is a **clock-idle timeout**: hold `CLK` low for >= 5*tau and the
+per-module RC activity detectors discharge, async-clearing every counter and DONE
+latch. That also makes a glitched frame self-healing.
+
+Firmware-visible consequences:
+
+- **Only `N` is configured.** No IDs to get wrong, so the missing-ID and
+  duplicate-ID faults of the old scheme are gone.
+- **A module that never asserts DONE kills everything downstream**, because the
+  clock stops there. This is a regression against the old scheme, where a bad
+  module cost only its own 16 channels. A chain returning all-zeros beyond
+  channel 16k is the diagnostic signature.
+- **Physical order is electrical order** — module 1 is whichever is nearest the
+  master. Reordering the harness renumbers the channels.
+- **The chain cannot be single-stepped.** Bus grant is held on an RC, so slow
+  clocking discharges it. The slow-step and hold-channel bring-up modes are
+  valid only on a bench rig without the activity detector (see `BRINGUP.md`).
 
 ## Shared `DATA` bus
 
 All modules bus their '251 outputs onto one line, so the bus needs defining when
-nobody drives it — during the `/OE` handoff between modules, and across any
-unpopulated span.
+nobody drives it — during the handoff between modules, before the first module
+arms, and after the last one finishes.
 
 - **~1 kΩ bias resistor** (HW-2). Orientation follows front-end polarity: a
   floating bus must read *lamp off*, which with the non-inverting front end
@@ -177,21 +195,26 @@ unpopulated span.
   fighting it. During bench work with a **push-pull** mux ('151 rather than
   '251) the external bias should be omitted entirely — there is no high-Z state
   to define and it just loads the driver.
-- **LVC/LV family, not HC** (HW-3). 1 kΩ against 3.3 V is 3.3 mA of standing
-  load on whichever '251 is driving; an HC part at 3.3 V has roughly a 3 mA
-  budget and may not reach a valid output level. LVC also slews the ~150 pF bus
-  in ~20 ns against HC's ~124 ns, which is most of the module-boundary settle
-  budget. A 4.7 kΩ bias with HC is the alternative and costs ~1.5 µs per
-  boundary — roughly double the 128-channel frame time.
-- **~100 Ω series termination on `CLK` at the source** (HW-5) — single ground
-  return next to a fast clock in a 5-conductor harness.
+- **LVC family, not HC** (HW-3). Two independent reasons, and the second is the
+  binding one:
+  1. 1 kΩ against 3.3 V is 3.3 mA of standing load on whichever '251 drives; an
+     HC part at 3.3 V has roughly a 3 mA budget and may not reach a valid level.
+     LVC's ±24 mA makes this a non-issue.
+  2. **Clock skew down the chain.** Each module inserts a NAND plus a Schmitt
+     inverter into the forwarded clock. At 3.3 V that is ~50–70 ns per module
+     for HC — about 0.5 µs across 8 modules — which walks the far modules out of
+     the master's sample slot and fails as a function of chain length. LVC's
+     ~5–6.5 ns per gate keeps the whole chain inside ~100 ns.
+- **~100 Ω series termination on `CLK_OUT` at each module's source** (HW-5) —
+  a single ground return next to a fast clock in a 4-conductor harness.
 - **Local decoupling is mandatory** (HW-5): 100 nF per IC + ~10 µF bulk per
   module. 800 mm of thin wire is ~0.5–0.8 µH of loop inductance; a '251 slamming
   150 pF cannot source that transient down the harness.
 
-Estimated bus load at full extension is ~150 pF and the resulting settle budget
-is ~100 ns in-module / ~200 ns at a boundary. Those are the load-bearing numbers
-for the whole scan-rate model — see `TIMING.md` §2.3 and §4.
+Estimated bus load at full extension is ~150 pF; an LVC '251 slews that in
+~20 ns, comfortably inside a 500 ns bit slot at 2 MHz. The handoff between
+modules is a half-period high-Z window that carries no sample, so it needs no
+settle budget of its own — see `TIMING.md` §2.3.
 
 ## Front-end (per channel) checklist
 
@@ -221,11 +244,14 @@ for the whole scan-rate model — see `TIMING.md` §2.3 and §4.
 Regulation is independent of the QT Py; the board's own regulator runs only the
 S3. Full derivation in `TIMING.md` §5.
 
-- **Distribute 5 V, regulate 3.3 V locally per module** (HW-8). At a placeholder
-  3 mA/channel the chain draws ~400 mA / 1.4 W, and 800 mm of 28–32 AWG drops
-  136–340 mV — on a directly-distributed 3.3 V rail that is 10% of the budget
-  spent for nothing; at 5 V in, the LDO's headroom absorbs it. Local LDO
-  dissipation is ~85 mW/module. JST-SH is rated 1 A/contact.
+- **Distribute 5 V, regulate 3.3 V locally per module** (HW-8). This is now
+  *required*, not preferred: LVC is not a 5 V part, so the harness rail and the
+  logic rail cannot be the same. Every module carries its own LDO and the
+  4-pin harness `VCC` is 5 V throughout. At a placeholder 3 mA/channel plus
+  ~20 mA of switching logic the chain draws ~560 mA, and 800 mm of 28–32 AWG
+  drops 136–340 mV — which the LDO headroom absorbs at 5 V but would be 10% of
+  the budget on a directly-distributed 3.3 V rail. Local LDO dissipation is
+  ~120 mW/module. JST-SH is rated 1 A/contact.
 - **An LDO to 5 V is only viable off the machine's existing +5 V rail.** From
   +12 V it burns 2.8 W; from the unregulated solenoid rail (~18–25 V, sagging to
   ~12 V on a coil fire) ~6 W. Either needs a buck — but *one* buck at the

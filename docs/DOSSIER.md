@@ -72,54 +72,74 @@ The time constant lives in firmware, where it is reprogrammable per machine.
 ```
                  ┌─────────────────────────── one 16-channel module ───────────────────────────┐
 per-socket taps  │                                                                              │
- (5–20 V, AC/DC) │   FET level-shift + protection      74HC251 #A (ch 0–7, tri-state Y)         │
+ (5–20 V, AC/DC) │   FET level-shift + protection      74LVC251 #A (ch 0–7, tri-state Y)        │
    L0 ───────────┼──▶ [divider · diode · clamp] ──────▶ D0..D7 ─┐                               │
-   ...           │                                              ├─▶ Y (bussed) ──▶ ESP32 GPIO   │
-   L15 ──────────┼──▶ [divider · diode · clamp] ──────▶ D0..D7 ─┘        (DATA_IN, shared)      │
-                 │   74HC251 #B (ch 8–15, tri-state Y)                                          │
+   ...           │      + inverting Schmitt                     ├─▶ Y (bussed) ──▶ DATA (shared)│
+   L15 ──────────┼──▶ [divider · diode · clamp] ──────▶ D0..D7 ─┘                               │
+                 │   74LVC251 #B (ch 8–15, tri-state Y)                                         │
                  │                                                                              │
-                 │   74HC161 counter:  Q0..Q2 ─▶ select A/B/C on BOTH '251s                     │
-                 │                     Q3     ─▶ /OE of '251#A  and (via inverter) /OE of '251#B │
-                 │   CLK  ◀── ESP32 GPIO (shared bus)                                            │
-                 │   /MR  ◀── ESP32 GPIO (shared bus)                                            │
+                 │   74LVC161:  QA..QC ─▶ select on BOTH '251s;  QD ─▶ bank select              │
+                 │              clocked on the FALLING edge;  ENP = /DONE                       │
+                 │   74LVC109:  DONE latch, sets on the wrap edge (J = RCO)                     │
+                 │   74LVC10:   /E_A, /E_B, and  CLK_OUT = CLK_IN AND DONE                      │
+                 │   D1/R1/C1:  activity detector, τ ≈ 5.6 µs → bus grant + frame reset         │
+                 │   3V3 LDO:   local regulation from the 5 V harness rail                      │
+                 │                                                                              │
+                 │   CLK_IN ◀── upstream          CLK_OUT ──▶ downstream module                 │
                  └──────────────────────────────────────────────────────────────────────────────┘
 
-ESP32 ── 1 GPIO ──▶ WS2812B / SK6812 string (RMT)   ← firmware maps sensed channel → LED index(es)
+ESP32-S3 ── SPI + DMA ──▶ SCLK = CLK,  MISO = DATA        (one transaction = one whole frame)
+ESP32-S3 ── 1 GPIO ─────▶ WS2812B / SK6812 string (RMT)   ← firmware maps sensed channel → LED
 ```
 
-**Per module the ESP32 spends 3 GPIO:** `CLK`, `/MR` (reset), `DATA_IN`.
-Clock and reset are a shared bus across all modules; each module contributes one
-`DATA_IN` line. So *N* modules = `2 + N` input-side pins, plus **one** GPIO for
-the entire LED string.
+**The ESP32 spends 2 GPIO on sensing, total, regardless of module count:** `CLK`
+and `DATA`, plus **one** GPIO for the entire LED string. There is no reset pin
+and no per-module data line.
 
 ### Why the '251 and not the '151
 
 This is the crux of the earlier open-drain/open-collector discussion. The
-`74HC151` has **push-pull** outputs: when you disable it (strobe high) it does
+`74x151` has **push-pull** outputs: when you disable it (strobe high) it does
 **not** go high-impedance — it actively drives `Y` **low**. Two '151s cannot
 share a data line; the disabled one fights the active one → bus contention.
 
-The **`74HC251` is the tri-state-output version** of the '151. Disabled, its `Y`
-goes to true high-Z, so two '251s can be wired onto one `DATA_IN` line and
-bank-selected by the counter's `Q3`. That is what lets a 16-channel module read
-out on a single ESP32 input pin. (The POC used a single '151 for 8 channels on
-one pin, which is fine — the contention problem only appears when you bus two.)
+The **`74x251` is the tri-state-output version** of the '151. Disabled, its `Y`
+goes to true high-Z, so two '251s can be wired onto one `DATA` line and
+bank-selected by the counter's `QD`. The same property is what lets all 8
+modules share that line — the argument scales from 2 drivers to 16. (The POC
+used a single '151 for 8 channels on one pin, which is fine; contention only
+appears when you bus two.)
 
-**Counter note:** the `74HC161` is a synchronous 4-bit binary counter with an
-**asynchronous** active-low clear (`/MR`). A low pulse on `/MR` zeroes
-`Q0..Q3` immediately without a clock edge, so a scan frame is: assert `/MR`,
-then read-then-clock through counts 0..15. (Its cousin the `74HC163` has a
-*synchronous* clear; don't substitute without changing the reset timing.)
+**Counter note:** the `74x161` is a synchronous 4-bit binary counter with an
+**asynchronous** active-low clear. Here that clear is driven by the module's own
+activity detector rather than by any external wire. (Its cousin the `74x163` has
+a *synchronous* clear; don't substitute.)
 
 ### Daisy-chaining / expansion (16 channels per module)
 
-Recommended **star** topology for reliability: every module shares the `CLK` and
-`/MR` bus so all counters step in lockstep and present the same channel index at
-the same time; each module returns its bit on a **dedicated** `DATA_IN` GPIO.
-Simple, no cross-module contention, and the ESP32 reads all modules in the same
-scan loop. A **bussed** alternative (all module data lines tri-stated onto one
-pin with extra address bits from a cascaded second '161) saves pins at the cost
-of more glue logic and is documented as a future option, not the default.
+Modules are **identical, unaddressed, and chained on 4 conductors** — `VCC`,
+`GND`, `DATA`, `CLK`. The mechanism: each module gates the clock it passes on,
+
+```
+CLK_OUT = CLK_IN AND DONE
+```
+
+so a module that has not yet finished its own 16 lines starves everything
+downstream, and the act of receiving a clock *is* the grant to drive `DATA`.
+The master issues 16·N pulses and every line appears exactly once, in order.
+Frame reset is a clock-idle timeout rather than a wire: hold `CLK` low for ≥5τ
+and every module's RC activity detector discharges, clearing all counters.
+
+This replaces two earlier proposals. The **star** topology (one `DATA_IN` GPIO
+per module) cost a pin per module and did not scale. The **strapped-ID** variant
+(cascaded counters, each module comparing a wrap count against a jumper) needed
+a fifth conductor for reset and made physical order depend on correct strapping.
+The clock-as-token scheme needs neither: no addressing, no IDs, no reset wire,
+and a glitched frame self-heals on the next idle gap.
+
+The trade is that a module which never asserts DONE blocks the entire chain
+below it, where the star topology would have lost only that module's channels.
+Full protocol and failure analysis in `CHAINING.md`.
 
 ---
 
@@ -149,11 +169,15 @@ the common case and config handles the oddballs.
 ## 5. Sampling budget
 
 To capture duty faithfully, sample each channel well above the highest strobe /
-chop frequency — target **a few kHz per channel**. For a 16-channel module that
-is ~16–32 kHz of mux stepping, trivial for the ESP32 whether bit-banged (as the
-POC does) or clocked from a timer/`dedic_gpio`. Sequential-scan phase skew
-washes out because each channel is integrated over a window spanning many matrix
-frames and AC cycles.
+chop frequency — target **a few kHz per channel**; the design settles on a fixed
+**10 kHz** (FR-SCAN-5). At 128 channels that is 1.28 M mux steps per second,
+which is why the chain is clocked by SPI + DMA at ~2 MHz rather than bit-banged.
+Sequential-scan phase skew washes out because each channel is integrated over a
+window spanning many matrix frames and AC cycles.
+
+The binding constraint is not throughput but the chain's frame-reset gap: each
+frame must be followed by ≥5τ of idle clock, which sets the ceiling near 11 kHz
+at 128 channels. See `TIMING.md` §2.4.
 
 - **Matrix strobe** to smooth away: ~1 ms period → sample ≥ several kHz.
 - **Zero-cross AC**: 100/120 Hz → resolve conduction angle with fine sampling

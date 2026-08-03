@@ -19,6 +19,13 @@ raised, and they take **increasing** ownership of the scan hardware.
 **the LED string does not update while either is active.** The log says so at
 startup.
 
+> **Both slow modes are bench-rig only.** A production module holds its bus
+> grant on an RC activity detector with τ ≈ 5.6 µs, so anything slower than
+> about a 1 MHz clock discharges it and resets the chain mid-frame. Stepping and
+> holding work only on hardware without the activity detector — which is exactly
+> the '161 + '151 breadboard rig described in §5. On a real chain the raw-frame
+> dump (`PINLED_SCAN_DEBUG`) is the diagnostic, and a scope is the escalation.
+
 ## 1. `PINLED_SCAN_DEBUG` — is anything alive?
 
 Logs the raw pre-filament frame twice a second:
@@ -100,10 +107,19 @@ With the scan running normally, these signatures come up repeatedly:
 | Symptom | Cause |
 |---|---|
 | All 16 bits move together | `CLK` isn't reaching the '161 — the count never advances, so all 16 samples read one channel |
-| Bits 0–7 work, 8–15 never | `Q3` → `/OE` bank select: '251 #B never enables |
-| Right group mirrors the left | `/E` tied low instead of to `Q3`; the address wraps and re-reads the same eight inputs |
+| Bits 0–7 work, 8–15 never | `QD` bank select: '251 #B never enables |
+| Right group mirrors the left | `/E` tied low instead of gated by `QD`; the address wraps and re-reads the same eight inputs |
 | Everything reads 1 | `W` (inverted output) wired instead of `Y`, or the bias/internal pull is backwards |
-| Everything reads 0 | mux disabled (`/E` high forces `Y` low on a '151), or `DATA_IN` not connected |
+| Everything reads 0 | mux disabled, or `DATA` not connected |
+
+On a **chained** rig, add these:
+
+| Symptom | Cause |
+|---|---|
+| All channels beyond 16·k read 0 | module k+1 never asserts DONE, so the clock never forwards past it — everything downstream is dead, not just that module |
+| Frame tail duplicates the head | a mid-frame stall let `ACT` decay and the chain reset partway through; should be impossible with DMA |
+| Far modules wrong, near modules fine, worse as modules are added | accumulated clock skew — HC parts, or the SPI clock is too fast (`TIMING.md` §4.3) |
+| First channel of module 1 unreliable | `ACT` still charging during the first half-period; clock one dummy bit and discard |
 
 ## 5. Bench substitutions
 
@@ -114,7 +130,8 @@ Until the '251s arrive, a **74x151** works for a single module, with caveats:
   S3's `V_IH` (~2.48 V). Fit the bias when the tri-state parts go in.
 - **It cannot chain.** Push-pull outputs can't share a bus — that is the entire
   reason for the '251 (see the comparison table in `HARDWARE.md`). Module
-  chaining is untestable until the swap.
+  chaining is untestable until the swap, and the rig also lacks the DONE latch,
+  gating and activity detector a real module carries (`CHAINING.md`).
 - **Set `PINLED_CHANNELS_PER_MODULE=8`** for a single 8-input mux, otherwise
   channels 8–15 mirror 0–7 and light a second LED per input.
 - **Check the supply rail.** GPIO 9 is **not 5 V tolerant**. A '151 on 5 V
@@ -162,5 +179,11 @@ around a 74x151:
   (HW-1).
 - No crosstalk onto unconnected channels; stable across 40+ minutes.
 
-Outstanding, all '251-dependent: `Q3` bank select, the 1 kΩ bias, module
-chaining, real lamp taps, and the module-boundary settle measurement.
+Outstanding, all dependent on rev B modules: `QD` bank select, the 1 kΩ bias at
+the master, module chaining, real lamp taps, and the chain-specific measurements
+in `TIMING.md` §7 — `ACT` fall time, accumulated clock skew, and first-bit
+validity at frame start.
+
+Note the bench rig predates the chaining design: it has no DONE latch, no clock
+gating and no activity detector, so it exercises the counter, mux and polarity
+but nothing of the chaining protocol.

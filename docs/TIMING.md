@@ -29,91 +29,125 @@ in frame time. §2.5 is how that gets resolved.
 
 ### 2.1 Topology
 
-The '161 counters cascade via TC → ENT/ENP, so the whole chain behaves as one
-wide binary counter: bits 0–2 select the mux channel, bit 3 bank-selects the
-two '251s within a module, bits 4+ are the module index. Each module decodes
-its own index and drops its '251s into high-Z when not addressed, so **all
-modules share one `DATA_IN`**.
-
-The cascade is synchronous, not ripple-through: every stage updates on the same
-clock edge, so the module-index bits are valid in one CLK→Q, not N of them. TC
-propagation only caps the maximum clock frequency:
+Modules are **identical and unaddressed**. Each holds the forwarded clock until
+it has scanned its own 16 lines, then becomes transparent:
 
 ```
-t_TC(~30 ns) + t_setup,ENT(~15 ns) < t_CLK   →   f_max ≈ 18 MHz
+CLK_OUT = CLK_IN AND DONE
 ```
 
-We run three orders of magnitude below that. The cascade costs nothing.
+so the clock itself is the token and the master simply issues 16·N pulses. All
+modules share one `DATA` bus; exactly one 3-state mux drives it at any instant,
+arbitrated by an RC activity detector plus the DONE latch. Full protocol in
+`CHAINING.md`.
 
-A shared `/MR` (asynchronous clear on the '161) zeroes the entire chain at the
-start of every frame, so **any module count 1–8 is legal** — the counter never
-has to wrap to self-align, and non-power-of-two configurations like 6 modules
-(96 channels) are fine.
+There is no `/MR` conductor. The frame reset is a **clock-idle timeout**: hold
+`CLK` low for ≥ 5τ and every activity detector discharges, async-clearing all
+counters and DONE latches. Any module count 1–8 is legal, including
+non-power-of-two configurations like 6 modules (96 channels).
 
-### 2.2 Software cost per GPIO operation
+Two consequences the old cascaded-counter topology did not have:
 
-| Method | Per op | Note |
-|---|---|---|
-| `gpio_set_level()` / `gpio_get_level()` | ~250–350 ns | what the POC uses |
-| Direct register (`GPIO.out_w1ts`) | ~25–35 ns | 6–8 cycles |
-| **`dedic_gpio`** | **~8 ns** | **2 cycles; S3 only** |
+- **Clock skew is cumulative.** Each module inserts a NAND plus a Schmitt
+  inverter, so module *k*'s clock lags the master's by *k·d*. Module *k*'s data
+  window for bit *n* is shifted later by the same amount, so the master's sample
+  point stays inside it as long as `k·d < T_clk`. With LVC (~10–13 ns/module)
+  that is ~100 ns across 8 modules against a 500 ns bit — 5× margin. With HC at
+  3.3 V it is ~0.5 µs and the far end fails, *as a function of chain length*
+  (HW-3).
+- **The chain has a stall tolerance.** ACT decays with τ; if clocking stops
+  mid-frame for longer than ~6 µs the whole chain resets. See §2.5.
 
-`dedic_gpio` does not exist on ESP32 classic — it is an S2/S3/C3+ peripheral.
-Moving to the S3 is what promotes FR-SCAN-7 from *future* to baseline.
+### 2.2 Why SPI + DMA, not a CPU loop (FR-SCAN-7)
 
-**Gotcha:** on the S3 the dedicated-GPIO instructions are per-core, and a bundle
-is bound to whichever core created it. The bundle must be created **inside the
-scan task after it is pinned**, not in `init()` from `app_main` on core 0.
+The chain holds its bus grant on a capacitor. `ACT` peaks at ~2.7 V (3.3 V less
+a diode drop) and an LVC Schmitt releases at `V_T-` ≈ 0.9 V, so with τ = 5.6 µs:
 
-**Gotcha:** every number in this section assumes the LX7 is running at **240
-MHz**, and ESP-IDF's default for `esp32s3` is **160 MHz**. At 160 MHz the
-per-op cost goes ~8 ns → ~12.5 ns and the whole of §2.4 inflates by 1.5× — a
-128-channel frame becomes ~35 µs rather than 23.5 µs. `sdkconfig.defaults` must
-therefore set `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y` explicitly (NFR-7). This
-was not set on the first S3 bring-up build and the boot log read `cpu freq:
-160000000 Hz`; confirm it there rather than assuming it.
+```
+t_stall = τ · ln(2.7 / 0.9) ≈ 6.2 µs
+```
 
-### 2.3 Settle time (bench)
+**A gap in clocking longer than ~6 µs mid-frame silently resets every counter
+and DONE latch in the chain.** On an S3 running FreeRTOS, a 6 µs stall from a
+cache miss on a flash read or a higher-priority ISR is routine, so a bit-banged
+loop — however fast its individual GPIO operations — is the wrong tool. The
+failure is also nasty: not a dropped frame, but a *plausible-looking* frame
+where the tail is re-read from module 1.
 
-Two tiers, because a module boundary is a different event from an address
-change:
+SPI removes the question. A DMA transaction is gapless by construction:
 
-| Transition | Contributors | Budget |
-|---|---|---|
-| Within a module | '161 CLK→Q + '251 addr→out | **100 ns** |
-| Module boundary | above + decode→`/OE` + '251 output-enable + bus recharge | **200 ns** |
-| Frame start | `/MR` pulse (~200 ns) + boundary-class settle | **400 ns** |
+| SPI | Chain |
+|---|---|
+| `SCLK` | `CLK` |
+| `MISO` | `DATA` |
+| Mode | 1 (`CPOL=0, CPHA=1`) |
 
-The `/MR` pulse is generous: a '161 needs ~5 ns of clear, and 200 ns is for the
-harness, not the part. The POC's `esp_rom_delay_us(1)` is ~200× longer than
-required.
+Mode 1 shifts on the rising edge and samples on the falling — exactly the
+"sample just before each falling edge" the protocol requires, since the sampled
+value is the pre-edge one. `CPOL=0` idles `SCLK` low between transactions, which
+*is* the frame reset. 16·N bits is always a whole number of bytes.
 
-The boundary tier is where the bus electrical design (§4) shows up. With
-LVC-family parts it is settle-limited; with HC at 3.3 V it becomes slew-limited
-and roughly triples.
+This deletes work rather than adding it: no `dedic_gpio` bundle to pin to a
+core, and no separate pacing timer, because the transaction cadence sets Fs
+directly (§2.5).
+
+**Gotcha:** the filament math below assumes the LX7 runs at **240 MHz**, and
+ESP-IDF's default for `esp32s3` is **160 MHz**, which inflates per-channel
+integrator cost by 1.5×. `sdkconfig.defaults` must set
+`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y` explicitly (NFR-7). This was not set on
+the first S3 bring-up build and the boot log read `cpu freq: 160000000 Hz`;
+confirm it there rather than assuming it.
+
+### 2.3 Settle and the handoff
+
+At 2 MHz a bit slot is 500 ns. Contributors inside one slot:
+
+| Contributor | Typical (LVC @ 3.3 V) |
+|---|---|
+| '161 CLK→Q | ~8 ns |
+| '251 address → output | ~10 ns |
+| Bus slew, ~150 pF | ~20 ns |
+| Accumulated chain skew, 8 modules | ~100 ns |
+| **Total worst case** | **~140 ns** |
+
+Comfortably inside 500 ns. The **module handoff needs no settle budget of its
+own**: module *k* releases `DATA` on the falling edge that wraps its counter and
+module *k+1* arms a half-period later, so the high-Z window sits *between*
+sample slots and is never sampled (FR-SCAN-10). This is why the old two-tier
+in-module/boundary settle model is gone.
+
+Frame start is the one place worth measuring: `ACT` is charging during the first
+half-period, so line 0 of module 1 is the tightest sample in the frame. Charge τ
+is ~12 ns against a 250 ns half-period, so it should be clean — but confirm on
+the bench, and clock one dummy bit first if it is not.
 
 ### 2.4 Frame budget
 
-Per channel: settle (100 ns) + read + CLK↑ + CLK↓ (~25 ns) ≈ **125 ns**.
-Filament integrator: ~12 cycles/channel ≈ **50 ns**.
-Boundaries: `num_modules - 1`, at +100 ns each. Frame start: 400 ns.
+The scan is now pure hardware: 16·N SPI bits at 2 MHz, DMA-fed, zero CPU. The
+only CPU cost is the filament integrator (~50 ns/channel) plus per-transaction
+setup.
 
-| Ch | Mod | Scan | Filament | Frame | Free-run | Core 1 @ 10 kHz |
-|---|---|---|---|---|---|---|
-| 16 | 1 | 2.4 µs | 0.8 µs | 3.2 µs | 313 kHz | 3.2% |
-| 32 | 2 | 4.5 µs | 1.6 µs | 6.1 µs | 164 kHz | 6.1% |
-| 64 | 4 | 8.7 µs | 3.2 µs | 11.9 µs | 84 kHz | 11.9% |
-| 96 | 6 | 12.9 µs | 4.8 µs | 17.7 µs | 56 kHz | 17.7% |
-| 128 | 8 | 17.1 µs | 6.4 µs | 23.5 µs | 43 kHz | **23.5%** |
+| Ch | Mod | Bits | Scan @ 2 MHz | Idle (≥5τ) | Min frame | Max rate | CPU @ 10 kHz |
+|---|---|---|---|---|---|---|---|
+| 16 | 1 | 16 | 8 µs | 28 µs | 36 µs | 27 kHz | 0.8% |
+| 32 | 2 | 32 | 16 µs | 28 µs | 44 µs | 23 kHz | 1.6% |
+| 64 | 4 | 64 | 32 µs | 28 µs | 60 µs | 17 kHz | 3.2% |
+| 96 | 6 | 96 | 48 µs | 28 µs | 76 µs | 13 kHz | 4.8% |
+| 128 | 8 | 128 | 64 µs | 28 µs | 92 µs | **10.9 kHz** | **6.4%** |
 
-Note the inversion at the top of the range: with `dedic_gpio` the integrator
-costs more than a quarter of the frame, so the bottleneck has moved from I/O to
-arithmetic. Not worth optimizing at 23% of a dedicated core, but that is where
-the next gain lives — not in the scan loop.
+Two things changed versus the bit-banged model this table replaces. The 10 kHz
+target now *just* fits at 128 channels rather than sitting at 43 kHz of
+headroom — the binding constraint is the 5τ reset gap, not the scan. And CPU
+occupancy dropped from 23.5% to 6.4%, because the only work left on the core is
+the integrator.
 
-For comparison, the POC's `gpio_set_level` + 1 µs settle gives ~1.9 µs/channel:
-33 kHz at 16 channels, **5.5 kHz at 96**. Above the 2 kHz floor, but swinging 6×
-across configurations — which is precisely the failure §2.5 fixes.
+At a fixed 10 kHz (100 µs period) every configuration leaves an idle gap well
+above 5τ: 92 µs at one module, 36 µs at eight. The margin narrows as modules are
+added, which is exactly what FR-SCAN-9's boot check exists to catch.
+
+> Scaling levers, in order of preference, if 128 channels at 10 kHz proves
+> tight: raise the SPI clock (skew allows ~3 MHz with LVC), or shrink τ (which
+> costs stall tolerance).
 
 ### 2.5 Paced sampling (FR-SCAN-8)
 
@@ -121,8 +155,8 @@ across configurations — which is precisely the failure §2.5 fixes.
 
 Rationale:
 
-- Feasible at 128 channels (23.5% of core 1), so behavior is identical on an
-  8-channel bench rig and a 128-channel install. The filament time constants
+- Feasible at 128 channels (6.4% of one core), so behavior is identical on a
+  16-channel bench rig and a 128-channel install. The filament time constants
   mean the same thing in both.
 - 10 kHz gives ~20 samples across a 2 ms matrix strobe pulse, and 833 samples
   per 60 Hz half-cycle — conduction-angle resolution ~0.1%. Comfortable for both
@@ -130,28 +164,36 @@ Rationale:
 - Uniform `dt` is what the leaky integrator assumes. A burst-then-sleep pacing
   scheme would reintroduce exactly the aliasing against the matrix strobe that
   the filament model exists to kill.
-- Headroom to 20 kHz (47% of core 1) if the profiler ever wants finer
-  conduction-angle resolution.
 
-Mechanism: `gptimer` at Fs → task notification → scan task runs one frame.
-Notification jitter is ~2–5 µs against a 100 µs period. Running the frame
-directly in an IRAM-resident timer ISR is the zero-jitter fallback if the bench
-disagrees. A busy-wait loop is not an option: it starves core 1's idle task.
+Mechanism: the SPI transaction cadence *is* the pacing. Queue one receive-only
+transaction per frame at Fs; the hardware clocks 16·N bits gaplessly and the
+gap between transactions supplies the ≥5τ reset. Jitter in *starting* a
+transaction is harmless — it lengthens the idle gap, which the chain does not
+care about, unlike jitter *within* a frame, which the chain cannot survive at
+all.
+
+The one hard floor: the inter-transaction gap must never fall below 5τ (28 µs).
+At 10 kHz with 8 modules the gap is 36 µs, which is the tightest configuration
+in the range. FR-SCAN-9's boot check exists to verify this rather than assume
+it.
 
 ### 2.6 Boot feasibility check
 
 Config is not trusted. At startup:
 
-1. Run ~256 frames, measure actual frame time `t_frame`.
-2. `Fs_max = 1 / (t_frame / 0.6)` — 60% duty ceiling leaves margin for the
-   integrator and interrupts.
-3. Clamp the configured rate to `Fs_max`; log loudly if clamped.
+1. Compute `t_scan = 16·N / f_spi` and check `1/Fs − t_scan ≥ 5τ`. **Refuse to
+   start** if the configured rate leaves less than the reset gap — that is not a
+   degraded frame, it is a chain that never resets.
+2. Run ~256 frames and measure actual frame period, which also catches a
+   mis-specified `f_spi` or a driver that silently rounds the clock divider.
+3. Clamp the configured rate so both the 5τ gap and a 60% CPU ceiling hold; log
+   loudly if clamped.
 4. Pass the **resulting** rate to `Filament::init()` and `Profiler::init()`, so
    the tau→coefficient math is derived from what the hardware actually does.
 
-This is also what makes a slow front end (HC parts, long harness, a settle
-retune) degrade gracefully instead of silently corrupting every time constant
-in the system.
+Step 1 is new and is the important one: with the old `/MR` topology an
+over-ambitious rate merely ran late, but here it eats the reset gap and the
+chain stops clearing between frames.
 
 ### 2.7 Consequence for the profiler
 
@@ -207,7 +249,9 @@ Estimated at full extension (8 modules, 800 mm) *(bench)*:
 | S3 input | ~3 pF |
 | **Total** | **~150 pF** |
 
-With the 1 kΩ bus pull: τ ≈ 150 ns, consistent with the 200 ns boundary settle.
+With the 1 kΩ bus pull, τ ≈ 150 ns. That only governs how fast an *undriven*
+bus decays, which matters at frame start and after the last module finishes —
+never mid-frame, because the handoff window carries no sample.
 
 ### 4.2 Pull direction follows front-end polarity (HW-2)
 
@@ -230,8 +274,11 @@ so all three flip together. The internal pull is ~45 kΩ and does not replace th
 
 ### 4.3 Logic family (HW-3)
 
-1 kΩ against 3.3 V is 3.3 mA of standing load on whichever '251 is driving.
-That effectively selects the family:
+Two independent arguments land on the same answer, and the second is the one
+that actually binds.
+
+**Drive.** 1 kΩ against 3.3 V is 3.3 mA of standing load on whichever '251 is
+driving:
 
 | | 74HC251 @ 3.3 V | 74LVC251A @ 3.3 V |
 |---|---|---|
@@ -240,12 +287,23 @@ That effectively selects the family:
 | Slew 150 pF rail-to-rail | ~124 ns | ~20 ns |
 | Holding against 1 kΩ | **marginal — may not reach valid V_OL/V_OH** | trivial |
 
-HC at 3.3 V is fighting a 3.3 mA load with a ~3 mA budget. **Use LVC/LV.** The
-alternative — a 4.7 kΩ pull with HC — costs ~1.5 µs of boundary settle, which at
-8 boundaries adds ~12 µs/frame and roughly doubles the 128-channel frame time.
+**Clock skew — the binding constraint.** Every module inserts a NAND plus a
+Schmitt inverter into the forwarded clock, so module *k* is clocked *k·d* late
+and the master's sample point must still land inside its data window, i.e.
+`k·d < T_clk`:
 
-Since the harness carries no 5 V rail, there is no 5 V option to fall back to,
-and the S3's lack of 5 V tolerance never becomes an issue.
+| Family | Per module | 8 modules | Verdict at 2 MHz (500 ns bit) |
+|---|---|---|---|
+| 74HC @ 3.3 V | ~50–70 ns | ~0.5 µs | **fails** — far end outside its slot |
+| 74LVC @ 3.3 V | ~10–13 ns | ~100 ns | 5× margin |
+
+The HC failure is chain-length dependent, which makes it the worst kind: a
+4-module chain works and an 8-module chain does not, with nothing obviously
+wrong in between. **Use LVC.**
+
+Because LVC is not a 5 V part, the harness carries 5 V and every module
+regulates 3.3 V locally (HW-8). `DATA` and `CLK` are therefore 3.3 V signals
+throughout and the S3's lack of 5 V tolerance never becomes an issue.
 
 ### 4.4 Signal integrity
 
@@ -357,23 +415,31 @@ wrong brightness:
 | Check | Action on failure |
 |---|---|
 | `num_modules × channels_per_module ≤ 128` | refuse to start |
+| `1/Fs − 16·N/f_spi ≥ 5τ` (reset gap fits) | **refuse to start** |
 | measured `t_frame` vs configured Fs | clamp Fs, log, use the clamped value for tau |
 | `t_led(led_count)` vs `refresh_hz` at 70% occupancy | clamp `refresh_hz`, log |
 | `led_count ≥ mapped channel count` | log unmapped channels |
 
 ## 7. To confirm on the bench
 
-1. **Boundary settle.** Scope `DATA` at the far end of a full 8-module chain
-   across a module transition. The 200 ns budget is the load-bearing estimate in
-   §2.4.
-2. **Bus capacitance and pull direction.** Verify ~150 pF and that the 1 kΩ is
-   fitted as a pull-**down**.
-3. **Front-end current per channel.** The 3 mA placeholder in §5.1 sets the
+1. **`ACT` fall time.** Scope `ACT` after the last clock edge; §2.2 predicts
+   ~6.2 µs. This single number sets both the minimum reset gap and the chain's
+   stall tolerance, so everything else depends on it.
+2. **First bit at frame start.** `ACT` is charging during the first half-period,
+   making line 0 of module 1 the tightest sample in the frame. If it is dirty,
+   clock one dummy bit and discard.
+3. **Accumulated clock skew.** Scope `CLK_OUT` at module 8 against `SCLK` at the
+   master. §4.3 predicts ~100 ns with LVC; if it exceeds ~a third of a bit slot,
+   drop the SPI clock.
+4. **The handoff window.** Confirm the high-Z gap really does fall between
+   sample slots and that no sample lands in it.
+5. **Bus capacitance and pull direction.** Verify ~150 pF and that the 1 kΩ is
+   fitted as a pull-**down**, at the master only.
+6. **Front-end current per channel.** The 3 mA placeholder in §5.1 sets the
    entire power topology.
-4. **CLK→DATA crosstalk** at full harness length, with and without series
+7. **CLK→DATA crosstalk** at full harness length, with and without series
    termination.
-5. **Frame time vs. the model.** Compare measured `t_frame` at 1, 4, and 8
-   modules against §2.4; the per-channel and per-boundary constants fall out of
-   the slope and intercept.
-6. **Coil-fire behavior.** Fire a flipper during a profiling window and confirm
+8. **Frame time vs. the model.** Compare measured frame period at 1, 4, and 8
+   modules against §2.4.
+9. **Coil-fire behavior.** Fire a flipper during a profiling window and confirm
    the classifier does not misbehave.
