@@ -29,28 +29,32 @@ machine.
 
 ## Hardware (per 16-channel module)
 
-- **74LVC161** synchronous counter — `QA..QC` select the mux channel, `QD` bank-selects.
-- **2× 74LVC251** — 8:1 muxes with **tri-state** outputs, bussed onto one `DATA` line.
-- **74LVC109 + 74LVC10 + 74LVC14** — `DONE` and `STARTED` latches, gating, and
-  Schmitt inversion that make chaining work. No analog timing anywhere.
+- **2× 74LVC165** — 8-bit parallel-in / serial-out shift registers, chained
+  `QH` → `SER`. That is the entire scan logic: two ICs per module, no counter,
+  no muxes, no arbitration, no gating.
 - **16× N-ch MOSFET + inverting Schmitt trigger** — per-channel level-shift
   (5-20 V, AC/DC), protection, and hysteresis. Two inversions cancel: lamp on
   reads as logic high.
+- **10 kΩ pull-down + 33 Ω series** on `DATA` — the pull-down makes the chain
+  self-terminating, the series resistor source-terminates each hop.
 - **3.3 V LDO** — every module regulates locally from the 5 V harness rail.
 - **ESP32-S3** (Adafruit QT Py ESP32-S3) — **3 GPIO total** for sensing, not per
   module, plus 1 GPIO for the whole LED string.
 
 Modules chain 1..8 on a **5-pin JST-SH harness** (`VCC`, `GND`, `DATA`, `CLK`,
-`/MR`) in 100 mm hops, giving **8 to 128 channels on the same three pins**.
-Modules are identical and unaddressed: each holds the forwarded clock until it
-has scanned its own 16 lines, so the clock itself is the token. See
-[`docs/CHAINING.md`](docs/CHAINING.md).
+`/PL`) in 100 mm hops, giving **8 to 128 channels on the same three pins**.
+Modules are identical and unaddressed. `CLK` and `/PL` are bussed; `DATA` is
+point-to-point, so the whole harness behaves as one shift register 16·N bits
+deep. See [`docs/CHAINING.md`](docs/CHAINING.md).
 
-The master clocks a whole frame as one **SPI + DMA** transaction — `SCLK`=`CLK`,
-`MISO`=`DATA`, and `CS` wired as `/MR` so the frame reset is hardware-timed.
+A frame is three steps: drop `/PL` (registers transparently follow their
+inputs), raise it — **every channel in the chain freezes on that one edge** —
+then clock 16·N bits out as a single **SPI + DMA** transaction. `SCLK`=`CLK`,
+`MISO`=`DATA`, `CS` wired as `/PL` (positive polarity), mode 2.
 
-Why '251 not '151: the '151 is push-pull and can't share a data line; the '251
-is tri-state and can — which is what scales from 2 drivers to 16. See
+One transaction per frame is the point. The ESP-IDF SPI driver costs a measured
+~17 µs per transaction regardless of length, so a design that reads eight
+addressed devices pays it eight times. See
 [`docs/HARDWARE.md`](docs/HARDWARE.md) and
 [`docs/TIMING.md`](docs/TIMING.md).
 
@@ -59,13 +63,13 @@ is tri-state and can — which is what scales from 2 drivers to 16. See
 ```
 main/                  app entry + task wiring (ooe::pinled::Main)
 components/
-  lamp_scan/           chained '161 + dual '251 scan driver (SPI + DMA)
+  lamp_scan/           chained '165 shift-register scan driver (SPI + DMA)
   filament/            per-channel leaky integrator (filament model)
   profiler/            drive-scheme auto-classifier
   lamp_map/            channel -> LED mapping + WS2812B (RMT) render
   machine_config/      NVS profiles + Kconfig defaults
 docs/                  DOSSIER, FIRMWARE_PLAN, REQUIREMENTS, HARDWARE, CHAINING, TIMING, BRINGUP
-                       + chain_timing.svg, pinled_module_revC.kicad_sch
+                       + chain_timing.svg
 ```
 
 Two FreeRTOS tasks: `scan_task` samples every channel at a fixed 10 kHz and
@@ -87,7 +91,7 @@ idf.py menuconfig      # pins, channel count, timing under "pinled configuration
 idf.py build flash monitor
 ```
 
-Pins default to the QT Py ESP32-S3 mapping (`CLK`=18/A0, `/MR`=17/A1,
+Pins default to the QT Py ESP32-S3 mapping (`CLK`=18/A0, `/PL`=17/A1,
 `DATA`=9/A2, `LED`=8/A3) and are overridable in `menuconfig`.
 
 ## Status

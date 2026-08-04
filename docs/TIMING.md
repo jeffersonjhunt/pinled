@@ -18,7 +18,7 @@ budget below is linear in module count. That range is the whole problem:
 | | Min | Max |
 |---|---|---|
 | Modules | 1 | 8 |
-| Channels (16/module) | 8 (single '251) | 128 |
+| Channels (16/module) | 8 (single '165) | 128 |
 | LEDs (1:1 with channels) | 8 | 128 |
 | Harness length (100 mm hops) | 100 mm | 800 mm |
 
@@ -29,51 +29,48 @@ in frame time. §2.5 is how that gets resolved.
 
 ### 2.1 Topology
 
-Modules are **identical and unaddressed**. Each holds the forwarded clock until
-it has scanned its own 16 lines, then becomes transparent:
+Modules are **identical and unaddressed**. Each carries two '165 shift registers
+holding its 16 channels, chained `QH` → `SER` so that the whole harness is one
+long shift register 16·N bits deep. `CLK` and `/PL` are bussed to every module;
+`DATA` is point-to-point, one push-pull driver per hop. Full protocol in
+`CHAINING.md`.
 
-```
-CLK_OUT = CLK_IN AND DONE
-```
+The master raises `/PL` — freezing every channel in the chain on that one edge —
+then clocks 16·N bits out. There is no arming, no arbitration and nothing to
+discard.
 
-so the clock itself is the token and the master simply issues 17·N pulses. All
-modules share one `DATA` bus; exactly one 3-state mux drives it at any instant,
-arbitrated by a registered `STARTED` latch plus the `DONE` latch. A bussed
-`/MR` clears every counter and latch chain-wide. Full protocol in `CHAINING.md`.
+Three consequences worth carrying into the budgets below:
 
-Each module spends its **first** received clock arming rather than counting
-(`ENP` = `STARTED`, sampled synchronously), so line 0 gets a full bit period
-before the master samples it. Hence 17 clocks per module, not 16.
+- **Capture is simultaneous.** Channel 0 and channel 127 are sampled on the same
+  `/PL` edge, not 35 µs apart as in rev C. The filament integrator's aperture
+  error across a frame drops to zero.
+- **Clock skew is no longer cumulative, and no longer harmful.** Nothing
+  regenerates the clock, so there is no per-hop gate delay to accumulate. What
+  skew remains works *for* the design: `CLK` propagates master → downstream while
+  `DATA` propagates downstream → master, so each module is clocked before the one
+  feeding it and harness skew **adds** to the inter-device hold margin (§4.3).
+- **A dead module still kills everything downstream**, but for a different
+  reason — its `QH` stops driving and the receiving module's 10 kΩ pull-down
+  holds the net at 0. The result is a clean, stable zero rather than a stalled
+  chain, and modules nearer the master are unaffected.
 
-Two consequences the old cascaded-counter topology did not have:
-
-- **Clock skew is cumulative.** Each module inserts a NAND plus a Schmitt
-  inverter, so module *k*'s clock lags the master's by *k·d*. Module *k*'s data
-  window for bit *n* is shifted later by the same amount, so the master's sample
-  point stays inside it as long as `k·d < T_clk`. With LVC (~10–13 ns/module)
-  that is ~100 ns across 8 modules against a 500 ns bit — 5× margin. With HC at
-  3.3 V it is ~0.5 µs and the far end fails, *as a function of chain length*
-  (HW-3).
-- **A dead module kills everything downstream**, because the clock stops there.
-  That is the price of using the clock as the token.
-
-Since rev C the chain holds **no analog state**. There is no minimum inter-frame
-gap beyond the `/MR` pulse, and no maximum mid-frame stall — a delayed frame is
+The chain holds **no analog state**. There is no minimum inter-frame gap beyond
+the '165's load pulse width, and no maximum mid-frame stall — a delayed frame is
 merely late, never corrupt.
 
 ### 2.2 Why SPI + DMA (FR-SCAN-7)
 
 In rev B this section argued correctness: the chain held its bus grant on a
 capacitor that released after ~6 µs, so a bit-banged loop on FreeRTOS could
-silently corrupt a frame. **Rev C removed that cliff** — arbitration is a
-flip-flop cleared by `/MR`, so a stall of any length is harmless.
+silently corrupt a frame. Rev C removed that cliff, and rev D has nothing
+resembling it — the registers hold their snapshot indefinitely.
 
-SPI is now chosen for throughput and CPU cost rather than safety:
+SPI is chosen for throughput and CPU cost, not safety:
 
 | | Bit-bang | SPI + DMA |
 |---|---|---|
-| 128 ch at 10 kHz | ~23% of a core | **6.4%** |
-| Max clock | ~1 MHz realistically | 2 MHz+, hardware-timed |
+| 128 ch at 10 kHz | ~23% of a core | **49%** (see §2.4 — the honest number) |
+| Max clock | ~1 MHz realistically | 4–8 MHz, hardware-timed |
 | Pacing | needs a timer | transaction cadence *is* the pacing |
 | Jitter within a frame | present | none |
 
@@ -83,13 +80,21 @@ Mapping:
 |---|---|
 | `SCLK` | `CLK` |
 | `MISO` | `DATA` |
-| `CS` (positive polarity) | `/MR` |
-| Mode | 0 (`CPOL=0, CPHA=0`) |
+| `CS` (positive polarity) | `/PL` |
+| Mode | **2** (`CPOL=1, CPHA=0`) |
 
-Driving `/MR` from `CS` is the neat part: `CS` is inactive between transactions
-and active during, so inverting its polarity makes it low between frames
-(clearing) and high during (counting). The reset is hardware-timed, needs no
-software, and cannot be forgotten.
+Driving `/PL` from `CS` is the neat part, and it survives from rev C unchanged:
+`CS` is inactive between transactions and active during, so inverting its
+polarity makes it low between frames (registers transparent, loading) and high
+during one (registers frozen, shifting). The capture instant is hardware-timed,
+needs no software, and cannot be forgotten.
+
+**The single-transaction property is load-bearing.** §2.4 measures ~17 µs of
+fixed driver overhead per SPI transaction. A frame that costs one transaction
+pays that once; a design needing one transaction per module — the MCP23S17
+option evaluated in `esp32-mcp23s17-128ch-input-design.md` — pays it eight times
+and misses the 10 kHz target by 2.7×. This is the main reason rev D chains shift
+registers rather than reading addressed expanders.
 
 **Gotcha:** the filament math below assumes the LX7 runs at **240 MHz**, and
 ESP-IDF's default for `esp32s3` is **160 MHz**, which inflates per-channel
@@ -98,26 +103,39 @@ integrator cost by 1.5×. `sdkconfig.defaults` must set
 the first S3 bring-up build and the boot log read `cpu freq: 160000000 Hz`;
 confirm it there rather than assuming it.
 
-### 2.3 Settle and the arm clock
+### 2.3 Settle
 
-At 2 MHz a bit slot is 500 ns. Contributors inside one slot:
+At 4 MHz a bit slot is 250 ns, and the master samples in the middle of it — so
+125 ns is the budget from a rising `CLK` edge to a valid level at the MCU pin.
 
 | Contributor | Typical (LVC @ 3.3 V) |
 |---|---|
-| '161 CLK→Q | ~8 ns |
-| '251 address → output | ~10 ns |
-| Bus slew, ~150 pF | ~20 ns |
-| Accumulated chain skew, 8 modules | ~100 ns |
-| **Total worst case** | **~140 ns** |
+| '165 CLK → `QH` | ~10 ns |
+| `R2` (33 Ω) into the hop capacitance | ~5 ns |
+| Harness flight time, one 100 mm hop | ~0.5 ns |
+| **Total, module → master** | **~15 ns** |
 
-Comfortably inside 500 ns, and measured to hold well past it — see §4.3.
+Only *one* hop appears in that budget, which is the structural difference from
+rev C. Data does not ripple through the chain: on each clock edge every register
+simultaneously captures its neighbour's **pre-edge** output, so the path that has
+to settle inside a bit slot is always one device to the next, never eight devices
+end to end.
 
-The **arm clock** removes what would otherwise be the tightest sample in the
-frame. Without it, a module's mux would enable on the same edge the master
-samples, so line 0 would be read while the '251 was still turning on. With
-`ENP = STARTED` the first clock only arms; line 0 is then driven for a full bit
-period and sampled mid-window like every other line. It costs one clock per
-module (17·N rather than 16·N) and removes an entire class of marginal timing.
+That leaves an inter-device **hold** requirement rather than a propagation chain:
+
+```
+t_h(SER)  ≤  t_pd(CLK→QH)  +  skew(k → k+1)
+```
+
+With `t_h` ≈ 0–3 ns and `t_pd` ≈ 10–20 ns, this holds by an order of magnitude
+before the skew term is even counted — and the skew term is positive, because the
+clock reaches module *k* before module *k+1* (§4.3, HW-14).
+
+Two things that no longer appear in this budget at all, both from rev C: the
+'251's output-enable turn-on time (there is no tri-state anything), and the arm
+clock that existed to hide it. A '165 presents channel 0 at `QH` while `/PL` is
+still low, so it has a full bit period before the first sample with no clock
+spent on it.
 
 ### 2.4 Frame budget *(measured)*
 
@@ -125,7 +143,7 @@ A frame costs a **fixed ~17 µs of transaction overhead** plus the burst itself:
 
 ```
 t_frame  ≈  17 µs  +  bits / f_spi
-bits      =  ceil(17·N / 8) · 8  +  4      (byte-rounded, plus CS pre/post)
+bits      =  16 · N                        (always a whole number of bytes)
 ```
 
 The 17 µs was measured on hardware at three clock rates, and is essentially
@@ -150,20 +168,30 @@ At the **4 MHz** default:
 
 | Ch | Mod | Bits | Burst | Frame | Free-run | Fs at 60% | CPU @ 10 kHz |
 |---|---|---|---|---|---|---|---|
-| 16 | 1 | 28 | 7 µs | 24 µs | 42 kHz | 25 kHz | 24% |
-| 32 | 2 | 44 | 11 µs | 28 µs | 36 kHz | 21 kHz | 28% |
-| 64 | 4 | 76 | 19 µs | 36 µs | 28 kHz | 17 kHz | 36% |
-| 96 | 6 | 108 | 27 µs | 44 µs | 23 kHz | 14 kHz | 44% |
-| 128 | 8 | 140 | 35 µs | 52 µs | 19 kHz | **11.5 kHz** | **52%** |
+| 16 | 1 | 16 | 4 µs | 21 µs | 48 kHz | 29 kHz | 21% |
+| 32 | 2 | 32 | 8 µs | 25 µs | 40 kHz | 24 kHz | 25% |
+| 64 | 4 | 64 | 16 µs | 33 µs | 30 kHz | 18 kHz | 33% |
+| 96 | 6 | 96 | 24 µs | 41 µs | 24 kHz | 15 kHz | 41% |
+| 128 | 8 | 128 | 32 µs | 49 µs | 20 kHz | **12 kHz** | **49%** |
 
-10 kHz is met across the whole range, but with far less margin than the old
-model implied — 52% of core 1 at full extension, not 6.4%. `scan_task` is
-pinned to core 1 and `render_task` to core 0, so that is affordable, but it is
-the number to watch if anything else ever wants core 1.
+At **8 MHz** the 128-channel case improves to a 16 µs burst, a 33 µs frame,
+30 kHz free-run, 18 kHz clamped and 33% CPU.
 
-Raising `f_spi` buys frame time cheaply (the burst shrinks, the 17 µs does not),
-bounded by chain skew — see §4.3. Dropping to interrupt-driven transmit trades
-CPU for wall-clock in the wrong direction for this workload.
+10 kHz is met across the whole range, but with far less margin than the pre-
+measurement model implied — 49% of core 1 at full extension, not 6.4%.
+`scan_task` is pinned to core 1 and `render_task` to core 0, so that is
+affordable, but it is the number to watch if anything else ever wants core 1.
+
+> **Rev D is not meaningfully faster than rev C** — 49 µs against 52 µs at
+> 128 channels is noise, and the whole difference is the 12 clocks saved by
+> dropping the arm cycles. Rev D is worth having for part count, cable topology
+> and simultaneous capture; it is *not* a throughput change. Do not let this
+> table imply otherwise.
+
+Raising `f_spi` buys frame time cheaply (the burst shrinks, the 17 µs does not).
+Since rev D the bound is the '165's `fmax` and multi-drop clock integrity rather
+than chain skew — see §4.3. Dropping to interrupt-driven transmit trades CPU for
+wall-clock in the wrong direction for this workload.
 
 ### 2.5 Paced sampling (FR-SCAN-8)
 
@@ -182,20 +210,21 @@ Rationale:
   the filament model exists to kill.
 
 Mechanism: the SPI transaction cadence *is* the pacing. Queue one receive-only
-transaction per frame at Fs; the hardware clocks 17·N bits and `CS` — wired as
-`/MR` — clears the chain between them.
+transaction per frame at Fs; the hardware clocks 16·N bits and `CS` — wired as
+`/PL` — reloads the chain between them.
 
-Since rev C there is no floor on the inter-frame gap and no ceiling on
-mid-frame stall, so pacing jitter is a quality-of-measurement question rather
-than a correctness one. A late frame widens `dt` for one sample; the integrator
-absorbs it.
+There is no floor on the inter-frame gap and no ceiling on mid-frame stall, so
+pacing jitter is a quality-of-measurement question rather than a correctness
+one. A late frame widens `dt` for one sample; the integrator absorbs it — and
+since rev D captures every channel on one `/PL` edge, a late frame is uniformly
+late rather than internally skewed.
 
 ### 2.6 Boot feasibility check
 
 Config is not trusted. At startup:
 
-1. Check `17·N ≤ MAX_BITS` and that the configured Fs leaves room for the burst:
-   `1/Fs ≥ 17·N/f_spi`. Clamp and log if not.
+1. Check `16·N ≤ MAX_BITS` and that the configured Fs leaves room for the burst:
+   `1/Fs ≥ 16·N/f_spi`. Clamp and log if not.
 2. Run ~256 frames and measure the actual frame period, which also catches a
    mis-specified `f_spi` or a driver that silently rounds the clock divider.
 3. Clamp the configured rate so a 60% CPU ceiling holds; log loudly if clamped.
@@ -254,63 +283,93 @@ Estimated at full extension (8 modules, 800 mm) *(bench)*:
 
 | Contributor | Estimate |
 |---|---|
-| JST-SH harness, 800 mm | ~45 pF |
-| 8 × '251 tri-state output | ~64 pF |
-| Module traces | ~40 pF |
-| S3 input | ~3 pF |
-| **Total** | **~150 pF** |
+| JST-SH harness, one 100 mm hop | ~6 pF |
+| 2 × '165 input + one driver | ~15 pF |
+| Module traces | ~8 pF |
+| S3 input (master hop only) | ~3 pF |
+| **Total, one hop** | **~25 pF** |
 
-With the 1 kΩ bus pull, τ ≈ 150 ns. That only governs how fast an *undriven*
-bus decays, which matters during arm clocks and after the last module finishes.
-Those samples are discarded, so it never gates a real reading.
+> **Rev D changed this number by an order of magnitude.** Rev C bussed `DATA`
+> the whole 800 mm with 16 tri-state outputs hanging off it, for ~150 pF. Rev D
+> loads only one hop at a time, so the driver sees ~25 pF. The 10 kΩ terminator
+> gives τ ≈ 250 ns, which governs only how fast an *undriven* net decays — i.e.
+> how quickly a missing module's channels settle to zero, not any live reading.
+
+The one net that did *not* get easier is `CLK`, which is now multi-drop across
+all 8 modules: ~45 pF of harness plus 16 register inputs. That is the load the
+master's series resistor has to work into (§4.3).
 
 ### 4.2 Pull direction follows front-end polarity (HW-2)
 
-The rule: **a floating or unpopulated bus must read *lamp off*.**
+The rule: **an undriven or unpopulated `DATA` net must read *lamp off*.**
 
 The front end is FET (inverting) → Schmitt inverter (inverting) = non-inverting
 overall, so lamp on = logic high, and the pull is therefore **down**. This also
-gives a safe pre-boot state: bus low, all lamps dark, before firmware runs.
+gives a safe pre-boot state: all nets low, all lamps dark, before firmware runs.
+
+Since rev D this rule does more work than it used to. A 10 kΩ pull-down sits at
+*every* receiving end — one per module on `J2.3` plus one at the master — and it
+is what makes a partly populated chain self-terminate (HW-11): missing modules
+read as a hard zero rather than needing a plug or a build variant.
 
 If the front end were ever changed to inverting, the pull must flip to up and
 `active_low` must flip with it. These two choices are one decision, not two.
+
+A **fourth** thing is bound to it since rev D: taking `/QH` instead of `QH`
+would invert the serial path without moving the resistor, so a missing module
+would report every channel *on*. HW-12 forbids it for exactly this reason.
 
 There is a **third** thing bound to that same decision: the MCU's *internal*
 pull on `DATA_IN`. `gpio_reset_pin()` leaves the internal pull-**up** enabled
 and `gpio_set_direction()` does not clear it, so the naive setup contradicts the
 rule above and an undriven bus reads *lamp on*. `lamp_scan::init()` therefore
 configures the pin explicitly and derives the internal pull from `active_low`,
-so all three flip together. The internal pull is ~45 kΩ and does not replace the
-1 kΩ external bias — it only ensures the MCU is not fighting it.
+so all three flip together. The internal pull is ~45 kΩ and works alongside the
+10 kΩ external terminator rather than replacing it.
 
 ### 4.3 Logic family (HW-3)
 
-Two independent arguments land on the same answer, and the second is the one
-that actually binds.
+**This argument changed shape in rev D.** In rev C the binding constraint was
+cumulative gate delay in a clock that was regenerated at every hop — a failure
+that scaled with chain length. Rev D busses the clock, so that term is gone
+entirely, and family choice becomes a preference rather than a correctness
+requirement (HW-3).
 
-**Drive.** 1 kΩ against 3.3 V is 3.3 mA of standing load on whichever '251 is
-driving:
+**Skew now helps.** `CLK` propagates master → downstream; `DATA` propagates
+downstream → master. Module *k* is therefore clocked *before* module *k+1*, and
+latches *k+1*'s `QH` from before *k+1* had a chance to change it. Harness skew
+adds to the hold margin:
 
-| | 74HC251 @ 3.3 V | 74LVC251A @ 3.3 V |
+```
+t_h(SER)  ≤  t_pd(CLK→QH)  +  skew(k → k+1)
+```
+
+`t_h` ≈ 0–3 ns against `t_pd` ≈ 10–20 ns clears this before skew is counted. The
+one way to break it is to **star-wire the clock** from the master, which can put
+a downstream module *ahead* of the module feeding it and subtract from the margin
+instead. Daisy the clock along the harness (HW-14).
+
+**Drive.** The old 1 kΩ standing load is gone — rev D's terminator is 10 kΩ and
+sees only 0.33 mA — so HC is no longer marginal on drive:
+
+| | 74HC165 @ 3.3 V | 74LVC165 @ 3.3 V |
 |---|---|---|
 | Output drive | ±2–4 mA (derated) | ±24 mA |
-| t_pd | ~40–60 ns | ~5–8 ns |
-| Slew 150 pF rail-to-rail | ~124 ns | ~20 ns |
-| Holding against 1 kΩ | **marginal — may not reach valid V_OL/V_OH** | trivial |
+| t_pd CLK → `QH` | ~30–45 ns | ~7–12 ns |
+| Practical `fmax` | ~20–25 MHz | > 50 MHz |
+| Verdict | fine at ≤ 2 MHz; the right part for a **DIP bench build** | preferred for production |
 
-**Clock skew — the binding constraint.** Every module inserts a NAND plus a
-Schmitt inverter into the forwarded clock, so module *k* is clocked *k·d* late
-and the master's sample point must still land inside its data window, i.e.
-`k·d < T_clk`:
+**What binds instead: the multi-drop clock.** This is a genuine regression from
+rev C and should be stated plainly. Rev C's `CLK` was point-to-point and
+re-driven at every module; rev D hangs up to 16 register inputs and 8 connector
+stubs on one net. That is the same criticism that disqualified the MCP23S17
+option's four-signal bus — rev D reduces it to one fast signal (`/PL` is
+effectively DC during a burst) but does not eliminate it.
 
-| Family | Per module | 8 modules | Verdict at 2 MHz (500 ns bit) |
-|---|---|---|---|
-| 74HC @ 3.3 V | ~50–70 ns | ~0.5 µs | **fails** — far end outside its slot |
-| 74LVC @ 3.3 V | ~10–13 ns | ~100 ns | 5× margin |
-
-The HC failure is chain-length dependent, which makes it the worst kind: a
-4-module chain works and an 8-module chain does not, with nothing obviously
-wrong in between. **Use LVC.**
+Mitigations, in order of effect: 33–100 Ω series at the **master** (source
+termination, HW-5); short stubs from connector to IC; and not reaching for clock
+rate in the first place — 4 MHz already meets 10 kHz at 128 channels with 20%
+margin (§2.4).
 
 **Measured (bench, single module).** A clock sweep on the '161 + '151 rig — HC
 parts, breadboard, plus an extra 74HC14 in the clock path — found the endpoint
@@ -323,19 +382,29 @@ delay directly:
 | 40 MHz | 25 ns | unstable |
 
 The break between 62.5 ns and 50 ns puts the round-trip delay at **~55–60 ns**
-for that rig, which is consistent with `delay < T_clk` — the same inequality
-this section applies to chain skew. Production swaps HC for LVC at the endpoint
-but adds 8 modules of forwarding, so the chain, not the endpoint, should remain
-the binding term.
+for that rig, which is consistent with `delay < T_clk`.
 
-**The failure mode is the finding.** Past the ceiling the reads do not become
-noisy — they stay perfectly stable and return `line[k-1]`, i.e. every lamp maps
-one socket over, 256 times out of 256. Exceeding the clock ceiling looks like a
-wiring or mapping error, not a timing error.
+> **Carry this measurement forward with care.** It was taken on rev C hardware
+> ('161 + '151 + a 74HC14 in the clock path) and characterises *that* endpoint,
+> not a '165 chain. What transfers is the method and the failure signature; the
+> number itself must be re-measured on rev D. The `PINLED_SPI_SWEEP` diagnostic
+> (FR-DIAG, `BRINGUP.md` §5) exists for exactly this.
+
+**The failure mode is the finding — but it means something different now.** On
+the rev C rig, exceeding the ceiling produced perfectly stable reads of
+`line[k-1]`: every lamp one socket over, 256 times out of 256, looking exactly
+like a wiring or mapping error rather than a timing error.
+
+On rev D that same signature — a clean, stable, whole-frame one-bit shift — is
+the symptom of the **wrong SPI mode**, not of an excessive clock. Exceeding the
+clock ceiling on a '165 chain should instead present as *intermittent, noisy*
+errors, because what fails first is signal integrity on the multi-drop clock
+rather than a deterministic sampling-window violation. Check the mode before the
+rate.
 
 Because LVC is not a 5 V part, the harness carries 5 V and every module
-regulates 3.3 V locally (HW-8). `DATA` and `CLK` are therefore 3.3 V signals
-throughout and the S3's lack of 5 V tolerance never becomes an issue.
+regulates 3.3 V locally (HW-8). `DATA`, `CLK` and `/PL` are therefore 3.3 V
+signals throughout and the S3's lack of 5 V tolerance never becomes an issue.
 
 ### 4.4 Signal integrity
 
@@ -343,13 +412,16 @@ throughout and the S3's lack of 5 V tolerance never becomes an issue.
 the settle budget. The real risk is CLK→DATA crosstalk with a single ground
 return in a 5-conductor cable:
 
-- **~100 Ω series termination on CLK at the source** to slow the edge and damp
-  reflections.
-- The frame order is already correct: `settle → read → clock` places the settle
-  after the clock edge and samples DATA before the next transition.
+- **33–100 Ω series termination on `CLK` at the master** to slow the edge and
+  damp reflections. Since rev D this is the only multi-drop signal that switches
+  at speed, so it is where the whole signal-integrity budget now lives.
+- **33 Ω in series with each module's `QH`**, source-terminating the
+  point-to-point `DATA` hop.
+- The sampling order is already correct: mode 2 samples on the falling edge,
+  half a bit slot after the rising edge that produced the data.
 - **Per-module decoupling is mandatory, not optional.** 800 mm of thin wire is
-  ~0.5–0.8 µH of loop inductance; an LVC '251 slamming 150 pF cannot source that
-  transient down the harness. Budget 100 nF per IC plus ~10 µF bulk per module.
+  ~0.5–0.8 µH of loop inductance; a '165 cannot source a switching transient
+  down the harness. Budget 100 nF per IC plus ~10 µF bulk per module.
 
 ## 5. Power & grounding
 
@@ -414,7 +486,7 @@ machine's lamp-return ground**, made near the lamp matrix's return rather than
 at the PSU. Powering from the machine makes that tie the power tap itself.
 
 The harness ground drop (136–340 mV) lands on the **DATA line at the S3**, not
-on the FET: the Schmitt and '251 are referenced to module-local ground, so the
+on the FET: the Schmitt and '165 are referenced to module-local ground, so the
 offset appears as common-mode shift when the S3 samples. Against the S3's
 ~1.65 V of V_IL–V_IH margin that is up to 20% — acceptable, but a budget to
 track, and another reason to keep harness current down.
@@ -447,26 +519,29 @@ wrong brightness:
 | Check | Action on failure |
 |---|---|
 | `num_modules × channels_per_module ≤ 128` | refuse to start |
-| `1/Fs ≥ 17·N/f_spi` (burst fits in the period) | clamp Fs, log |
+| `1/Fs ≥ 16·N/f_spi` (burst fits in the period) | clamp Fs, log |
 | measured `t_frame` vs configured Fs | clamp Fs, log, use the clamped value for tau |
 | `t_led(led_count)` vs `refresh_hz` at 70% occupancy | clamp `refresh_hz`, log |
 | `led_count ≥ mapped channel count` | log unmapped channels |
 
 ## 7. To confirm on the bench
 
-1. **The arm clock does its job.** Confirm line 0 of each module is driven for
-   a full bit period and sampled mid-window, and that the arm sample itself is
-   discarded. This replaced the tightest timing in the rev B design, so it is
-   worth seeing on a scope once.
-2. **`/MR` reaches the far end.** With `CS` driving it, check the release-to-
-   first-edge margin (`cs_ena_pretrans`) at module 8 across 800 mm.
-3. **Accumulated clock skew.** Scope `CLK_OUT` at module 8 against `SCLK` at the
-   master. §4.3 predicts ~100 ns with LVC; if it exceeds ~a third of a bit slot,
-   drop the SPI clock.
-4. **The handoff window.** Confirm the high-Z gap really does fall between
-   sample slots and that no sample lands in it.
-5. **Bus capacitance and pull direction.** Verify ~150 pF and that the 1 kΩ is
-   fitted as a pull-**down**, at the master only.
+1. **SPI mode 2 is right.** The highest-value check, and the only rev D claim
+   that is reasoned rather than measured. Two '165s and a button will settle it:
+   mode 2 should read the pressed channel, mode 3 should read its neighbour.
+2. **`/PL` reaches the far end, and its edge is clean.** With `CS` driving it,
+   check the release-to-first-edge margin (`cs_ena_pretrans`) at module 8 across
+   800 mm. This edge is now the capture instant for all 128 channels, so a slow
+   or ringing edge skews the whole snapshot rather than one channel.
+3. **Clock skew direction.** Scope `CLK` at module 8 against `SCLK` at the
+   master and confirm module 8 is clocked *after* module 1 (HW-14). The sign
+   matters more than the magnitude: late is safe, early eats hold margin.
+4. **Multi-drop clock integrity.** The new binding constraint (§4.3). Scope
+   `CLK` at the far end for ringing and double-clocking with and without the
+   series resistor at the master.
+5. **Terminator behaviour.** Unplug the last module mid-run and confirm its
+   channels go to a hard, stable 0 rather than noise — the self-termination
+   claim (HW-11) in one test.
 6. **Front-end current per channel.** The 3 mA placeholder in §5.1 sets the
    entire power topology.
 7. **CLK→DATA crosstalk** at full harness length, with and without series

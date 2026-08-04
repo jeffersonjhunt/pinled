@@ -11,20 +11,18 @@ raised, and they take **increasing** ownership of the scan hardware.
 | Kconfig | Default | Answers |
 |---|---|---|
 | `PINLED_SCAN_DEBUG` | `y` | Is any channel responding at all? |
-| `PINLED_SCAN_STEP_MS` | `0` (off) | Is the counter actually counting? |
+| `PINLED_SCAN_STEP_MS` | `0` (off) | Is the chain actually shifting? |
 | `PINLED_SCAN_HOLD_CH` | `-1` (off) | Where exactly does the signal die? |
 | `PINLED_SPI_SWEEP` | `n` (off) | How fast can the chain be clocked? |
 
 `SCAN_HOLD_CH` takes precedence over `SCAN_STEP_MS`. Either one suppresses
-`scan_task` — they own the counter position and would otherwise race it — so
-**the LED string does not update while either is active.** The log says so at
-startup.
+`scan_task` — they own the chain and would otherwise race it — so **the LED
+string does not update while either is active.** The log says so at startup.
 
-> All four work on **production** hardware. Rev C removed the RC activity
-> detector in favour of a registered `STARTED` latch, so the chain holds no
-> analog state and can be clocked arbitrarily slowly or stopped outright. (Under
-> the rev B 4-wire design the two slow modes would have been bench-rig only —
-> stopping the clock there released the bus grant.)
+> All four work on **production** hardware. The chain holds no analog state, so
+> it can be clocked arbitrarily slowly or stopped outright. (Under the rev B
+> 4-wire design the two slow modes would have been bench-rig only — stopping the
+> clock there released the bus grant.)
 
 ## 1. `PINLED_SCAN_DEBUG` — is anything alive?
 
@@ -34,71 +32,84 @@ Logs the raw pre-filament frame twice a second:
 I (2618) pinled-main: raw [00001111]  tog [----TTTT]
 ```
 
-- **`raw`** — the bus right now, one character per channel, grouped in eights.
-  Group boundaries are mux banks: left is '251 #A (0–7), right is #B (8–15).
+- **`raw`** — the chain right now, one character per channel, grouped in eights.
+  Group boundaries are shift registers: left is `U1` (ch 0–7), right is `U2`
+  (ch 8–15).
 - **`tog`** — sticky since boot. `T` means that channel has been observed *both*
   high and low, so it is genuinely switching rather than stuck.
 
 `tog` being sticky is the point: you can press test inputs at your leisure and
 read the result later, with no timing to coordinate.
 
-A channel showing `-` forever is unconnected, unpopulated, or pinned by the bus
-bias. It is never merely "idle" — an idle lamp still reads a stable 0, and that
+A channel showing `-` forever is unconnected, unpopulated, or pinned by the
+chain terminator. It is never merely "idle" — an idle lamp still reads a stable 0, and that
 low is recorded on the very first frame.
 
 This isolates the sense bus from both the filament model and the LED string, so
 a dead strip and a dead bus stop looking identical.
 
-## 2. `PINLED_SCAN_STEP_MS` — is the counter counting?
+## 2. `PINLED_SCAN_STEP_MS` — is the chain shifting?
 
-At full speed the scan runs tens of thousands of frames per second, so the
-counter's `Q0` toggles near 800 kHz. **Indicator LEDs on the `Q` outputs cannot
-show this** — they sit at a steady half-brightness, which reads as "not
-counting" and sends you hunting a fault that isn't there.
+At full speed the scan runs tens of thousands of frames per second, so `CLK`
+toggles in the megahertz. **Indicator LEDs on the chain signals cannot show
+this** — they sit at a steady half-brightness, which reads as "not running" and
+sends you hunting a fault that isn't there.
 
-Set it to `250` and the scan advances one channel every 250 ms:
+Set it to `250` and the scan advances one bit every 250 ms:
 
 ```
-I (127)  --- /MR pulsed, counter should now read 0000 ---
-I (377)  count  0  expect Q3..Q0 = 0000  DATA=0
-I (1377) count  4  expect Q3..Q0 = 0100  DATA=1
+I (127)  --- /PL pulsed low, chain reloaded ---
+I (377)  bit  0  -> module 0 ch  0  ('165 U1 pin H)  DATA=0
+I (627)  bit  1  -> module 0 ch  1  ('165 U1 pin G)  DATA=1
 ```
 
-A full 16-count cycle takes 4 s. Expected blink rates:
+A 16-channel module takes 4 s per frame. Unlike rev C there is no counter to
+watch on a scope — the only observable is `DATA` itself, which is why the log
+prints the pin each bit came from.
 
-| Output | Changes every |
-|---|---|
-| `Q0` | 250 ms |
-| `Q1` | 500 ms |
-| `Q2` | 1 s |
-| `Q3` | 2 s |
+**The mode matters here.** The walk re-asserts `/PL` between steps (FR-DIAG-2)
+so a button pressed mid-walk is still visible. If it did not, you would be
+walking one frozen snapshot and every press during the walk would be invisible —
+a real behavioural difference from rev C, where the mux read live.
 
-If the counter does **not** step, the fault is the '161, and it is almost always
-a control pin left floating. All of these must be tied high: `/PE` (pin 9),
-`CEP` (pin 7), `CET` (pin 10), and `/MR` (pin 1) except during the reset pulse.
-A floating HC input reads either way and will give you intermittent behavior
-later even if it happens to work now.
+If the chain does **not** shift, check in this order:
+
+1. **`CLK INH` (pin 15) tied low** on every '165. This is the number-one rev D
+   wiring fault: floating, it stops that register dead while its neighbours keep
+   going, so you get eight repeated channels and nothing downstream.
+2. **`/PL` actually rising.** Held low, the registers stay transparent and never
+   shift — `DATA` reads channel 0 of module 1 forever.
+3. **The SPI mode.** Mode 3 instead of 2 shifts everything by one bit and makes
+   channel 0 unreachable. See §4.
 
 ## 3. `PINLED_SCAN_HOLD_CH` — where does the signal die?
 
 The walk sweeps past any given channel for only a few hundred ms per cycle,
-which is useless for tracing with a meter. Hold parks the counter on one channel
-and stops clocking, so every node becomes a static DC level:
+which is useless for tracing with a meter. Hold snapshots the chain, clocks
+exactly *k* times and stops, so `DATA` becomes a static DC level:
 
 ```
-I (127) counter parked on channel 4; Q3..Q0 = 0100, '151 C/B/A = 100
+I (127) chain parked on channel 4 (module 0, U1 pin D); 4 clocks issued
 I (627) hold ch 4  DATA=1
 ```
 
-Measure along the chain and find the first link that stops tracking:
+Measure along the path and find the first link that stops tracking:
 
 | Node | Should read |
 |---|---|
-| '161 `Q3..Q0` | the channel number in binary |
-| mux `C`/`B`/`A` | the low three bits of it |
-| mux `D<n>` | your input — follow it with the button |
-| mux `Y` | equal to `D<n>`, provided `/E` is low |
-| MCU `DATA_IN` | equal to `Y` |
+| front-end output at the '165 input pin | your input — follow it with the button |
+| `U1.QH` (pin 9) | equal to that input, for the parked channel |
+| after `R2` (33 Ω) | the same |
+| MCU `DATA_IN` | the same |
+
+**The more useful variant is `/PL` held low.** The registers then stay
+transparent, so `U1.QH` continuously tracks module 1 channel 0 — press the
+button and watch the meter move in real time. Rev C had no equivalent; its mux
+only presented a channel while the counter addressed it.
+
+For a chained rig, park on a channel in the *far* module. If near modules track
+and far ones do not, the fault is between them: a missing `QH` → `SER` link, a
+`CLK INH` left floating, or a module fitted backwards.
 
 ## 4. Interpreting a full-speed frame
 
@@ -106,22 +117,29 @@ With the scan running normally, these signatures come up repeatedly:
 
 | Symptom | Cause |
 |---|---|
-| All 16 bits move together | `CLK` isn't reaching the '161 — the count never advances, so all 16 samples read one channel |
-| Bits 0–7 work, 8–15 never | `QD` bank select: '251 #B never enables |
-| Right group mirrors the left | `/E` tied low instead of gated by `QD`; the address wraps and re-reads the same eight inputs |
-| Everything reads 1 | `W` (inverted output) wired instead of `Y`, or the bias/internal pull is backwards |
-| Everything reads 0 | mux disabled, or `DATA` not connected |
+| **Every channel reads its neighbour — stable, not noisy** | **Wrong SPI mode.** Try 2 ↔ 3 before suspecting anything else. Mode 3 samples on the same edge the '165 shifts on, so the whole frame slides one bit and channel 0 becomes unreachable. This is the single most likely rev D bring-up fault. |
+| All 16 bits identical | `/PL` stuck low — registers transparent, never shifting. Everything reads module 1 channel 0. |
+| Plausible first frame, then all zeros forever | `/PL` stuck high — registers never reload, so the terminator's zeros shift in and stay. |
+| Eight channels repeat, everything past them dead | `CLK INH` (pin 15) floating or high on one '165 |
+| Bits 0–7 work, 8–15 never | `U2.QH` → `U1.SER` link missing |
+| Everything reads 1 | `/QH` (pin 7) wired instead of `QH` (pin 9), or the terminator/internal pull is backwards |
+| Everything reads 0 | `DATA` not connected, or `/PL` never rising |
+| Channel order reversed within each byte | channel 0 wired to input `A` instead of `H` — electrically fine, but the driver expects `H` first |
 
 On a **chained** rig, add these:
 
 | Symptom | Cause |
 |---|---|
-| All channels beyond 16·k read 0 | module k+1 never asserts DONE, so the clock never forwards past it — everything downstream is dead, not just that module |
-| Frame tail duplicates the head | chain reset partway through the frame — check `/MR` is not glitching mid-burst |
-| Every module's line 0 wrong, rest fine | the arm sample is not being discarded, or `ENP` is not wired to `STARTED` |
-| Far modules wrong, near modules fine, worse as modules are added | accumulated clock skew — HC parts, or the SPI clock is too fast (`TIMING.md` §4.3) |
-| First channel of module 1 unreliable | `ACT` still charging during the first half-period; clock one dummy bit and discard |
-| **Every channel off by one, perfectly stable** | chain clock above the ceiling. Past it the mux output has not propagated when the master samples, so `sample[k]` returns `line[k-1]` — stable and wrong, which reads as a mapping error rather than a timing one. Lower `PINLED_SPI_HZ`. |
+| All channels beyond 16·k read 0, near modules fine | module k+1 missing, unpowered, or its `QH` → `SER` link is open. The terminator holds a clean zero, so this is stable rather than noisy. |
+| `DATA` garbage on a specific module boundary | that module fitted backwards — two `QH` outputs shorted (HW-13) |
+| Far modules intermittently wrong, worse at higher clock | multi-drop `CLK` integrity — the rev D binding constraint. Fit/raise the series resistor at the master, or drop `PINLED_SPI_HZ`. |
+
+> **The off-by-one signature changed meaning between revisions.** On rev C
+> hardware, a clean whole-frame one-channel shift meant the *clock* was above the
+> ceiling. On rev D it means the *SPI mode*. Exceeding the clock ceiling on a
+> '165 chain should be noisy and intermittent, because what fails first is
+> multi-drop signal integrity rather than a deterministic sampling window
+> (`TIMING.md` §4.3).
 
 ## 4b. `PINLED_SPI_SWEEP` — how fast can it go?
 
@@ -141,29 +159,98 @@ are actually holding. Both conditions matter: above the ceiling the reads stay
 fully stable and simply shift by one, so stability alone will happily certify a
 broken rate.
 
-## 5. Bench substitutions
+## 5. Building the rev D bench rig
 
-Until the '251s arrive, a **74x151** works for a single module, with caveats:
+Two '165s prove one module; **four prove the design**, because the open question
+is the chain handoff and the terminator, not the register. Build two modules.
 
-- **Omit the 1 kΩ bias resistor.** The '151 is push-pull and always drives; the
-  bias only loads it. At 3.3 V into 1 kΩ an HC part's high can sag toward the
-  S3's `V_IH` (~2.48 V). Fit the bias when the tri-state parts go in.
-- **It cannot chain.** Push-pull outputs can't share a bus — that is the entire
-  reason for the '251 (see the comparison table in `HARDWARE.md`). Module
-  chaining is untestable until the swap, and the rig also lacks the DONE and
-  STARTED latches and the clock gating a real module carries (`CHAINING.md`).
-- **Set `PINLED_CHANNELS_PER_MODULE=8`** for a single 8-input mux, otherwise
-  channels 8–15 mirror 0–7 and light a second LED per input.
-- **Check the supply rail.** GPIO 9 is **not 5 V tolerant**. A '151 on 5 V
-  drives 5 V into the S3. A 74LS part needs 5 V and therefore needs level
-  shifting; use LVC (HW-3).
-- **Add an inverter in the `CLK` path.** Without one the rig clocks its '161
-  directly, so the counter advances on the same rising edges SPI samples: every
-  sample reads `line[k+1]` and line 0 is unreachable *by any SPI mode*. One
-  spare Schmitt section between the MCU `SCLK` pin and the '161 `CLK` makes the
-  counter advance on the falling edge, which is what a real module does — and
-  then mode 0 aligns exactly. Worth doing: it turns the rig from "validates
-  plumbing" into "validates the production sampling phase".
+### Shopping list
+
+| Qty | Part | Notes |
+|---:|---|---|
+| 6 | **74HC165N**, DIP-16 | 4 needed, 2 spare. HC not LVC: LVC is not made in through-hole. Run at **3.3 V** and hold the clock to ≤ 2 MHz (HW-3). |
+| 4 | 10 kΩ resistor | chain terminators — one per `SER` input that faces a connector, plus one at the MCU |
+| 4 | 33 Ω resistor | series with each `QH` |
+| 1 | 100 Ω resistor | series with `CLK` at the MCU |
+| 6 | 100 nF ceramic | one per IC, close to pin 16 |
+| 2 | 8-way DIP switch | test inputs, 8 per module |
+| 2 | 10 kΩ ×8 resistor network (SIP-9 bussed) | pull-downs for the DIP switches — 16 discrete resistors also works, just tedious |
+| — | breadboard + jumpers | you have these |
+
+Everything else is on hand: the ESP32-S3-DevKitC-1 and the LED strip.
+
+> **3.3 V, not 5 V.** GPIO 9 is not 5 V tolerant. A '165 on a 5 V rail drives
+> 5 V into the S3.
+
+### Wiring, one module
+
+```
+  DevKitC-1                    U1 (ch 0–7)              U2 (ch 8–15)
+  IO18 SCLK ──100R──┬─────────▶ pin 2  CLK    ┬────────▶ pin 2  CLK
+  IO17 CS//PL ──────┼─────────▶ pin 1  /PL    ┼────────▶ pin 1  /PL
+  IO9  MISO ◀──33R──┴ pin 9 QH                │
+                    │                          │
+                   10k                         │
+                    ▼                     pin 9 QH ─────▶ pin 10 SER  (of U1)
+                   GND
+                                          pin 10 SER ◀── next module's QH,
+                                                         or 10k to GND if last
+  3V3  ──▶ pin 16 on both        GND ──▶ pin 8 AND pin 15 on both
+```
+
+`pin 15` is `CLK INH` and must be **grounded**, not left floating — it sits next
+to `VCC` and is the easiest pin on the part to get wrong.
+
+Test inputs, module-local channel order:
+
+| Channel | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| '165 input | `H` | `G` | `F` | `E` | `D` | `C` | `B` | `A` |
+| Pin | 6 | 5 | 4 | 3 | 14 | 13 | 12 | 11 |
+
+Each input gets a switch to 3V3 and a 10 kΩ pull-down. Nothing floats.
+
+> Confirm these pin numbers against the datasheet of the part you actually
+> receive. They are written from memory and have not been checked against
+> silicon.
+
+### Firmware settings
+
+```
+PINLED_SPI_MODE=2          # the thing being tested
+PINLED_SPI_HZ=2000000      # HC parts on a breadboard
+PINLED_MR_FROM_CS=y        # CS drives /PL, positive polarity
+PINLED_NUM_MODULES=1       # then 2
+PINLED_CHANNELS_PER_MODULE=16
+PINLED_ACTIVE_LOW=n
+PINLED_SCAN_DEBUG=y
+```
+
+`PINLED_ARM_CLOCK` no longer applies and should be removed — rev D has no arm
+clocks. **The firmware has not yet been updated for rev D**; as of this writing
+`lamp_scan` still implements the rev C 17·N framing and defaults to mode 0.
+
+### What to check, in order
+
+1. **Mode 2.** Hold one switch. Mode 2 should report that channel; mode 3 its
+   neighbour. This is the only rev D claim that is reasoned rather than
+   measured — settle it first.
+2. **Bit order.** Channels should ascend with no byte reversal, given channel 0
+   on pin `H`.
+3. **`/PL` held low.** `DATA` should track channel 0 live on a meter.
+4. **Second module.** Channels 16–31 appear, in order, with no gap.
+5. **Unplug the second module** while running. Channels 16–31 must go to a
+   stable, hard zero — not noise. That is HW-11 in one test, and it is the claim
+   that makes `num_modules` a performance setting rather than a correctness one.
+
+### What does *not* transfer from the rev C rig
+
+The '161 + '151 breadboard validated the SPI plumbing — peripheral setup,
+GPIO-matrix routing, receive-only transactions, MSB-first unpack, `CS` as a
+control line. All of that carries over. **Nothing about the sampling phase
+does**: that rig needed a 74HC14 in the `CLK` path to make its counter advance
+on the falling edge, and rev D needs no inverter anywhere because the phase is
+handled by the SPI mode instead.
 
 ## 6. Tooling traps
 
@@ -208,30 +295,43 @@ monitor` additionally requires stdin to be a TTY.
 
 ## 7. Status
 
+### Carried over from the rev C bench rig
+
 Verified on an ESP32-S3-DevKitC-1 (`N8R8`) against a breadboard module built
-around a 74x151:
+around a 74x161 + 74x151. **Only the first group still applies to rev D.**
 
-- Counter counts, `/MR` clears, address decode correct at all 16 counts.
-- Mux drives `DATA`; test inputs read at the right channel indices.
-- Polarity confirmed non-inverting: input high → logic 1, `active_low = n`
-  (HW-1).
-- No crosstalk onto unconnected channels; stable across 40+ minutes.
-- **SPI + DMA scan path** at 1 MHz: peripheral config, GPIO-matrix routing of
+Still valid — SPI plumbing, hardware-independent:
+
+- **SPI + DMA scan path**: peripheral config, GPIO-matrix routing of
   `SCLK`/`MISO`, receive-only transaction, MSB-first unpack, and actual-vs-
-  requested clock rate.
-- **Mode 0 sampling phase**, with a 74HC14 added in the `CLK` path so the '161
-  advances on the falling edge as a real module does. Inputs on D4–D7 read at
-  channels 4–7 with no shift, confirming the sample lands mid-window and line 0
-  is captured. Before the inverter, modes 0 and 1 both shifted by one — see §5.
-- **`/MR` driven from SPI `CS`** with `SPI_DEVICE_POSITIVE_CS` (rev C): `CS` is
-  low between transactions (clearing the chain) and high during (counting), so
-  the frame reset is hardware-timed and needs no software. Verified by reading
-  channels 4–7 correctly, including simultaneous presses.
+  requested clock rate (note `spi_device_get_actual_freq()` reports **kHz**).
+- **`CS` as a control line** with `SPI_DEVICE_POSITIVE_CS`: low between
+  transactions, high during. Rev C used it for `/MR`; rev D uses the identical
+  mechanism for `/PL`.
+- **10 kHz pacing** via `gptimer` + task notification, zero overruns across
+  ~6.1 M frames.
+- **Polarity** non-inverting: input high → logic 1, `active_low = n` (HW-1).
+- **One strip transmit per LED frame** (FR-LED-6) and the boot refresh clamp
+  (FR-LED-8).
 
-Outstanding, all dependent on rev C modules: `QD` bank select, the 1 kΩ bias at
-the master, module chaining, real lamp taps, and the chain-specific measurements
-in `TIMING.md` §7 — the arm clock, `/MR` reach, and accumulated clock skew.
+Superseded by rev D — do not carry these forward:
 
-Note the bench rig predates the chaining design: it has no DONE or STARTED
-latch and no clock gating, so it exercises the counter, mux, polarity and the
-SPI path but nothing of the chaining protocol itself.
+- Counter/address-decode results, `/MR` clearing, mux drive. No such parts.
+- **Mode 0 and the 74HC14 in the `CLK` path.** That inverter existed to make the
+  rig's '161 advance on the falling edge. Rev D handles phase with the SPI mode
+  and needs no inverter — the expected mode is **2**, and it is unverified.
+- **The 1–16 MHz clock ceiling and the ~55–60 ns endpoint delay.** Measured on
+  HC parts in a counter+mux topology; says nothing about a '165 chain. Re-run
+  `PINLED_SPI_SWEEP` on the new rig.
+
+### Outstanding for rev D
+
+Everything. No rev D hardware exists yet.
+
+1. `lamp_scan` still implements rev C framing (17·N, arm-clock discard, mode 0).
+   The change is small — drop the stride arithmetic, default the mode to 2 —
+   but it has not been made.
+2. SPI mode 2, bit order, and `/PL`-from-`CS` on two '165s (§5).
+3. Chain handoff and terminator behaviour on four '165s (§5).
+4. Everything in `TIMING.md` §7: `/PL` edge quality at 800 mm, clock-skew
+   direction, multi-drop `CLK` integrity, and the terminator under live unplug.

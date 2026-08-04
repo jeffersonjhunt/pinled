@@ -1,114 +1,140 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1180" height="880" viewBox="0 0 1180 880">
 <rect width="1180" height="880" fill="#fff"/>
 <g font-family="DejaVu Sans, Helvetica, Arial, sans-serif">
-<text x="24" y="34" font-size="20" font-weight="bold" fill="#111">PINLED rev C — 5-wire chain: arm clock, handoff, frame reset</text>
-<text x="24" y="55" font-size="12" fill="#666">Counter and both '109 latches clock on FALLING edges of CLK (Schmitt-inverted) · master samples on RISING edges (SPI mode 0) · one column = half a CLK period</text>
+
+<text x="24" y="34" font-size="20" font-weight="bold" fill="#111">PINLED rev D — 74x165 chain: load, snapshot, shift</text>
+<text x="24" y="55" font-size="12" fill="#666">'165 shifts QH on RISING edges of CLK · master samples on FALLING edges (SPI mode 2, CPOL=1 CPHA=0) · one column = half a CLK period</text>
 
 <!-- gridlines -->
-<line x1="240" y1="84" x2="240" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="296" y1="84" x2="296" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="352" y1="84" x2="352" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="408" y1="84" x2="408" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="464" y1="84" x2="464" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="520" y1="84" x2="520" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="576" y1="84" x2="576" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="632" y1="84" x2="632" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="688" y1="84" x2="688" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="744" y1="84" x2="744" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="800" y1="84" x2="800" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="856" y1="84" x2="856" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="912" y1="84" x2="912" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="968" y1="84" x2="968" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="1024" y1="84" x2="1024" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="1080" y1="84" x2="1080" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
-<line x1="1136" y1="84" x2="1136" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<g stroke="#000" stroke-opacity="0.06" stroke-width="1">
+<line x1="144" y1="100" x2="144" y2="790"/><line x1="200" y1="100" x2="200" y2="790"/>
+<line x1="228" y1="100" x2="228" y2="790"/><line x1="284" y1="100" x2="284" y2="790"/>
+<line x1="340" y1="100" x2="340" y2="790"/><line x1="396" y1="100" x2="396" y2="790"/>
+<line x1="452" y1="100" x2="452" y2="790"/><line x1="508" y1="100" x2="508" y2="790"/>
+<line x1="564" y1="100" x2="564" y2="790"/><line x1="620" y1="100" x2="620" y2="790"/>
+<line x1="676" y1="100" x2="676" y2="790"/><line x1="732" y1="100" x2="732" y2="790"/>
+<line x1="788" y1="100" x2="788" y2="790"/><line x1="844" y1="100" x2="844" y2="790"/>
+<line x1="900" y1="100" x2="900" y2="790"/><line x1="956" y1="100" x2="956" y2="790"/>
+<line x1="1012" y1="100" x2="1012" y2="790"/><line x1="1068" y1="100" x2="1068" y2="790"/>
+</g>
 
-<!-- /MR -->
-<text x="226" y="105" font-size="11.5" fill="#222" text-anchor="end">/MR  (= SPI CS, positive)</text>
-<path d="M240,112 L268,112 L268,90 L1136,90" fill="none" stroke="#7b1fa2" stroke-width="2"/>
-<text x="252" y="128" font-size="10" fill="#7b1fa2" text-anchor="middle">clear</text>
+<!-- ============ PANEL 1: start of frame ============ -->
+<text x="24" y="90" font-size="13" font-weight="bold" fill="#111">1 — Start of frame</text>
 
-<!-- CLK -->
-<text x="226" y="153" font-size="11.5" fill="#222" text-anchor="end">CLK (master SCLK)</text>
-<path d="M240,160 L296,160 L296,138 L352,138 L352,160 L408,160 L408,138 L464,138 L464,160 L520,160 L520,138 L576,138 L576,160 L632,160 L632,138 L688,138 L688,160 L744,160 L744,138 L800,138 L800,160 L856,160 L856,138 L912,138 L912,160 L968,160 L968,138 L1024,138 L1024,160 L1136,160" fill="none" stroke="#c0392b" stroke-width="2"/>
+<text x="24" y="146" font-size="12" fill="#0a6b70">/PL</text>
+<text x="24" y="162" font-size="10" fill="#888">= SPI CS</text>
+<path d="M144 160 H200 V120 H1120" fill="none" stroke="#0a6b70" stroke-width="2.5"/>
+<text x="168" y="182" font-size="10.5" fill="#888" text-anchor="middle">load</text>
+<text x="660" y="112" font-size="10.5" fill="#888" text-anchor="middle">shifting — one SPI transaction, 16·N clocks</text>
 
-<!-- sample arrows on rising edges -->
-<path d="M296,168 L296,182" stroke="#c0392b" stroke-width="1.6"/><path d="M292,176 L296,182 L300,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
-<path d="M408,168 L408,182" stroke="#c0392b" stroke-width="1.6"/><path d="M404,176 L408,182 L412,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
-<path d="M520,168 L520,182" stroke="#c0392b" stroke-width="1.6"/><path d="M516,176 L520,182 L524,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
-<path d="M632,168 L632,182" stroke="#c0392b" stroke-width="1.6"/><path d="M628,176 L632,182 L636,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
-<path d="M744,168 L744,182" stroke="#c0392b" stroke-width="1.6"/><path d="M740,176 L744,182 L748,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
-<path d="M856,168 L856,182" stroke="#c0392b" stroke-width="1.6"/><path d="M852,176 L856,182 L860,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
-<path d="M968,168 L968,182" stroke="#c0392b" stroke-width="1.6"/><path d="M964,176 L968,182 L972,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
-<text x="1150" y="180" font-size="10" fill="#c0392b" text-anchor="end">samples</text>
+<!-- snapshot marker -->
+<line x1="200" y1="112" x2="200" y2="360" stroke="#a8560a" stroke-width="1.2" stroke-dasharray="4 3"/>
+<circle cx="200" cy="120" r="4" fill="#a8560a"/>
+<text x="210" y="205" font-size="12" font-weight="bold" fill="#a8560a">SNAPSHOT</text>
+<text x="210" y="221" font-size="10.5" fill="#a8560a">every channel in the chain freezes on this edge</text>
 
-<!-- MODULE k -->
-<text x="24" y="216" font-size="12.5" font-weight="bold" fill="#345">MODULE k  (finishing)</text>
-<line x1="24" y1="222" x2="224" y2="222" stroke="#345" stroke-width="1"/>
+<text x="24" y="246" font-size="12" fill="#0a6b70">CLK</text>
+<text x="24" y="262" font-size="10" fill="#888">= SCLK</text>
+<path d="M144 220 H228 V260 H284 V220 H340 V260 H396 V220 H452 V260 H508 V220 H564 V260 H620 V220 H676 V260 H732 V220 H788 V260 H844 V220 H900 V260 H956 V220 H1012 V260 H1068 V220 H1120" fill="none" stroke="#0a6b70" stroke-width="2.5"/>
+<text x="180" y="212" font-size="10" fill="#888" text-anchor="middle">idles high</text>
 
-<text x="226" y="247" font-size="11.5" fill="#222" text-anchor="end">count</text>
-<polygon points="240,243 245,232 291,232 296,243 291,254 245,254" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="268" y="247" font-size="11.5" fill="#222" text-anchor="middle">14</text>
-<polygon points="296,243 301,232 515,232 520,243 515,254 301,254" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="408" y="247" font-size="11.5" fill="#222" text-anchor="middle">15</text>
-<polygon points="520,243 525,232 1131,232 1136,243 1131,254 525,254" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="828" y="247" font-size="11.5" fill="#222" text-anchor="middle">0 (parked, ENT low)</text>
+<!-- shift-edge marks -->
+<g fill="#0a6b70" font-size="9.5" text-anchor="middle">
+<text x="284" y="288">shift</text><text x="396" y="288">shift</text><text x="508" y="288">shift</text>
+<text x="620" y="288">shift</text><text x="732" y="288">shift</text><text x="844" y="288">shift</text>
+<text x="956" y="288">shift</text><text x="1068" y="288">shift</text>
+</g>
 
-<text x="226" y="287" font-size="11.5" fill="#222" text-anchor="end">RCO</text>
-<path d="M240,294 L296,294 L296,272 L520,272 L520,294 L1136,294" fill="none" stroke="#222" stroke-width="2"/>
+<!-- sample arrows -->
+<g stroke="#a8560a" stroke-width="1.6" fill="none">
+<path d="M228 264 V302"/><path d="M340 264 V302"/><path d="M452 264 V302"/><path d="M564 264 V302"/>
+<path d="M676 264 V302"/><path d="M788 264 V302"/><path d="M900 264 V302"/><path d="M1012 264 V302"/>
+</g>
+<g fill="#a8560a">
+<path d="M224 296 L232 296 L228 306 z"/><path d="M336 296 L344 296 L340 306 z"/>
+<path d="M448 296 L456 296 L452 306 z"/><path d="M560 296 L568 296 L564 306 z"/>
+<path d="M672 296 L680 296 L676 306 z"/><path d="M784 296 L792 296 L788 306 z"/>
+<path d="M896 296 L904 296 L900 306 z"/><path d="M1008 296 L1016 296 L1012 306 z"/>
+</g>
+<text x="222" y="282" font-size="9.5" fill="#a8560a" text-anchor="end">sample</text>
 
-<text x="226" y="327" font-size="11.5" fill="#222" text-anchor="end">DONE (k)</text>
-<path d="M240,334 L520,334 L520,312 L1136,312" fill="none" stroke="#7b1fa2" stroke-width="2"/>
+<text x="24" y="336" font-size="12" fill="#a8560a">DATA</text>
+<text x="24" y="352" font-size="10" fill="#888">= MISO</text>
+<g stroke="#a8560a" stroke-width="2" fill="none">
+<path d="M144 310 H279 M144 350 H279 M279 310 L289 350 M279 350 L289 310"/>
+<path d="M289 310 H391 M289 350 H391 M391 310 L401 350 M391 350 L401 310"/>
+<path d="M401 310 H503 M401 350 H503 M503 310 L513 350 M503 350 L513 310"/>
+<path d="M513 310 H615 M513 350 H615 M615 310 L625 350 M615 350 L625 310"/>
+<path d="M625 310 H727 M625 350 H727 M727 310 L737 350 M727 350 L737 310"/>
+<path d="M737 310 H839 M737 350 H839 M839 310 L849 350 M839 350 L849 310"/>
+<path d="M849 310 H951 M849 350 H951 M951 310 L961 350 M951 350 L961 310"/>
+<path d="M961 310 H1063 M961 350 H1063 M1063 310 L1073 350 M1063 350 L1073 310"/>
+<path d="M1073 310 H1120 M1073 350 H1120"/>
+</g>
+<g font-size="12" fill="#a8560a" text-anchor="middle" font-weight="bold">
+<text x="212" y="336">ch 0</text><text x="340" y="336">ch 1</text><text x="452" y="336">ch 2</text><text x="564" y="336">ch 3</text>
+<text x="676" y="336">ch 4</text><text x="788" y="336">ch 5</text><text x="900" y="336">ch 6</text><text x="1012" y="336">ch 7</text>
+</g>
 
-<text x="226" y="367" font-size="11.5" fill="#222" text-anchor="end">muxes enabled</text>
-<path d="M240,352 L520,352 L520,374 L1136,374" fill="none" stroke="#1e8e3e" stroke-width="2"/>
+<text x="144" y="382" font-size="11" fill="#666">ch 0 is already at QH before the first clock — the register was tracking it while /PL was low. No arm clock, nothing discarded.</text>
+<text x="144" y="400" font-size="11" fill="#666">Each bit is valid from one rising edge to the next; the falling edge sits in the middle of that window with ~½ clock of margin either side.</text>
+<text x="144" y="418" font-size="11" fill="#666">Contrast rev C: there the counter advanced on falling edges and the master sampled on rising (mode 0). The '165 shifts on rising, so the phase inverts.</text>
 
-<text x="226" y="421" font-size="11.5" fill="#222" text-anchor="end">CLK_OUT = CLK_IN · DONE</text>
-<path d="M240,428 L520,428 L520,428 L576,428 L576,406 L632,406 L632,428 L688,428 L688,406 L744,406 L744,428 L800,428 L800,406 L856,406 L856,428 L912,428 L912,406 L968,406 L968,428 L1024,428 L1024,406 L1080,406 L1080,428 L1136,428" fill="none" stroke="#c0392b" stroke-width="2"/>
+<line x1="24" y1="444" x2="1156" y2="444" stroke="#ddd" stroke-width="1"/>
 
-<!-- MODULE k+1 -->
-<text x="24" y="464" font-size="12.5" font-weight="bold" fill="#345">MODULE k+1  (starting)</text>
-<line x1="24" y1="470" x2="224" y2="470" stroke="#345" stroke-width="1"/>
+<!-- ============ PANEL 2: module boundary ============ -->
+<text x="24" y="478" font-size="13" font-weight="bold" fill="#111">2 — The module boundary is not an event</text>
 
-<text x="226" y="495" font-size="11.5" fill="#222" text-anchor="end">STARTED (k+1)</text>
-<path d="M240,502 L632,502 L632,480 L1136,480" fill="none" stroke="#e67e22" stroke-width="2"/>
+<text x="24" y="536" font-size="12" fill="#0a6b70">/PL</text>
+<path d="M144 510 H1120" fill="none" stroke="#0a6b70" stroke-width="2.5"/>
+<text x="660" y="502" font-size="10.5" fill="#888" text-anchor="middle">still high — the frame runs to completion in one transaction</text>
 
-<text x="226" y="535" font-size="11.5" fill="#222" text-anchor="end">count</text>
-<polygon points="240,531 245,520 739,520 744,531 739,542 245,542" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="492" y="535" font-size="11.5" fill="#222" text-anchor="middle">0  (held — ENP was low at the arm edge)</text>
-<polygon points="744,531 749,520 851,520 856,531 851,542 749,542" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="800" y="535" font-size="11.5" fill="#222" text-anchor="middle">1</text>
-<polygon points="856,531 861,520 963,520 968,531 963,542 861,542" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="912" y="535" font-size="11.5" fill="#222" text-anchor="middle">2</text>
-<polygon points="968,531 973,520 1131,520 1136,531 1131,542 973,542" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="1052" y="535" font-size="11.5" fill="#222" text-anchor="middle">3</text>
+<text x="24" y="636" font-size="12" fill="#0a6b70">CLK</text>
+<path d="M144 610 H228 V650 H284 V610 H340 V650 H396 V610 H452 V650 H508 V610 H564 V650 H620 V610 H676 V650 H732 V610 H788 V650 H844 V610 H900 V650 H956 V610 H1012 V650 H1068 V610 H1120" fill="none" stroke="#0a6b70" stroke-width="2.5"/>
 
-<text x="226" y="575" font-size="11.5" fill="#222" text-anchor="end">muxes enabled</text>
-<path d="M240,582 L632,582 L632,560 L1136,560" fill="none" stroke="#1e8e3e" stroke-width="2"/>
+<g stroke="#a8560a" stroke-width="1.6" fill="none">
+<path d="M228 654 V692"/><path d="M340 654 V692"/><path d="M452 654 V692"/><path d="M564 654 V692"/>
+<path d="M676 654 V692"/><path d="M788 654 V692"/><path d="M900 654 V692"/><path d="M1012 654 V692"/>
+</g>
+<g fill="#a8560a">
+<path d="M224 686 L232 686 L228 696 z"/><path d="M336 686 L344 686 L340 696 z"/>
+<path d="M448 686 L456 686 L452 696 z"/><path d="M560 686 L568 686 L564 696 z"/>
+<path d="M672 686 L680 686 L676 696 z"/><path d="M784 686 L792 686 L788 696 z"/>
+<path d="M896 686 L904 686 L900 696 z"/><path d="M1008 686 L1016 686 L1012 696 z"/>
+</g>
 
-<!-- DATA -->
-<text x="226" y="629" font-size="11.5" fill="#222" text-anchor="end">DATA (shared bus)</text>
-<polygon points="240,625 245,614 291,614 296,625 291,636 245,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="268" y="629" font-size="11.5" fill="#222" text-anchor="middle">L14</text>
-<polygon points="296,625 301,614 515,614 520,625 515,636 301,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="408" y="629" font-size="11.5" fill="#222" text-anchor="middle">L15</text>
-<line x1="520" y1="625" x2="632" y2="625" stroke="#1565c0" stroke-width="1.4" stroke-dasharray="4 3"/><text x="576" y="620" font-size="10" fill="#666" text-anchor="middle">Z (arm clock — sample discarded)</text>
-<polygon points="632,625 637,614 739,614 744,625 739,636 637,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="688" y="629" font-size="11.5" fill="#222" text-anchor="middle">L0′</text>
-<polygon points="744,625 749,614 851,614 856,625 851,636 749,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="800" y="629" font-size="11.5" fill="#222" text-anchor="middle">L1′</text>
-<polygon points="856,625 861,614 963,614 968,625 963,636 861,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="912" y="629" font-size="11.5" fill="#222" text-anchor="middle">L2′</text>
-<polygon points="968,625 973,614 1131,614 1136,625 1131,636 973,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="1052" y="629" font-size="11.5" fill="#222" text-anchor="middle">L3′</text>
+<text x="24" y="726" font-size="12" fill="#a8560a">DATA</text>
+<g stroke="#a8560a" stroke-width="2" fill="none">
+<path d="M144 700 H279 M144 740 H279 M279 700 L289 740 M279 740 L289 700"/>
+<path d="M289 700 H391 M289 740 H391 M391 700 L401 740 M391 740 L401 700"/>
+<path d="M401 700 H503 M401 740 H503 M503 700 L513 740 M503 740 L513 700"/>
+<path d="M513 700 H615 M513 740 H615 M615 700 L625 740 M615 740 L625 700"/>
+<path d="M625 700 H727 M625 740 H727 M727 700 L737 740 M727 740 L737 700"/>
+<path d="M737 700 H839 M737 740 H839 M839 700 L849 740 M839 740 L849 700"/>
+<path d="M849 700 H951 M849 740 H951 M951 700 L961 740 M951 740 L961 700"/>
+<path d="M961 700 H1063 M961 740 H1063 M1063 700 L1073 740 M1063 740 L1073 700"/>
+<path d="M1073 700 H1120 M1073 740 H1120"/>
+</g>
+<g font-size="12" fill="#a8560a" text-anchor="middle" font-weight="bold">
+<text x="212" y="726">ch 12</text><text x="340" y="726">ch 13</text><text x="452" y="726">ch 14</text><text x="564" y="726">ch 15</text>
+<text x="676" y="726">ch 16</text><text x="788" y="726">ch 17</text><text x="900" y="726">ch 18</text><text x="1012" y="726">ch 19</text>
+</g>
 
-<!-- markers -->
-<line x1="520" y1="84" x2="520" y2="660" stroke="#7b1fa2" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.55"/>
-<circle cx="520" cy="74" r="9" fill="#7b1fa2"/><text x="520" y="78" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">1</text>
-<line x1="632" y1="84" x2="632" y2="660" stroke="#7b1fa2" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.55"/>
-<circle cx="632" cy="74" r="9" fill="#7b1fa2"/><text x="632" y="78" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">2</text>
-<line x1="744" y1="84" x2="744" y2="660" stroke="#7b1fa2" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.55"/>
-<circle cx="744" cy="74" r="9" fill="#7b1fa2"/><text x="744" y="78" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">3</text>
+<!-- module boundary -->
+<line x1="620" y1="492" x2="620" y2="762" stroke="#111" stroke-width="1.4" stroke-dasharray="6 4"/>
+<path d="M144 768 H614 M144 764 V772 M614 764 V772" stroke="#111" stroke-width="1.2" fill="none"/>
+<path d="M626 768 H1120 M626 764 V772 M1120 764 V772" stroke="#111" stroke-width="1.2" fill="none"/>
+<text x="379" y="784" font-size="11" fill="#111" text-anchor="middle">module 1 (U2 half — ch 8–15)</text>
+<text x="873" y="784" font-size="11" fill="#111" text-anchor="middle">module 2 (U1 half — ch 16–23)</text>
 
-<circle cx="34" cy="700" r="9" fill="#7b1fa2"/><text x="34" y="704" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">1</text>
-<text x="52" y="704" font-size="11.5" fill="#222">Falling edge: module k wraps 15→0 and DONE sets on the same edge. k releases DATA, ENT goes low so it parks, and it begins forwarding CLK.</text>
-<circle cx="34" cy="724" r="9" fill="#7b1fa2"/><text x="34" y="728" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">2</text>
-<text x="52" y="728" font-size="11.5" fill="#222">ARM CLOCK. k+1's first falling edge sets STARTED. Its counter samples the OLD ENP=0 and does NOT advance, so it stays on line 0.</text>
-<circle cx="34" cy="748" r="9" fill="#7b1fa2"/><text x="34" y="752" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">3</text>
-<text x="52" y="752" font-size="11.5" fill="#222">Line 0′ has now been driven for a FULL bit period and is sampled mid-window — the arm clock is what buys that margin.</text>
-<text x="52" y="776" font-size="11.5" fill="#c0392b">Red arrows: master samples on rising edges (SPI mode 0), i.e. the midpoint of each line's window. Every 17th sample is an arm clock and is discarded.</text>
+<text x="632" y="536" font-size="11" fill="#111">No handoff. No arm clock. No gap.</text>
+<text x="632" y="552" font-size="11" fill="#666">Module 2's bits were already queued behind module 1's when /PL rose;</text>
+<text x="632" y="568" font-size="11" fill="#666">the boundary is bookkeeping in the unpack loop, not a hardware event.</text>
 
-<text x="24" y="820" font-size="13" font-weight="bold" fill="#123">Frame structure (master view)</text>
-<rect x="24" y="832" width="120" height="28" fill="#f3e5f5" stroke="#7b1fa2"/><text x="84" y="850" font-size="11" fill="#7b1fa2" text-anchor="middle">/MR low</text>
-<rect x="144" y="832" width="300" height="28" fill="#fde8e6" stroke="#c0392b"/><text x="294" y="850" font-size="11" fill="#c0392b" text-anchor="middle">17 × N clocks — full scan</text>
-<rect x="444" y="832" width="120" height="28" fill="#f3e5f5" stroke="#7b1fa2"/><text x="504" y="850" font-size="11" fill="#7b1fa2" text-anchor="middle">/MR low</text>
-<rect x="564" y="832" width="300" height="28" fill="#fde8e6" stroke="#c0392b"/><text x="714" y="850" font-size="11" fill="#c0392b" text-anchor="middle">next frame — identical</text>
-<text x="880" y="850" font-size="11" fill="#555">No minimum gap: the chain holds no analog state.</text>
-</g></svg>
+<line x1="24" y1="812" x2="1156" y2="812" stroke="#ddd" stroke-width="1"/>
+<text x="24" y="836" font-size="11" fill="#666">CS drives /PL with SPI_DEVICE_POSITIVE_CS: low between transactions (loading), high during one (shifting). The frame reset is hardware-timed.</text>
+<text x="24" y="854" font-size="11" fill="#666">Frame = 16·N clocks = 2N bytes exactly. Stream bit i (MSB-first) is channel i. See CHAINING.md.</text>
+<text x="24" y="872" font-size="10.5" fill="#a8560a">Mode 2 is reasoned from the '165's rising-edge shift, not yet confirmed on a scope — verify first on the bench.</text>
+
+</g>
+</svg>

@@ -72,79 +72,97 @@ The time constant lives in firmware, where it is reprogrammable per machine.
 ```
                  ┌─────────────────────────── one 16-channel module ───────────────────────────┐
 per-socket taps  │                                                                              │
- (5–20 V, AC/DC) │   FET level-shift + protection      74LVC251 #A (ch 0–7, tri-state Y)        │
-   L0 ───────────┼──▶ [divider · diode · clamp] ──────▶ D0..D7 ─┐                               │
-   ...           │      + inverting Schmitt                     ├─▶ Y (bussed) ──▶ DATA (shared)│
-   L15 ──────────┼──▶ [divider · diode · clamp] ──────▶ D0..D7 ─┘                               │
-                 │   74LVC251 #B (ch 8–15, tri-state Y)                                         │
+ (5–20 V, AC/DC) │   FET level-shift + protection      74LVC165 U1  (ch 0–7)                    │
+   L0 ───────────┼──▶ [divider · diode · clamp] ──────▶ H,G,F,E,D,C,B,A                         │
+   ...           │      + inverting Schmitt                    │  QH ─33R─▶ J1.DATA ──▶ master  │
+   L15 ──────────┼──▶ [divider · diode · clamp] ──────▶ H..A    │                               │
+                 │   74LVC165 U2  (ch 8–15)  QH ──▶ U1.SER ────┘                                │
+                 │                           SER ◀── J2.DATA ◀── downstream module's QH         │
+                 │                                   └─ 10k pull-down (self-terminates)         │
                  │                                                                              │
-                 │   74LVC161:  QA..QC ─▶ select on BOTH '251s;  QD ─▶ bank select              │
-                 │              clocked on the FALLING edge                                     │
-                 │              ENP = STARTED (arm clock);  ENT = /DONE (stop after wrap)        │
-                 │   74LVC109:  A = DONE latch (J = RCO);  B = STARTED latch (J = 1)            │
-                 │              both cleared by /MR                                             │
-                 │   74LVC10:   /E_A, /E_B, and  CLK_OUT = CLK_IN AND DONE                      │
-                 │   3V3 LDO:   local regulation from the 5 V harness rail                      │
-                 │                                                                              │
-                 │   CLK_IN ◀── upstream          CLK_OUT ──▶ downstream module                 │
-                 │   /MR    ◀── bussed to every module (async clear)                            │
+                 │   /PL  ─── bussed ──▶ pin 1 of BOTH registers  (low = load, high = shift)    │
+                 │   CLK  ─── bussed ──▶ pin 2 of BOTH registers  (shifts on RISING edge)       │
+                 │   CLK INH (pin 15) tied LOW      /QH (pin 7) left unconnected                │
+                 │   3V3 LDO: local regulation from the 5 V harness rail                        │
                  └──────────────────────────────────────────────────────────────────────────────┘
 
-ESP32-S3 ── SPI + DMA ──▶ SCLK = CLK,  MISO = DATA,  CS = /MR   (one transaction = one frame)
+ESP32-S3 ── SPI + DMA ──▶ SCLK = CLK,  MISO = DATA,  CS = /PL   (one transaction = one frame)
+                          mode 2 (CPOL=1 CPHA=0) · 16·N bits · nothing discarded
 ESP32-S3 ── 1 GPIO ─────▶ WS2812B / SK6812 string (RMT)   ← firmware maps sensed channel → LED
 ```
 
+**Two logic ICs per module.** Rev C needed six ('161 counter, two '251 muxes,
+'109 dual flip-flop, '10 NAND, '14 Schmitt) to build a distributed state machine
+whose only job was taking turns on a shared bus. A shift register chain *is*
+taking turns, so the state machine disappears.
+
 **The ESP32 spends 3 GPIO on sensing, total, regardless of module count:** `CLK`,
-`DATA` and `/MR` — all three from a single SPI peripheral — plus **one** GPIO
+`DATA` and `/PL` — all three from a single SPI peripheral — plus **one** GPIO
 for the entire LED string. There is no per-module data line.
 
-### Why the '251 and not the '151
+### Why a shift register and not a counter + mux
 
-This is the crux of the earlier open-drain/open-collector discussion. The
-`74x151` has **push-pull** outputs: when you disable it (strobe high) it does
-**not** go high-impedance — it actively drives `Y` **low**. Two '151s cannot
-share a data line; the disabled one fights the active one → bus contention.
+Rev B and rev C both scanned by *addressing*: a '161 counter walked an address
+onto tri-state '251 muxes, and extra logic decided which module was allowed to
+drive the shared `DATA` line. That is where the '151-vs-'251 argument came from —
+a '151's outputs are push-pull and cannot share a line, so the tri-state '251 was
+mandatory.
 
-The **`74x251` is the tri-state-output version** of the '151. Disabled, its `Y`
-goes to true high-Z, so two '251s can be wired onto one `DATA` line and
-bank-selected by the counter's `QD`. The same property is what lets all 8
-modules share that line — the argument scales from 2 drivers to 16. (The POC
-used a single '151 for 8 channels on one pin, which is fine; contention only
-appears when you bus two.)
+Rev D scans by *shifting*, and nothing shares a line, so that whole argument
+retires. A '165's `QH` is an ordinary push-pull output driving exactly one
+receiver, one hop away. There is no tri-state variant of the '165 and none is
+wanted.
 
-**Counter note:** the `74x161` is a synchronous 4-bit binary counter with an
-**asynchronous** active-low clear, driven here by the bussed `/MR`. (Its cousin
-the `74x163` has
-a *synchronous* clear; don't substitute.)
+What the change bought:
+
+| | rev C | rev D |
+|---|---|---|
+| Logic ICs / module | 6 | **2** |
+| Clocks / module | 17 (one spent arming) | **16** |
+| `DATA` | shared, arbitrated, tri-state | point-to-point, push-pull |
+| Capture | swept across the frame | **one instant, whole chain** |
+| Clock | regenerated per hop, skew accumulates | bussed, skew *adds* hold margin |
+| Missing modules | read the master's bias | read a local hard 0 |
+
+What it cost: `CLK` became multi-drop instead of point-to-point (`TIMING.md`
+§4.3), and `J1`/`J2` are no longer interchangeable — a module fitted backwards
+ties two push-pull outputs together, so the connectors must be keyed (HW-13).
 
 ### Daisy-chaining / expansion (16 channels per module)
 
 Modules are **identical, unaddressed, and chained on 5 conductors** — `VCC`,
-`GND`, `DATA`, `CLK`, `/MR`. The mechanism: each module gates the clock it passes on,
+`GND`, `DATA`, `CLK`, `/PL`. `CLK` and `/PL` are bussed to every module; `DATA`
+chains `QH` → `SER`, so the whole harness behaves as one shift register 16·N
+bits deep.
 
-```
-CLK_OUT = CLK_IN AND DONE
-```
+A frame is three steps: drop `/PL` (every register transparently follows its
+inputs), raise it (**every channel in the chain freezes on that one edge**),
+then clock 16·N bits out in a single SPI transaction. No addressing, no
+arbitration, no arm clocks, nothing discarded.
 
-so a module that has not yet finished its own 16 lines starves everything
-downstream, and the act of receiving a clock *is* the grant to drive `DATA`.
-Each module spends its first clock arming and the next sixteen presenting lines,
-so the master issues 17·N pulses and every line appears exactly once, in order.
-`/MR` is bussed to every module and clears all counters and latches.
-
-This replaces three earlier proposals. The **star** topology (one `DATA_IN` GPIO
+This replaces four earlier proposals. The **star** topology (one `DATA_IN` GPIO
 per module) cost a pin per module and did not scale. The **strapped-ID** variant
-(cascaded counters, each module comparing a wrap count against a jumper) made
-physical order depend on correct strapping. A **4-wire** variant replaced the
-reset wire with an RC activity detector and a clock-idle timeout — elegant, but
-it put an analog time constant in the middle of the arbitration, capped the
-frame rate with a mandatory dead gap, and gave the chain a few-microsecond
-stall cliff. Rev C keeps the clock-as-token insight and spends one conductor to
-delete all of that: arbitration becomes a flip-flop, and every decision in the
-module is registered and edge-sampled.
+(cascaded counters comparing a wrap count against a jumper) made physical order
+depend on correct strapping. The **4-wire RC** variant put an analog time
+constant in the middle of the arbitration, capped the frame rate with a
+mandatory dead gap, and gave the chain a few-microsecond stall cliff. **Rev C**
+fixed all of that with a fifth conductor and a `STARTED` flip-flop — but still
+spent six ICs per module maintaining a distributed state machine.
 
-The trade is that a module which never asserts DONE blocks the entire chain
-below it, where the star topology would have lost only that module's channels.
+A fifth was evaluated and rejected: **8× MCP23S17 SPI I/O expanders** on a shared
+bus (`esp32-mcp23s17-128ch-input-design.md`). One IC per 16 channels is fewer
+parts still, but the MCP requires `CS` to toggle between devices, so 128 channels
+costs **eight** SPI transactions against the measured ~17 µs of fixed
+per-transaction overhead — 162 µs a frame, missing the 10 kHz target by 2.7×. It
+also bussed four fast signals down the harness instead of one, and its
+power-on default (`HAEN=0`, address pins ignored) means one browned-out module
+corrupts all 128 channels rather than its own 16.
+
+The trade rev D keeps: a module that is missing or unpowered blanks everything
+downstream of it, where the star topology would have lost only that module's
+channels. It fails cleanly, though — the receiving pull-down holds a hard zero,
+and modules nearer the master are unaffected.
+
 Full protocol and failure analysis in `CHAINING.md`.
 
 ---
@@ -177,12 +195,13 @@ the common case and config handles the oddballs.
 To capture duty faithfully, sample each channel well above the highest strobe /
 chop frequency — target **a few kHz per channel**; the design settles on a fixed
 **10 kHz** (FR-SCAN-5). At 128 channels that is 1.28 M mux steps per second,
-which is why the chain is clocked by SPI + DMA at ~2 MHz rather than bit-banged.
-Sequential-scan phase skew washes out because each channel is integrated over a
-window spanning many matrix frames and AC cycles.
+which is why the chain is clocked by SPI + DMA at 4 MHz rather than bit-banged.
+Since rev D every channel is captured on a single `/PL` edge, so sequential-scan
+phase skew is gone entirely rather than merely washing out in the integrator.
 
-The ceiling is ~14.5 kHz at 128 channels, set purely by the burst length: 17·N
-clocks at 2 MHz. See `TIMING.md` §2.4.
+The measured ceiling is ~20 kHz free-run at 128 channels — 49 µs a frame, of
+which ~17 µs is fixed SPI driver overhead and 32 µs is the burst. The boot check
+clamps to 60% of that, so **Fs ≈ 12 kHz**. See `TIMING.md` §2.4.
 
 - **Matrix strobe** to smooth away: ~1 ms period → sample ≥ several kHz.
 - **Zero-cross AC**: 100/120 Hz → resolve conduction angle with fine sampling
@@ -202,9 +221,10 @@ clocks at 2 MHz. See `TIMING.md` §2.4.
 
 | Ref | Part | Qty | Notes |
 |---|---|---:|---|
-| U1 | 74HC161 | 1 | 4-bit sync binary counter, async clear. Q0–Q2 = mux select, Q3 = bank select. |
-| U2, U3 | 74HC251 | 2 | 8:1 mux, **tri-state** Y output. Bussed `DATA_IN`. |
-| U4 | 74HC04 (or spare gate) | 1 | inverter for Q3 → second '251 `/OE`. |
+| U1, U2 | 74LVC165 | 2 | 8-bit parallel-in / serial-out shift register. `U1` = ch 0–7 (nearest master), `U2` = ch 8–15 → `U1.SER`. Channel 0 wires to input `H`. `CLK INH` low, `/QH` unconnected. |
+| R1 | 10 kΩ | 1 | pull-down on `J2.DATA` — self-terminates the chain (HW-11). |
+| R2 | 33 Ω | 1 | series with `U1.QH`; source termination + collision limit if a module is reversed. |
+| J1, J2 | 5-pin JST-SH | 2 | chain in (toward master) / chain out. **Not interchangeable** (HW-13). |
 | Q1–Q16 | N-ch MOSFET (e.g. 2N7002 / BSS138) | 16 | per-channel level-shift 5–20 V → 3.3 V logic (inverting common-source). |
 | D1–D16 | signal diode (e.g. 1N4148 / BAT54 Schottky) | 16 | AC-signal rectification / input steering. |
 | — | gate series R + pull, drain pull-up, clamp to 3V3 | — | protection + defined trip point with hysteresis. |
@@ -233,8 +253,10 @@ clocks at 2 MHz. See `TIMING.md` §2.4.
 
 Stated so the first cut can proceed; flag any to change:
 
-1. **Topology:** dual `74HC251` shared-line, 16 ch/module, Q3 bank-select
-   (this is the "261" from the brief). *Assumed.*
+1. **Topology:** two chained `74x165` shift registers, 16 ch/module, one SPI
+   transaction per frame (rev D). Supersedes the counter+mux topology of rev B/C.
+   The '165 pin numbers throughout these docs are **from memory** and want
+   checking against a datasheet before layout.
 2. **MCU:** original ESP32 (QT Py ESP32 Pico), ESP-IDF **5.5.x**, matching the
    POC's `CMakePresets`. S3 is a drop-in later (more RAM/RMT channels).
 3. **LED driver:** `zorxx/neopixel` (RMT) as in the POC; `espressif/led_strip`

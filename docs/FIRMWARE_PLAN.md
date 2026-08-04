@@ -14,7 +14,7 @@ clock burst gapless, which the chain requires to hold its bus arbitration.
 ```
 main/                         app entry, task wiring, config glue (ooe::pinled::Main)
 components/
-  lamp_scan/                  chained '161 + dual '251 scan over SPI → raw per-channel samples
+  lamp_scan/                  chained '165 shift-register scan over SPI → raw per-channel samples
   filament/                   per-channel leaky integrator        → brightness 0..255
   profiler/                   drive-scheme classifier             → per-channel {class,params}
   lamp_map/                   channel → LED index/color + WS2812B (RMT) render
@@ -42,7 +42,7 @@ buffer (`uint8_t level[NUM_CHANNELS]`, one writer / one reader — lock-free, th
 integrator owns writes):
 
 - **`scan_task`** (pinned to core 1): one receive-only SPI transaction per
-  frame — `transmit → unpack 17·N bits → integrator.update(ch, sample)`. Fixed
+  frame — `transmit → unpack 16·N bits → integrator.update(ch, sample)`. Fixed
   **10 kHz/channel regardless of channel count** (FR-SCAN-5/8); at the
   128-channel maximum the DMA burst is 68 µs and the CPU share is 6.4% of one
   core. A fixed rate is what makes the filament time constants mean the same
@@ -82,40 +82,46 @@ params change.
 
 ### 3.2 Scan driver (`lamp_scan`)
 
-Config: `{spi_host, sclk_pin, data_pin, mr_pin, spi_hz, num_modules,
+Config: `{spi_host, sclk_pin, data_pin, pl_pin, spi_hz, spi_mode, num_modules,
 channels_per_module, active_low}`.
 
-Modules are identical and unaddressed; each forwards the clock only once it has
-scanned its own 16 lines, so the clock is the token (FR-SCAN-3). Each spends its
-first received clock arming, so a frame is **17·N clocks** and every 17th sample
-is discarded. Protocol in `CHAINING.md`.
+Modules are identical and unaddressed. `CLK` and `/PL` are bussed; `DATA` chains
+`QH` → `SER`, so the harness is one shift register 16·N bits deep (FR-SCAN-3).
+Raising `/PL` freezes every channel in the chain on one edge; a frame is then
+**16·N clocks** with nothing discarded. Protocol in `CHAINING.md`.
 
-The whole frame is one receive-only SPI transaction (FR-SCAN-7):
+The whole frame is one receive-only SPI transaction (FR-SCAN-7, FR-SCAN-10):
 
 ```
 // Once, at init:
-//   SPI mode 0 (CPOL=0, CPHA=0): sample on rising. The counter advances on
-//   the falling edge, so this samples mid-window. Verified on hardware.
-//   CS with SPI_DEVICE_POSITIVE_CS drives /MR: low between frames (clearing),
-//   high during (counting). cs_ena_pretrans sets the release-to-first-edge gap.
+//   SPI mode 2 (CPOL=1, CPHA=0): idle high, sample on falling. A '165 shifts
+//   QH on the RISING edge, so the falling edge lands mid bit-cell.
+//   CS with SPI_DEVICE_POSITIVE_CS drives /PL: low between frames (registers
+//   transparent, loading), high during (frozen, shifting). cs_ena_pretrans
+//   sets the /PL-release-to-first-edge gap.
 
 // Per frame:
-spi_device_transmit(dev, &{ .length = bits, .rx_buffer = rx });  // bits = 17*N, byte-rounded
+spi_device_polling_transmit(dev, &{ .length = bits, .rx_buffer = rx });  // bits = 16*N
 
-for (i = 0, ch = 0; i < 17 * num_modules; ++i) {
-    if (i % 17 == 0) continue;                       // arm clock, no data
-    raw[ch++] = ((rx[i / 8] >> (7 - (i % 8))) & 1) ^ active_low;
-}
+for (i = 0; i < 16 * num_modules; ++i)
+    raw[i] = ((rx[i / 8] >> (7 - (i % 8))) & 1) ^ active_low;
 ```
 
-Surplus clocks past 17·N are harmless: every module is finished and tri-stated
-by then, so the extra samples read the bias.
+Stream bit *i* is channel *i* — no stride arithmetic, no discards. That falls out
+of wiring channel 0 to '165 input `H` rather than `A` (`CHAINING.md`); the other
+ordering costs a byte-reverse in the hot loop.
 
-Since rev C the chain holds no analog state, so the driver has no timing
-obligations beyond the burst itself — no minimum inter-frame gap, and a stall
-mid-frame is merely late, never corrupt. SPI is kept for throughput and because
-the transaction cadence supplies the pacing for free (FR-SCAN-8): 6.4% of one
-core at 128 channels against ~23% bit-banged.
+Surplus clocks past 16·N are harmless: the chain terminator pulls the far end
+low, so extra samples read as lamps-off. Configuring `num_modules` too high or
+too low is benign in both directions (FR-SCAN-11).
+
+The chain holds no analog state, so the driver has no timing obligations beyond
+the burst — no minimum inter-frame gap, and a stall mid-frame is merely late,
+never corrupt. **SPI's single-transaction property is the load-bearing part**
+(FR-SCAN-10): the driver costs a measured ~17 µs per transaction irrespective of
+length, so a frame must be one transaction and not one per module. At 128
+channels that is 49 µs a frame — 49% of a core at 10 kHz, not the 6.4% an
+earlier estimate claimed (`TIMING.md` §2.4).
 
 `mr_pin` may be driven either from `CS` (preferred) or as a plain GPIO pulsed
 before each transaction; the latter is what a bench rig without `CS` routing
@@ -189,7 +195,7 @@ GPIO 26/27 are SPI flash pins on the S3, and 15/25 are not broken out.
 | Signal | GPIO | Board name |
 |---|---|---|
 | `CLK` (SPI `SCLK`) | 18 | A0 |
-| `/MR` (SPI `CS`, positive) | 17 | A1 |
+| `/PL` (SPI `CS`, positive) | 17 | A1 |
 | `DATA` (SPI `MISO`) | 9 | A2 |
 | LED string | 8 | A3 |
 | Status pixel | 39 (power enable 38, drive high) | onboard NeoPixel |
@@ -233,27 +239,33 @@ instead of quietly corrupting every time constant:
    (39, power-enable 38) and the DevKitC-1 — it needs a board-conditional pin
    or dropping from the milestone.
 3. **M1a — real time base.** `lamp_scan` rewritten around SPI + DMA: drop
-   the bit-bang loop for one receive-only mode-0 transaction per frame, unpack
-   17·N bits discarding the arm samples, and drive `/MR` from `CS`. Add the boot feasibility check that feeds the *measured* Fs to
+   the bit-bang loop for one receive-only transaction per frame, unpack 16·N
+   bits, and drive `/PL` from `CS`. Add the boot feasibility check that feeds the *measured* Fs to
    `Filament::init()` and `Profiler::init()`. Batch the LED frame into one
    transmit (`lamp_map::render()` currently issues one strip transmit per
    channel, which is FR-LED-6's exact anti-pattern). Needs no chained hardware —
    a single module exercises the whole path. *(SPI driver done and validated on
    the bench rig at 1 MHz, including the mode-0 sampling phase; pacing and the
    reset-gap check still outstanding. See `BRINGUP.md` §7.)*
-4. **M1b — one module, live.** 16 channels off real lamp taps driving LEDs.
-   Scope the bus at a module boundary to validate the 200 ns settle and confirm
-   the bias resistor is fitted pull-down. Validate against a steady lamp and a
-   matrixed lamp. *(partially done — the sense path is proven end to end on a
-   breadboard module: counter counts, address decode is correct, the mux drives
-   `DATA_IN`, and test inputs read at the right channel indices with correct
-   polarity. See `BRINGUP.md`. The remainder is '251-dependent: `Q3` bank
-   select, the 1 kΩ bias, real lamp taps, and the settle measurement.)*
-5. **M1c — full chain.** 8 modules / 128 channels. The chain-specific risks all
-   live here: accumulated clock skew at module 8 (`TIMING.md` §4.3), `/MR`
-   reaching the far end with adequate release margin, and the arm clock giving
-   line 0 a full bit period at every module. Compare measured frame period at 1,
-   4, and 8 modules against §2.4.
+4. **M1b — one '165 module on the bench.** Two '165s on a breadboard, 16 test
+   inputs, driving LEDs. The three things to settle, in order:
+   1. **SPI mode 2** — the only rev D claim that is reasoned rather than
+      measured. Mode 2 should read the pressed channel; mode 3 its neighbour.
+   2. **Bit order** — confirm channel 0 is the first bit out with channel 0 on
+      input `H`, and that no byte-reverse is needed.
+   3. **`/PL` from `CS`** — confirm the positive-polarity `CS` loads between
+      frames, and that holding `/PL` low makes `DATA` track channel 0 live.
+   *(Not started. The existing bench validation is all rev C hardware — '161 +
+   '151 — and does not transfer beyond the SPI plumbing. See `BRINGUP.md`.)*
+5. **M1c — two modules, then eight.** Two modules is the important step: it
+   proves the chain handoff, the 10 kΩ terminator, and that unplugging the last
+   module blanks its channels to a stable zero rather than noise (HW-11). Then
+   scale to 8 / 128 channels, where the remaining risks live: multi-drop `CLK`
+   integrity at the far end (`TIMING.md` §4.3 — the new binding constraint),
+   clock-skew *direction* (module 8 must be clocked after module 1, HW-14), and
+   `/PL` edge quality at 800 mm, since that edge is now the capture instant for
+   all 128 channels. Compare measured frame period at 1, 2, 4 and 8 modules
+   against §2.4.
 6. **M2 — profiler.** Time-based observation window, inter-edge histogram for
    period estimation, AC_DIMMED vs AC_STEADY, ground-bounce robustness. Boot
    classification seeds integrator params; verify a matrixed lamp reads as
@@ -279,10 +291,10 @@ instead of quietly corrupting every time constant:
 - POC pin choices (QT Py ESP32 Pico: CLK=GPIO25, RST=GPIO27, DATA=GPIO26,
   NEOPIXEL=GPIO15) are **superseded** — see the §4 pin map. Two of them are SPI
   flash pins on the S3.
-- The POC's single-'251/8-channel path remains a valid `channels_per_module=8,
-  num_modules=1` configuration.
+- A single-'165/8-channel path remains a valid `channels_per_module=8,
+  num_modules=1` configuration — useful for the first bench build.
 - The POC's `active_low=true` default is **superseded**. The v2 front end is
   MOSFET (inverting) → Schmitt inverter (inverting) = non-inverting overall, so
   lamp on is logic high (HW-1). The bus bias resistor must be oriented to match
-  (HW-2): floating bus reads *off*, which with a non-inverting front end means a
-  pull-down.
+  (HW-2): an undriven net reads *off*, which with a non-inverting front end means a
+  pull-down — one per receiving end since rev D.
