@@ -187,6 +187,17 @@ rst:0x1  (POWERON),            boot:0x8 (SPI_FAST_FLASH_BOOT)   <- running
 A latched force-download flag survives `EN` resets; only a **USB replug** clears
 it. A held or stuck `BOOT` button produces the same `boot:0x0`.
 
+**A capture that has stopped looks exactly like a hardware regression.** The
+serial logger originally had a fixed lifetime, and once expired a few hundred
+milliseconds before a round of button presses. Its tail showed all-zeros and no
+toggles — indistinguishable from a dead scan — and that was very nearly recorded
+as a fault in a working design. The logger now runs until killed. Check
+`pgrep -c -x -f "python /tmp/pinled_logger.py"` **before** reading its output,
+and sanity-check the last timestamp against how long the board has been up.
+
+When the board is driving LEDs, believe the LEDs: they are the more direct
+evidence, and a stale text log is not.
+
 **New Kconfig symbols need a reconfigure.** Adding an option does not add it to
 an existing `sdkconfig`, so the `#ifdef` compiles the feature out and the build
 appears to succeed with nothing changed. Delete `sdkconfig` and rebuild.
@@ -212,6 +223,10 @@ around a 74x151:
   advances on the falling edge as a real module does. Inputs on D4–D7 read at
   channels 4–7 with no shift, confirming the sample lands mid-window and line 0
   is captured. Before the inverter, modes 0 and 1 both shifted by one — see §5.
+- **`/MR` driven from SPI `CS`** with `SPI_DEVICE_POSITIVE_CS` (rev C): `CS` is
+  low between transactions (clearing the chain) and high during (counting), so
+  the frame reset is hardware-timed and needs no software. Verified by reading
+  channels 4–7 correctly, including simultaneous presses.
 
 Outstanding, all dependent on rev C modules: `QD` bank select, the 1 kΩ bias at
 the master, module chaining, real lamp taps, and the chain-specific measurements
