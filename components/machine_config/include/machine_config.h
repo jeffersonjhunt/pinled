@@ -34,6 +34,8 @@ namespace ooe::pinled
         gpio_num_t led_pin{GPIO_NUM_NC};
         int spi_hz{2 * 1000 * 1000}; ///< chain clock rate
         uint8_t spi_mode{0};         ///< 0 = sample mid-window (falling-edge counter)
+        bool mr_from_cs{true};       ///< drive /MR from SPI CS
+        bool arm_clock{true};        ///< rev C modules arm on their first clock
         size_t num_modules{1};
         size_t channels_per_module{16};
         bool active_low{false}; ///< non-inverting front end (HW-1); see docs/TIMING.md §4.2

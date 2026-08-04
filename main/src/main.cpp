@@ -53,6 +53,8 @@ namespace ooe::pinled
         sc.mr_pin = cfg_.mr_pin;
         sc.spi_hz = cfg_.spi_hz;
         sc.spi_mode = cfg_.spi_mode;
+        sc.mr_from_cs = cfg_.mr_from_cs;
+        sc.arm_clock = cfg_.arm_clock;
         sc.num_modules = cfg_.num_modules;
         sc.channels_per_module = cfg_.channels_per_module;
         sc.active_low = cfg_.active_low;

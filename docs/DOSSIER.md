@@ -79,22 +79,24 @@ per-socket taps  │                                                            
                  │   74LVC251 #B (ch 8–15, tri-state Y)                                         │
                  │                                                                              │
                  │   74LVC161:  QA..QC ─▶ select on BOTH '251s;  QD ─▶ bank select              │
-                 │              clocked on the FALLING edge;  ENP = /DONE                       │
-                 │   74LVC109:  DONE latch, sets on the wrap edge (J = RCO)                     │
+                 │              clocked on the FALLING edge                                     │
+                 │              ENP = STARTED (arm clock);  ENT = /DONE (stop after wrap)        │
+                 │   74LVC109:  A = DONE latch (J = RCO);  B = STARTED latch (J = 1)            │
+                 │              both cleared by /MR                                             │
                  │   74LVC10:   /E_A, /E_B, and  CLK_OUT = CLK_IN AND DONE                      │
-                 │   D1/R1/C1:  activity detector, τ ≈ 5.6 µs → bus grant + frame reset         │
                  │   3V3 LDO:   local regulation from the 5 V harness rail                      │
                  │                                                                              │
                  │   CLK_IN ◀── upstream          CLK_OUT ──▶ downstream module                 │
+                 │   /MR    ◀── bussed to every module (async clear)                            │
                  └──────────────────────────────────────────────────────────────────────────────┘
 
-ESP32-S3 ── SPI + DMA ──▶ SCLK = CLK,  MISO = DATA        (one transaction = one whole frame)
+ESP32-S3 ── SPI + DMA ──▶ SCLK = CLK,  MISO = DATA,  CS = /MR   (one transaction = one frame)
 ESP32-S3 ── 1 GPIO ─────▶ WS2812B / SK6812 string (RMT)   ← firmware maps sensed channel → LED
 ```
 
-**The ESP32 spends 2 GPIO on sensing, total, regardless of module count:** `CLK`
-and `DATA`, plus **one** GPIO for the entire LED string. There is no reset pin
-and no per-module data line.
+**The ESP32 spends 3 GPIO on sensing, total, regardless of module count:** `CLK`,
+`DATA` and `/MR` — all three from a single SPI peripheral — plus **one** GPIO
+for the entire LED string. There is no per-module data line.
 
 ### Why the '251 and not the '151
 
@@ -111,14 +113,14 @@ used a single '151 for 8 channels on one pin, which is fine; contention only
 appears when you bus two.)
 
 **Counter note:** the `74x161` is a synchronous 4-bit binary counter with an
-**asynchronous** active-low clear. Here that clear is driven by the module's own
-activity detector rather than by any external wire. (Its cousin the `74x163` has
+**asynchronous** active-low clear, driven here by the bussed `/MR`. (Its cousin
+the `74x163` has
 a *synchronous* clear; don't substitute.)
 
 ### Daisy-chaining / expansion (16 channels per module)
 
-Modules are **identical, unaddressed, and chained on 4 conductors** — `VCC`,
-`GND`, `DATA`, `CLK`. The mechanism: each module gates the clock it passes on,
+Modules are **identical, unaddressed, and chained on 5 conductors** — `VCC`,
+`GND`, `DATA`, `CLK`, `/MR`. The mechanism: each module gates the clock it passes on,
 
 ```
 CLK_OUT = CLK_IN AND DONE
@@ -126,16 +128,20 @@ CLK_OUT = CLK_IN AND DONE
 
 so a module that has not yet finished its own 16 lines starves everything
 downstream, and the act of receiving a clock *is* the grant to drive `DATA`.
-The master issues 16·N pulses and every line appears exactly once, in order.
-Frame reset is a clock-idle timeout rather than a wire: hold `CLK` low for ≥5τ
-and every module's RC activity detector discharges, clearing all counters.
+Each module spends its first clock arming and the next sixteen presenting lines,
+so the master issues 17·N pulses and every line appears exactly once, in order.
+`/MR` is bussed to every module and clears all counters and latches.
 
-This replaces two earlier proposals. The **star** topology (one `DATA_IN` GPIO
+This replaces three earlier proposals. The **star** topology (one `DATA_IN` GPIO
 per module) cost a pin per module and did not scale. The **strapped-ID** variant
-(cascaded counters, each module comparing a wrap count against a jumper) needed
-a fifth conductor for reset and made physical order depend on correct strapping.
-The clock-as-token scheme needs neither: no addressing, no IDs, no reset wire,
-and a glitched frame self-heals on the next idle gap.
+(cascaded counters, each module comparing a wrap count against a jumper) made
+physical order depend on correct strapping. A **4-wire** variant replaced the
+reset wire with an RC activity detector and a clock-idle timeout — elegant, but
+it put an analog time constant in the middle of the arbitration, capped the
+frame rate with a mandatory dead gap, and gave the chain a few-microsecond
+stall cliff. Rev C keeps the clock-as-token insight and spends one conductor to
+delete all of that: arbitration becomes a flip-flop, and every decision in the
+module is registered and edge-sampled.
 
 The trade is that a module which never asserts DONE blocks the entire chain
 below it, where the star topology would have lost only that module's channels.
@@ -175,9 +181,8 @@ which is why the chain is clocked by SPI + DMA at ~2 MHz rather than bit-banged.
 Sequential-scan phase skew washes out because each channel is integrated over a
 window spanning many matrix frames and AC cycles.
 
-The binding constraint is not throughput but the chain's frame-reset gap: each
-frame must be followed by ≥5τ of idle clock, which sets the ceiling near 11 kHz
-at 128 channels. See `TIMING.md` §2.4.
+The ceiling is ~14.5 kHz at 128 channels, set purely by the burst length: 17·N
+clocks at 2 MHz. See `TIMING.md` §2.4.
 
 - **Matrix strobe** to smooth away: ~1 ms period → sample ≥ several kHz.
 - **Zero-cross AC**: 100/120 Hz → resolve conduction angle with fine sampling

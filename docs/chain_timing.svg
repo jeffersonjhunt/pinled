@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="880" viewBox="0 0 1180 880">
+<rect width="1180" height="880" fill="#fff"/>
+<g font-family="DejaVu Sans, Helvetica, Arial, sans-serif">
+<text x="24" y="34" font-size="20" font-weight="bold" fill="#111">PINLED rev C — 5-wire chain: arm clock, handoff, frame reset</text>
+<text x="24" y="55" font-size="12" fill="#666">Counter and both '109 latches clock on FALLING edges of CLK (Schmitt-inverted) · master samples on RISING edges (SPI mode 0) · one column = half a CLK period</text>
+
+<!-- gridlines -->
+<line x1="240" y1="84" x2="240" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="296" y1="84" x2="296" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="352" y1="84" x2="352" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="408" y1="84" x2="408" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="464" y1="84" x2="464" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="520" y1="84" x2="520" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="576" y1="84" x2="576" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="632" y1="84" x2="632" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="688" y1="84" x2="688" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="744" y1="84" x2="744" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="800" y1="84" x2="800" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="856" y1="84" x2="856" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="912" y1="84" x2="912" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="968" y1="84" x2="968" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="1024" y1="84" x2="1024" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="1080" y1="84" x2="1080" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+<line x1="1136" y1="84" x2="1136" y2="700" stroke="#000" stroke-opacity="0.06" stroke-width="1"/>
+
+<!-- /MR -->
+<text x="226" y="105" font-size="11.5" fill="#222" text-anchor="end">/MR  (= SPI CS, positive)</text>
+<path d="M240,112 L268,112 L268,90 L1136,90" fill="none" stroke="#7b1fa2" stroke-width="2"/>
+<text x="252" y="128" font-size="10" fill="#7b1fa2" text-anchor="middle">clear</text>
+
+<!-- CLK -->
+<text x="226" y="153" font-size="11.5" fill="#222" text-anchor="end">CLK (master SCLK)</text>
+<path d="M240,160 L296,160 L296,138 L352,138 L352,160 L408,160 L408,138 L464,138 L464,160 L520,160 L520,138 L576,138 L576,160 L632,160 L632,138 L688,138 L688,160 L744,160 L744,138 L800,138 L800,160 L856,160 L856,138 L912,138 L912,160 L968,160 L968,138 L1024,138 L1024,160 L1136,160" fill="none" stroke="#c0392b" stroke-width="2"/>
+
+<!-- sample arrows on rising edges -->
+<path d="M296,168 L296,182" stroke="#c0392b" stroke-width="1.6"/><path d="M292,176 L296,182 L300,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
+<path d="M408,168 L408,182" stroke="#c0392b" stroke-width="1.6"/><path d="M404,176 L408,182 L412,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
+<path d="M520,168 L520,182" stroke="#c0392b" stroke-width="1.6"/><path d="M516,176 L520,182 L524,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
+<path d="M632,168 L632,182" stroke="#c0392b" stroke-width="1.6"/><path d="M628,176 L632,182 L636,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
+<path d="M744,168 L744,182" stroke="#c0392b" stroke-width="1.6"/><path d="M740,176 L744,182 L748,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
+<path d="M856,168 L856,182" stroke="#c0392b" stroke-width="1.6"/><path d="M852,176 L856,182 L860,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
+<path d="M968,168 L968,182" stroke="#c0392b" stroke-width="1.6"/><path d="M964,176 L968,182 L972,176" fill="none" stroke="#c0392b" stroke-width="1.6"/>
+<text x="1150" y="180" font-size="10" fill="#c0392b" text-anchor="end">samples</text>
+
+<!-- MODULE k -->
+<text x="24" y="216" font-size="12.5" font-weight="bold" fill="#345">MODULE k  (finishing)</text>
+<line x1="24" y1="222" x2="224" y2="222" stroke="#345" stroke-width="1"/>
+
+<text x="226" y="247" font-size="11.5" fill="#222" text-anchor="end">count</text>
+<polygon points="240,243 245,232 291,232 296,243 291,254 245,254" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="268" y="247" font-size="11.5" fill="#222" text-anchor="middle">14</text>
+<polygon points="296,243 301,232 515,232 520,243 515,254 301,254" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="408" y="247" font-size="11.5" fill="#222" text-anchor="middle">15</text>
+<polygon points="520,243 525,232 1131,232 1136,243 1131,254 525,254" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="828" y="247" font-size="11.5" fill="#222" text-anchor="middle">0 (parked, ENT low)</text>
+
+<text x="226" y="287" font-size="11.5" fill="#222" text-anchor="end">RCO</text>
+<path d="M240,294 L296,294 L296,272 L520,272 L520,294 L1136,294" fill="none" stroke="#222" stroke-width="2"/>
+
+<text x="226" y="327" font-size="11.5" fill="#222" text-anchor="end">DONE (k)</text>
+<path d="M240,334 L520,334 L520,312 L1136,312" fill="none" stroke="#7b1fa2" stroke-width="2"/>
+
+<text x="226" y="367" font-size="11.5" fill="#222" text-anchor="end">muxes enabled</text>
+<path d="M240,352 L520,352 L520,374 L1136,374" fill="none" stroke="#1e8e3e" stroke-width="2"/>
+
+<text x="226" y="421" font-size="11.5" fill="#222" text-anchor="end">CLK_OUT = CLK_IN · DONE</text>
+<path d="M240,428 L520,428 L520,428 L576,428 L576,406 L632,406 L632,428 L688,428 L688,406 L744,406 L744,428 L800,428 L800,406 L856,406 L856,428 L912,428 L912,406 L968,406 L968,428 L1024,428 L1024,406 L1080,406 L1080,428 L1136,428" fill="none" stroke="#c0392b" stroke-width="2"/>
+
+<!-- MODULE k+1 -->
+<text x="24" y="464" font-size="12.5" font-weight="bold" fill="#345">MODULE k+1  (starting)</text>
+<line x1="24" y1="470" x2="224" y2="470" stroke="#345" stroke-width="1"/>
+
+<text x="226" y="495" font-size="11.5" fill="#222" text-anchor="end">STARTED (k+1)</text>
+<path d="M240,502 L632,502 L632,480 L1136,480" fill="none" stroke="#e67e22" stroke-width="2"/>
+
+<text x="226" y="535" font-size="11.5" fill="#222" text-anchor="end">count</text>
+<polygon points="240,531 245,520 739,520 744,531 739,542 245,542" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="492" y="535" font-size="11.5" fill="#222" text-anchor="middle">0  (held — ENP was low at the arm edge)</text>
+<polygon points="744,531 749,520 851,520 856,531 851,542 749,542" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="800" y="535" font-size="11.5" fill="#222" text-anchor="middle">1</text>
+<polygon points="856,531 861,520 963,520 968,531 963,542 861,542" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="912" y="535" font-size="11.5" fill="#222" text-anchor="middle">2</text>
+<polygon points="968,531 973,520 1131,520 1136,531 1131,542 973,542" fill="#f0f2f5" stroke="#666" stroke-width="1.4"/><text x="1052" y="535" font-size="11.5" fill="#222" text-anchor="middle">3</text>
+
+<text x="226" y="575" font-size="11.5" fill="#222" text-anchor="end">muxes enabled</text>
+<path d="M240,582 L632,582 L632,560 L1136,560" fill="none" stroke="#1e8e3e" stroke-width="2"/>
+
+<!-- DATA -->
+<text x="226" y="629" font-size="11.5" fill="#222" text-anchor="end">DATA (shared bus)</text>
+<polygon points="240,625 245,614 291,614 296,625 291,636 245,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="268" y="629" font-size="11.5" fill="#222" text-anchor="middle">L14</text>
+<polygon points="296,625 301,614 515,614 520,625 515,636 301,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="408" y="629" font-size="11.5" fill="#222" text-anchor="middle">L15</text>
+<line x1="520" y1="625" x2="632" y2="625" stroke="#1565c0" stroke-width="1.4" stroke-dasharray="4 3"/><text x="576" y="620" font-size="10" fill="#666" text-anchor="middle">Z (arm clock — sample discarded)</text>
+<polygon points="632,625 637,614 739,614 744,625 739,636 637,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="688" y="629" font-size="11.5" fill="#222" text-anchor="middle">L0′</text>
+<polygon points="744,625 749,614 851,614 856,625 851,636 749,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="800" y="629" font-size="11.5" fill="#222" text-anchor="middle">L1′</text>
+<polygon points="856,625 861,614 963,614 968,625 963,636 861,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="912" y="629" font-size="11.5" fill="#222" text-anchor="middle">L2′</text>
+<polygon points="968,625 973,614 1131,614 1136,625 1131,636 973,636" fill="#e8f0fb" stroke="#1565c0" stroke-width="1.4"/><text x="1052" y="629" font-size="11.5" fill="#222" text-anchor="middle">L3′</text>
+
+<!-- markers -->
+<line x1="520" y1="84" x2="520" y2="660" stroke="#7b1fa2" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.55"/>
+<circle cx="520" cy="74" r="9" fill="#7b1fa2"/><text x="520" y="78" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">1</text>
+<line x1="632" y1="84" x2="632" y2="660" stroke="#7b1fa2" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.55"/>
+<circle cx="632" cy="74" r="9" fill="#7b1fa2"/><text x="632" y="78" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">2</text>
+<line x1="744" y1="84" x2="744" y2="660" stroke="#7b1fa2" stroke-width="1" stroke-dasharray="5 4" stroke-opacity="0.55"/>
+<circle cx="744" cy="74" r="9" fill="#7b1fa2"/><text x="744" y="78" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">3</text>
+
+<circle cx="34" cy="700" r="9" fill="#7b1fa2"/><text x="34" y="704" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">1</text>
+<text x="52" y="704" font-size="11.5" fill="#222">Falling edge: module k wraps 15→0 and DONE sets on the same edge. k releases DATA, ENT goes low so it parks, and it begins forwarding CLK.</text>
+<circle cx="34" cy="724" r="9" fill="#7b1fa2"/><text x="34" y="728" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">2</text>
+<text x="52" y="728" font-size="11.5" fill="#222">ARM CLOCK. k+1's first falling edge sets STARTED. Its counter samples the OLD ENP=0 and does NOT advance, so it stays on line 0.</text>
+<circle cx="34" cy="748" r="9" fill="#7b1fa2"/><text x="34" y="752" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">3</text>
+<text x="52" y="752" font-size="11.5" fill="#222">Line 0′ has now been driven for a FULL bit period and is sampled mid-window — the arm clock is what buys that margin.</text>
+<text x="52" y="776" font-size="11.5" fill="#c0392b">Red arrows: master samples on rising edges (SPI mode 0), i.e. the midpoint of each line's window. Every 17th sample is an arm clock and is discarded.</text>
+
+<text x="24" y="820" font-size="13" font-weight="bold" fill="#123">Frame structure (master view)</text>
+<rect x="24" y="832" width="120" height="28" fill="#f3e5f5" stroke="#7b1fa2"/><text x="84" y="850" font-size="11" fill="#7b1fa2" text-anchor="middle">/MR low</text>
+<rect x="144" y="832" width="300" height="28" fill="#fde8e6" stroke="#c0392b"/><text x="294" y="850" font-size="11" fill="#c0392b" text-anchor="middle">17 × N clocks — full scan</text>
+<rect x="444" y="832" width="120" height="28" fill="#f3e5f5" stroke="#7b1fa2"/><text x="504" y="850" font-size="11" fill="#7b1fa2" text-anchor="middle">/MR low</text>
+<rect x="564" y="832" width="300" height="28" fill="#fde8e6" stroke="#c0392b"/><text x="714" y="850" font-size="11" fill="#c0392b" text-anchor="middle">next frame — identical</text>
+<text x="880" y="850" font-size="11" fill="#555">No minimum gap: the chain holds no analog state.</text>
+</g></svg>

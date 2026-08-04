@@ -42,14 +42,13 @@ buffer (`uint8_t level[NUM_CHANNELS]`, one writer / one reader — lock-free, th
 integrator owns writes):
 
 - **`scan_task`** (pinned to core 1): one receive-only SPI transaction per
-  frame — `transmit → unpack 16·N bits → integrator.update(ch, sample)`. Fixed
+  frame — `transmit → unpack 17·N bits → integrator.update(ch, sample)`. Fixed
   **10 kHz/channel regardless of channel count** (FR-SCAN-5/8); at the
-  128-channel maximum the DMA burst is 64 µs and the CPU share is 6.4% of one
+  128-channel maximum the DMA burst is 68 µs and the CPU share is 6.4% of one
   core. A fixed rate is what makes the filament time constants mean the same
   thing on a 16-channel bench rig and a 128-channel install, and uniform `dt` is
   what the integrator assumes. The transaction cadence supplies the pacing, so
-  there is no separate timer; the gap between transactions is also the chain's
-  frame reset and must stay above 5τ.
+  there is no separate timer, and `CS` clears the chain between transactions.
 - **`render_task`** (60–120 Hz): reads `level[]`, applies `lamp_map` (channel →
   LED index, color, gamma), pushes the WS2812B frame via RMT (FR-LED-1/3).
 - **`profiler`** (boot + on-demand): observes raw transitions for a window,
@@ -83,56 +82,44 @@ params change.
 
 ### 3.2 Scan driver (`lamp_scan`)
 
-Config: `{spi_host, sclk_pin, data_pin, spi_hz, num_modules, channels_per_module,
-active_low}`. Note there is no `mr_pin` — the chain has no reset conductor.
+Config: `{spi_host, sclk_pin, data_pin, mr_pin, spi_hz, num_modules,
+channels_per_module, active_low}`.
 
 Modules are identical and unaddressed; each forwards the clock only once it has
-scanned its own 16 lines, so the clock is the token and the master just issues
-16·N pulses (FR-SCAN-3). Protocol in `CHAINING.md`.
+scanned its own 16 lines, so the clock is the token (FR-SCAN-3). Each spends its
+first received clock arming, so a frame is **17·N clocks** and every 17th sample
+is discarded. Protocol in `CHAINING.md`.
 
 The whole frame is one receive-only SPI transaction (FR-SCAN-7):
 
 ```
 // Once, at init:
 //   SPI mode 0 (CPOL=0, CPHA=0): sample on rising. The counter advances on
-//   the falling edge, so this samples mid-window. Mode 1 would sample on the
-//   counter transition itself. Verified on hardware.
-//   CPOL=0 idles SCLK low, and that idle IS the frame reset.
-//   No CS (spics_io_num = -1), no MOSI.
+//   the falling edge, so this samples mid-window. Verified on hardware.
+//   CS with SPI_DEVICE_POSITIVE_CS drives /MR: low between frames (clearing),
+//   high during (counting). cs_ena_pretrans sets the release-to-first-edge gap.
 
-// Per frame — the gap since the previous transaction must be >= 5*tau:
-spi_device_transmit(dev, &{ .rxlength = 16 * num_modules, .rx_buffer = rx });
+// Per frame:
+spi_device_transmit(dev, &{ .length = bits, .rx_buffer = rx });  // bits = 17*N, byte-rounded
 
-for (ch = 0; ch < total_channels; ++ch)
-    raw[ch] = ((rx[ch / 8] >> (7 - (ch % 8))) & 1) ^ active_low;
+for (i = 0, ch = 0; i < 17 * num_modules; ++i) {
+    if (i % 17 == 0) continue;                       // arm clock, no data
+    raw[ch++] = ((rx[i / 8] >> (7 - (i % 8))) & 1) ^ active_low;
+}
 ```
 
-16·N bits is always a whole number of bytes (2·N), and MSB-first ordering puts
-sample 1 — line 0 of module 1 — in the top bit of `rx[0]`, so the unpack is a
-shift rather than a lookup.
+Surplus clocks past 17·N are harmless: every module is finished and tri-stated
+by then, so the extra samples read the bias.
 
-Three properties follow from using DMA rather than a CPU loop, and the first is
-a correctness requirement, not an optimization:
+Since rev C the chain holds no analog state, so the driver has no timing
+obligations beyond the burst itself — no minimum inter-frame gap, and a stall
+mid-frame is merely late, never corrupt. SPI is kept for throughput and because
+the transaction cadence supplies the pacing for free (FR-SCAN-8): 6.4% of one
+core at 128 channels against ~23% bit-banged.
 
-- **The burst is gapless.** The chain holds its bus grant on a capacitor that
-  releases after ~6 µs without a clock edge, so a mid-frame stall silently
-  resets every counter in the chain and produces a plausible-looking frame whose
-  tail is re-read from module 1. A bit-banged loop on FreeRTOS cannot guarantee
-  6 µs.
-- **No pacing timer.** The transaction cadence *is* Fs (FR-SCAN-8). Jitter in
-  *starting* a transaction only lengthens the idle gap, which is harmless.
-- **The CPU cost is just the unpack plus the integrator** — 6.4% of one core at
-  128 channels, against 23.5% for the bit-banged design this replaces.
-
-The one hard constraint the driver must enforce is the reset gap: `1/Fs −
-16·N/f_spi ≥ 5τ`. If it does not hold, the chain never clears between frames,
-so `init()` refuses to start rather than clamping (FR-SCAN-9, `TIMING.md` §2.6).
-At the default 2 MHz and 10 kHz the gap runs from 92 µs at one module to 36 µs
-at eight, against a 28 µs floor.
-
-The inter-module handoff needs no settle handling (FR-SCAN-10): the high-Z
-window falls between sample slots by construction, so the old two-tier
-in-module/boundary settle model is gone.
+`mr_pin` may be driven either from `CS` (preferred) or as a plain GPIO pulsed
+before each transaction; the latter is what a bench rig without `CS` routing
+uses.
 
 ### 3.3 Profiler (classifier)
 
@@ -202,13 +189,13 @@ GPIO 26/27 are SPI flash pins on the S3, and 15/25 are not broken out.
 | Signal | GPIO | Board name |
 |---|---|---|
 | `CLK` (SPI `SCLK`) | 18 | A0 |
+| `/MR` (SPI `CS`, positive) | 17 | A1 |
 | `DATA` (SPI `MISO`) | 9 | A2 |
 | LED string | 8 | A3 |
 | Status pixel | 39 (power enable 38, drive high) | onboard NeoPixel |
 | Profiler re-arm | 0 | BOOT button |
 
-GPIO 17 (`A1`) is **free** — it was `/MR`, and the chain has no reset
-conductor. The sense bus now costs two pins.
+The sense bus costs three pins, all from one SPI peripheral.
 
 `SCLK` and `MISO` can be routed to any pins through the GPIO matrix; they do not
 need to be the default SPI pads. This leaves I2C/STEMMA QT (6/7, 40/41) and the
@@ -246,9 +233,8 @@ instead of quietly corrupting every time constant:
    (39, power-enable 38) and the DevKitC-1 — it needs a board-conditional pin
    or dropping from the milestone.
 3. **M1a — real time base.** `lamp_scan` rewritten around SPI + DMA: drop
-   `mr_pin` and the bit-bang loop, one receive-only mode-0 transaction per
-   frame, unpack 16·N bits, and enforce the reset gap `1/Fs − 16·N/f_spi ≥ 5τ`
-   at init. Add the boot feasibility check that feeds the *measured* Fs to
+   the bit-bang loop for one receive-only mode-0 transaction per frame, unpack
+   17·N bits discarding the arm samples, and drive `/MR` from `CS`. Add the boot feasibility check that feeds the *measured* Fs to
    `Filament::init()` and `Profiler::init()`. Batch the LED frame into one
    transmit (`lamp_map::render()` currently issues one strip transmit per
    channel, which is FR-LED-6's exact anti-pattern). Needs no chained hardware —
@@ -264,10 +250,10 @@ instead of quietly corrupting every time constant:
    polarity. See `BRINGUP.md`. The remainder is '251-dependent: `Q3` bank
    select, the 1 kΩ bias, real lamp taps, and the settle measurement.)*
 5. **M1c — full chain.** 8 modules / 128 channels. The chain-specific risks all
-   live here: accumulated clock skew at module 8 (`TIMING.md` §4.3), `ACT` fall
-   time against the 5τ gap, the handoff window landing between sample slots, and
-   whether Fs holds at 10 kHz with only 36 µs of idle margin. Compare measured
-   frame period at 1, 4, and 8 modules against §2.4.
+   live here: accumulated clock skew at module 8 (`TIMING.md` §4.3), `/MR`
+   reaching the far end with adequate release margin, and the arm clock giving
+   line 0 a full bit period at every module. Compare measured frame period at 1,
+   4, and 8 modules against §2.4.
 6. **M2 — profiler.** Time-based observation window, inter-edge histogram for
    period estimation, AC_DIMMED vs AC_STEADY, ground-bounce robustness. Boot
    classification seeds integrator params; verify a matrixed lamp reads as

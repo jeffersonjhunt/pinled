@@ -41,9 +41,11 @@ namespace ooe::pinled
         deinit();
         cfg_ = cfg;
 
-        // `/MR` is a plain GPIO in both backends. Production modules leave it
-        // unset and reset on the clock-idle timeout instead.
-        if (cfg_.mr_pin != GPIO_NUM_NC)
+        // When /MR is driven from SPI CS the peripheral owns the pin, so only
+        // configure it as a GPIO for the bit-bang path or when CS is not used.
+        mr_is_gpio_ = (cfg_.mr_pin != GPIO_NUM_NC) &&
+                      (LAMPSCAN_BITBANG || !cfg_.mr_from_cs);
+        if (mr_is_gpio_)
         {
             gpio_reset_pin(cfg_.mr_pin);
             gpio_set_direction(cfg_.mr_pin, GPIO_MODE_OUTPUT);
@@ -60,20 +62,23 @@ namespace ooe::pinled
         initialized_ = true;
         reset_counter();
 
-        ESP_LOGI(TAG, "init: %u module(s) x %u ch = %u bits/frame, active_%s, %s",
+        ESP_LOGI(TAG, "init: %u module(s) x %u ch, %u clocks/frame (%u bytes), active_%s, %s",
                  (unsigned)cfg_.num_modules, (unsigned)cfg_.channels_per_module,
-                 (unsigned)frame_bits(), cfg_.active_low ? "low" : "high",
+                 (unsigned)frame_bits(), (unsigned)frame_bytes(),
+                 cfg_.active_low ? "low" : "high",
                  LAMPSCAN_BITBANG ? "bit-bang (diagnostic build)" : "SPI+DMA");
+        ESP_LOGI(TAG, "  arm clock %s", cfg_.arm_clock ? "on (rev C)" : "OFF (legacy rig)");
         if (!LAMPSCAN_BITBANG)
-            ESP_LOGI(TAG, "  SPI host %d, %d Hz, mode %u, SCLK=%d MISO=%d, /MR=%d",
+            ESP_LOGI(TAG, "  SPI host %d, %d Hz, mode %u, SCLK=%d MISO=%d, /MR=%d (%s)",
                      (int)cfg_.spi_host, cfg_.spi_hz, (unsigned)cfg_.spi_mode,
-                     (int)cfg_.clk_pin, (int)cfg_.data_pin, (int)cfg_.mr_pin);
+                     (int)cfg_.clk_pin, (int)cfg_.data_pin, (int)cfg_.mr_pin,
+                     (cfg_.mr_from_cs && cfg_.mr_pin != GPIO_NUM_NC) ? "SPI CS" : "GPIO");
         return ESP_OK;
     }
 
     esp_err_t LampScan::init_spi()
     {
-        const size_t bytes = frame_bits() / 8;
+        const size_t bytes = frame_bytes();
 
         // Must be DMA-capable. 16 bytes at the 128-channel maximum, so this
         // also fits the SPI FIFO outright — the burst is gapless because the
@@ -101,7 +106,21 @@ namespace ooe::pinled
         spi_device_interface_config_t dev{};
         dev.clock_speed_hz = cfg_.spi_hz;
         dev.mode = cfg_.spi_mode;
-        dev.spics_io_num = -1; // no chip select; the chain has none
+        // CS drives /MR. Positive polarity puts it LOW between transactions
+        // (clearing the chain) and HIGH during (counting), so the frame reset
+        // is hardware-timed. cs_ena_pretrans sets the release-to-first-edge
+        // margin, in SPI bit times.
+        if (cfg_.mr_from_cs && cfg_.mr_pin != GPIO_NUM_NC)
+        {
+            dev.spics_io_num = cfg_.mr_pin;
+            dev.flags |= SPI_DEVICE_POSITIVE_CS;
+            dev.cs_ena_pretrans = 2;
+            dev.cs_ena_posttrans = 2;
+        }
+        else
+        {
+            dev.spics_io_num = -1;
+        }
         dev.queue_size = 1;
 
         err = spi_bus_add_device(cfg_.spi_host, &dev, &spi_);
@@ -160,8 +179,18 @@ namespace ooe::pinled
         spi_device_interface_config_t dev{};
         dev.clock_speed_hz = hz;
         dev.mode = cfg_.spi_mode;
-        dev.spics_io_num = -1;
         dev.queue_size = 1;
+        if (cfg_.mr_from_cs && cfg_.mr_pin != GPIO_NUM_NC)
+        {
+            dev.spics_io_num = cfg_.mr_pin;
+            dev.flags |= SPI_DEVICE_POSITIVE_CS;
+            dev.cs_ena_pretrans = 2;
+            dev.cs_ena_posttrans = 2;
+        }
+        else
+        {
+            dev.spics_io_num = -1;
+        }
 
         const esp_err_t err = spi_bus_add_device(cfg_.spi_host, &dev, &spi_);
         if (err != ESP_OK)
@@ -197,10 +226,10 @@ namespace ooe::pinled
 
     void LampScan::reset_counter()
     {
-        // '161 `/MR` is asynchronous: a low pulse zeroes Q0..Q3 immediately.
-        // Production modules have no such wire — the inter-frame clock idle
-        // discharges the activity detector and clears the chain instead.
-        if (cfg_.mr_pin == GPIO_NUM_NC)
+        // '161 /MR is asynchronous: a low pulse zeroes the counter and both
+        // '109 latches immediately. No-op when CS is driving /MR, since the
+        // peripheral already deasserts it between transactions.
+        if (!mr_is_gpio_)
             return;
         gpio_set_level(cfg_.mr_pin, 0);
         esp_rom_delay_us(1);
@@ -217,20 +246,23 @@ namespace ooe::pinled
 
 #if LAMPSCAN_BITBANG
         reset_counter();
+        if (cfg_.arm_clock)
+            step_counter(); // mirrors the SPI path's arm clock
         for (size_t ch = 0; ch < total; ++ch)
         {
-            esp_rom_delay_us(1); // coarse settle; this path is bench-rig only
+            esp_rom_delay_us(1); // coarse settle; this path is diagnostic only
             out[ch] = sample_now(0);
             step_counter();
         }
         return ESP_OK;
 #else
-        reset_counter(); // no-op on production hardware
+        reset_counter(); // no-op when CS drives /MR
 
+        const size_t bits = frame_bytes() * 8;
         spi_transaction_t t{};
-        t.length = frame_bits();   // clocks generated
-        t.rxlength = frame_bits(); // bits captured on MISO
-        t.tx_buffer = nullptr;     // MOSI unused
+        t.length = bits;       // clocks generated (>= 17*N; surplus is harmless)
+        t.rxlength = bits;     // bits captured on MISO
+        t.tx_buffer = nullptr; // MOSI unused
         t.rx_buffer = rx_;
 
         const esp_err_t err = spi_device_transmit(spi_, &t);
@@ -240,11 +272,16 @@ namespace ooe::pinled
             return err;
         }
 
-        // MSB-first: sample 1 (line 0 of module 1) is the top bit of rx_[0].
-        for (size_t ch = 0; ch < total; ++ch)
+        // MSB-first. Every clocks_per_module()'th sample is an arm clock and
+        // carries no data; the sixteen after it are lines 0..15 of that module.
+        const size_t stride = clocks_per_module();
+        size_t ch = 0;
+        for (size_t i = 0; i < frame_bits() && ch < total; ++i)
         {
-            const bool bit = (rx_[ch / 8] >> (7 - (ch % 8))) & 1;
-            out[ch] = cfg_.active_low ? !bit : bit;
+            if (cfg_.arm_clock && i % stride == 0)
+                continue; // arm clock, carries no data
+            const bool bit = (rx_[i / 8] >> (7 - (i % 8))) & 1;
+            out[ch++] = cfg_.active_low ? !bit : bit;
         }
         return ESP_OK;
 #endif

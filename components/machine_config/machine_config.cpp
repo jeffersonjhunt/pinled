@@ -29,6 +29,16 @@ namespace ooe::pinled
         c.data_pin = static_cast<gpio_num_t>(CONFIG_PINLED_DATA_GPIO);
         c.spi_hz = CONFIG_PINLED_SPI_HZ;
         c.spi_mode = CONFIG_PINLED_SPI_MODE;
+#ifdef CONFIG_PINLED_MR_FROM_CS
+        c.mr_from_cs = true;
+#else
+        c.mr_from_cs = false;
+#endif
+#ifdef CONFIG_PINLED_ARM_CLOCK
+        c.arm_clock = true;
+#else
+        c.arm_clock = false;
+#endif
         c.led_pin = static_cast<gpio_num_t>(CONFIG_PINLED_LED_GPIO);
         c.num_modules = CONFIG_PINLED_NUM_MODULES;
         c.channels_per_module = CONFIG_PINLED_CHANNELS_PER_MODULE;
@@ -65,9 +75,11 @@ namespace ooe::pinled
         ESP_LOGI(TAG, "loaded defaults: %u module(s) x %u ch, %.0f Hz sample, %u Hz refresh",
                  (unsigned)out.num_modules, (unsigned)out.channels_per_module,
                  out.sample_rate_hz, (unsigned)out.refresh_hz);
-        ESP_LOGI(TAG, "  chain: SPI %d Hz mode %u, /MR %s",
+        ESP_LOGI(TAG, "  chain: SPI %d Hz mode %u, /MR %s, arm clock %s",
                  out.spi_hz, (unsigned)out.spi_mode,
-                 out.mr_pin == GPIO_NUM_NC ? "not fitted (idle-gap reset)" : "fitted");
+                 out.mr_pin == GPIO_NUM_NC ? "not fitted"
+                                           : (out.mr_from_cs ? "via SPI CS" : "via GPIO"),
+                 out.arm_clock ? "on" : "off");
         return ESP_OK;
     }
 

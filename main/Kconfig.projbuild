@@ -7,16 +7,15 @@ menu "pinled configuration"
             help
                 A0 on the QT Py ESP32-S3; IO18 on the S3-DevKitC-1.
         config PINLED_MR_GPIO
-            int "74x161 /MR reset GPIO (-1 = not fitted)"
-            default -1
+            int "/MR reset GPIO (-1 = not fitted)"
+            default 17
             range -1 48
             help
                 A1 on the QT Py ESP32-S3; IO17 on the S3-DevKitC-1.
 
-                Production modules have NO reset conductor: the chain resets on
-                a clock-idle timeout, so leave this at -1 and the pin stays
-                free. Set it only for a bench rig whose '161 has no activity
-                detector to clear it. See docs/CHAINING.md.
+                /MR is bussed to every module and asynchronously clears all
+                counters and both '109 latches. It is pin 5 of the 5-pin
+                harness. See docs/CHAINING.md.
         config PINLED_DATA_GPIO
             int "DATA_IN GPIO (shared by every module on the chain)"
             default 9
@@ -96,6 +95,36 @@ menu "pinled configuration"
                 NEITHER mode aligns -- every sample reads line[k+1] and line 0
                 is unreachable. Add an inverter in the CLK path to make such a
                 rig behave like production.
+
+        config PINLED_MR_FROM_CS
+            bool "Drive /MR from the SPI CS line"
+            default y
+            help
+                Wires /MR to the SPI peripheral's chip-select with positive
+                polarity, so it is LOW between transactions (clearing the
+                chain) and HIGH during (counting). The frame reset becomes
+                hardware-timed and cannot be forgotten or mistimed.
+
+                Turn off to drive /MR as a plain GPIO pulsed before each
+                frame -- useful on a rig where CS is not routed to the
+                counter's clear pin.
+
+        config PINLED_ARM_CLOCK
+            bool "Modules arm on their first clock (rev C hardware)"
+            default y
+            help
+                On rev C a module's ENP comes from its STARTED latch. Because
+                ENP is a synchronous enable, the first clock edge sets STARTED
+                while the counter samples the old 0 and stays put -- so the
+                module spends one clock arming and the next sixteen presenting
+                lines. That is what gives line 0 a full bit period.
+
+                A frame is therefore 17 clocks per module and every 17th sample
+                is discarded.
+
+                Turn OFF for a legacy bench rig whose '161 has ENP tied high:
+                there the first clock counts, so an arm clock would shift every
+                channel by one.
     endmenu
 
     menu "Timing"

@@ -36,15 +36,14 @@ it has scanned its own 16 lines, then becomes transparent:
 CLK_OUT = CLK_IN AND DONE
 ```
 
-so the clock itself is the token and the master simply issues 16·N pulses. All
+so the clock itself is the token and the master simply issues 17·N pulses. All
 modules share one `DATA` bus; exactly one 3-state mux drives it at any instant,
-arbitrated by an RC activity detector plus the DONE latch. Full protocol in
-`CHAINING.md`.
+arbitrated by a registered `STARTED` latch plus the `DONE` latch. A bussed
+`/MR` clears every counter and latch chain-wide. Full protocol in `CHAINING.md`.
 
-There is no `/MR` conductor. The frame reset is a **clock-idle timeout**: hold
-`CLK` low for ≥ 5τ and every activity detector discharges, async-clearing all
-counters and DONE latches. Any module count 1–8 is legal, including
-non-power-of-two configurations like 6 modules (96 channels).
+Each module spends its **first** received clock arming rather than counting
+(`ENP` = `STARTED`, sampled synchronously), so line 0 gets a full bit period
+before the master samples it. Hence 17 clocks per module, not 16.
 
 Two consequences the old cascaded-counter topology did not have:
 
@@ -55,46 +54,42 @@ Two consequences the old cascaded-counter topology did not have:
   that is ~100 ns across 8 modules against a 500 ns bit — 5× margin. With HC at
   3.3 V it is ~0.5 µs and the far end fails, *as a function of chain length*
   (HW-3).
-- **The chain has a stall tolerance.** ACT decays with τ; if clocking stops
-  mid-frame for longer than ~6 µs the whole chain resets. See §2.5.
+- **A dead module kills everything downstream**, because the clock stops there.
+  That is the price of using the clock as the token.
 
-### 2.2 Why SPI + DMA, not a CPU loop (FR-SCAN-7)
+Since rev C the chain holds **no analog state**. There is no minimum inter-frame
+gap beyond the `/MR` pulse, and no maximum mid-frame stall — a delayed frame is
+merely late, never corrupt.
 
-The chain holds its bus grant on a capacitor. `ACT` peaks at ~2.7 V (3.3 V less
-a diode drop) and an LVC Schmitt releases at `V_T-` ≈ 0.9 V, so with τ = 5.6 µs:
+### 2.2 Why SPI + DMA (FR-SCAN-7)
 
-```
-t_stall = τ · ln(2.7 / 0.9) ≈ 6.2 µs
-```
+In rev B this section argued correctness: the chain held its bus grant on a
+capacitor that released after ~6 µs, so a bit-banged loop on FreeRTOS could
+silently corrupt a frame. **Rev C removed that cliff** — arbitration is a
+flip-flop cleared by `/MR`, so a stall of any length is harmless.
 
-**A gap in clocking longer than ~6 µs mid-frame silently resets every counter
-and DONE latch in the chain.** On an S3 running FreeRTOS, a 6 µs stall from a
-cache miss on a flash read or a higher-priority ISR is routine, so a bit-banged
-loop — however fast its individual GPIO operations — is the wrong tool. The
-failure is also nasty: not a dropped frame, but a *plausible-looking* frame
-where the tail is re-read from module 1.
+SPI is now chosen for throughput and CPU cost rather than safety:
 
-SPI removes the question. A DMA transaction is gapless by construction:
+| | Bit-bang | SPI + DMA |
+|---|---|---|
+| 128 ch at 10 kHz | ~23% of a core | **6.4%** |
+| Max clock | ~1 MHz realistically | 2 MHz+, hardware-timed |
+| Pacing | needs a timer | transaction cadence *is* the pacing |
+| Jitter within a frame | present | none |
+
+Mapping:
 
 | SPI | Chain |
 |---|---|
 | `SCLK` | `CLK` |
 | `MISO` | `DATA` |
+| `CS` (positive polarity) | `/MR` |
 | Mode | 0 (`CPOL=0, CPHA=0`) |
 
-Mode 0 samples on the rising edge. Because the counter advances on the
-**falling** edge, that puts the sample in the middle of each line's data window
-rather than on its boundary — mode 1 would sample exactly on the counter
-transition. `CPOL=0` idles `SCLK` low between transactions, which *is* the frame
-reset. 16·N bits is always a whole number of bytes.
-
-This was measured, not assumed: on a rig clocking the '161 directly, both modes
-sampled after the counter advanced and shifted every channel by one. The
-Schmitt inversion in a real module is what creates the stable window.
-
-This deletes work rather than adding it: no `dedic_gpio` bundle to pin to a
-core, and no separate pacing timer, because the transaction cadence sets Fs
-directly (§2.5).
+Driving `/MR` from `CS` is the neat part: `CS` is inactive between transactions
+and active during, so inverting its polarity makes it low between frames
+(clearing) and high during (counting). The reset is hardware-timed, needs no
+software, and cannot be forgotten.
 
 **Gotcha:** the filament math below assumes the LX7 runs at **240 MHz**, and
 ESP-IDF's default for `esp32s3` is **160 MHz**, which inflates per-channel
@@ -103,7 +98,7 @@ integrator cost by 1.5×. `sdkconfig.defaults` must set
 the first S3 bring-up build and the boot log read `cpu freq: 160000000 Hz`;
 confirm it there rather than assuming it.
 
-### 2.3 Settle and the handoff
+### 2.3 Settle and the arm clock
 
 At 2 MHz a bit slot is 500 ns. Contributors inside one slot:
 
@@ -115,44 +110,38 @@ At 2 MHz a bit slot is 500 ns. Contributors inside one slot:
 | Accumulated chain skew, 8 modules | ~100 ns |
 | **Total worst case** | **~140 ns** |
 
-Comfortably inside 500 ns. The **module handoff needs no settle budget of its
-own**: module *k* releases `DATA` on the falling edge that wraps its counter and
-module *k+1* arms a half-period later, so the high-Z window sits *between*
-sample slots and is never sampled (FR-SCAN-10). This is why the old two-tier
-in-module/boundary settle model is gone.
+Comfortably inside 500 ns, and measured to hold well past it — see §4.3.
 
-Frame start is the one place worth measuring: `ACT` is charging during the first
-half-period, so line 0 of module 1 is the tightest sample in the frame. Charge τ
-is ~12 ns against a 250 ns half-period, so it should be clean — but confirm on
-the bench, and clock one dummy bit first if it is not.
+The **arm clock** removes what would otherwise be the tightest sample in the
+frame. Without it, a module's mux would enable on the same edge the master
+samples, so line 0 would be read while the '251 was still turning on. With
+`ENP = STARTED` the first clock only arms; line 0 is then driven for a full bit
+period and sampled mid-window like every other line. It costs one clock per
+module (17·N rather than 16·N) and removes an entire class of marginal timing.
 
 ### 2.4 Frame budget
 
-The scan is now pure hardware: 16·N SPI bits at 2 MHz, DMA-fed, zero CPU. The
-only CPU cost is the filament integrator (~50 ns/channel) plus per-transaction
-setup.
+The scan is pure hardware: 17·N bits at 2 MHz, rounded up to whole bytes,
+DMA-fed, zero CPU. The only CPU cost is unpacking plus the filament integrator
+(~50 ns/channel).
 
-| Ch | Mod | Bits | Scan @ 2 MHz | Idle (≥5τ) | Min frame | Max rate | CPU @ 10 kHz |
-|---|---|---|---|---|---|---|---|
-| 16 | 1 | 16 | 8 µs | 28 µs | 36 µs | 27 kHz | 0.8% |
-| 32 | 2 | 32 | 16 µs | 28 µs | 44 µs | 23 kHz | 1.6% |
-| 64 | 4 | 64 | 32 µs | 28 µs | 60 µs | 17 kHz | 3.2% |
-| 96 | 6 | 96 | 48 µs | 28 µs | 76 µs | 13 kHz | 4.8% |
-| 128 | 8 | 128 | 64 µs | 28 µs | 92 µs | **10.9 kHz** | **6.4%** |
+| Ch | Mod | Bits (17·N) | Clocked | Scan @ 2 MHz | Max rate | CPU @ 10 kHz |
+|---|---|---|---|---|---|---|
+| 16 | 1 | 17 | 24 | 12 µs | ~77 kHz | 0.8% |
+| 32 | 2 | 34 | 40 | 20 µs | ~48 kHz | 1.6% |
+| 64 | 4 | 68 | 72 | 36 µs | ~27 kHz | 3.2% |
+| 96 | 6 | 102 | 104 | 52 µs | ~19 kHz | 4.8% |
+| 128 | 8 | 136 | 136 | 68 µs | **~14.5 kHz** | **6.4%** |
 
-Two things changed versus the bit-banged model this table replaces. The 10 kHz
-target now *just* fits at 128 channels rather than sitting at 43 kHz of
-headroom — the binding constraint is the 5τ reset gap, not the scan. And CPU
-occupancy dropped from 23.5% to 6.4%, because the only work left on the core is
-the integrator.
+"Clocked" is bits rounded up to a byte boundary; surplus clocks are harmless
+because every module is finished and tri-stated by then.
 
-At a fixed 10 kHz (100 µs period) every configuration leaves an idle gap well
-above 5τ: 92 µs at one module, 36 µs at eight. The margin narrows as modules are
-added, which is exactly what FR-SCAN-9's boot check exists to catch.
+Rev C bought roughly 33% more headroom at the top of the range — the rev B
+figure was 10.9 kHz at 128 channels, limited by a 28 µs dead gap that no longer
+exists. The 10 kHz target now sits at 69% of maximum rather than 92%.
 
-> Scaling levers, in order of preference, if 128 channels at 10 kHz proves
-> tight: raise the SPI clock (skew allows ~3 MHz with LVC), or shrink τ (which
-> costs stall tolerance).
+There is no minimum inter-frame gap to respect, so unlike rev B a
+mis-configured rate cannot eat the reset.
 
 ### 2.5 Paced sampling (FR-SCAN-8)
 
@@ -171,34 +160,29 @@ Rationale:
   the filament model exists to kill.
 
 Mechanism: the SPI transaction cadence *is* the pacing. Queue one receive-only
-transaction per frame at Fs; the hardware clocks 16·N bits gaplessly and the
-gap between transactions supplies the ≥5τ reset. Jitter in *starting* a
-transaction is harmless — it lengthens the idle gap, which the chain does not
-care about, unlike jitter *within* a frame, which the chain cannot survive at
-all.
+transaction per frame at Fs; the hardware clocks 17·N bits and `CS` — wired as
+`/MR` — clears the chain between them.
 
-The one hard floor: the inter-transaction gap must never fall below 5τ (28 µs).
-At 10 kHz with 8 modules the gap is 36 µs, which is the tightest configuration
-in the range. FR-SCAN-9's boot check exists to verify this rather than assume
-it.
+Since rev C there is no floor on the inter-frame gap and no ceiling on
+mid-frame stall, so pacing jitter is a quality-of-measurement question rather
+than a correctness one. A late frame widens `dt` for one sample; the integrator
+absorbs it.
 
 ### 2.6 Boot feasibility check
 
 Config is not trusted. At startup:
 
-1. Compute `t_scan = 16·N / f_spi` and check `1/Fs − t_scan ≥ 5τ`. **Refuse to
-   start** if the configured rate leaves less than the reset gap — that is not a
-   degraded frame, it is a chain that never resets.
-2. Run ~256 frames and measure actual frame period, which also catches a
+1. Check `17·N ≤ MAX_BITS` and that the configured Fs leaves room for the burst:
+   `1/Fs ≥ 17·N/f_spi`. Clamp and log if not.
+2. Run ~256 frames and measure the actual frame period, which also catches a
    mis-specified `f_spi` or a driver that silently rounds the clock divider.
-3. Clamp the configured rate so both the 5τ gap and a 60% CPU ceiling hold; log
-   loudly if clamped.
+3. Clamp the configured rate so a 60% CPU ceiling holds; log loudly if clamped.
 4. Pass the **resulting** rate to `Filament::init()` and `Profiler::init()`, so
    the tau→coefficient math is derived from what the hardware actually does.
 
-Step 1 is new and is the important one: with the old `/MR` topology an
-over-ambitious rate merely ran late, but here it eats the reset gap and the
-chain stops clearing between frames.
+Rev B additionally had to refuse to start when the reset gap did not fit. That
+check is gone with the RC: there is no gap to protect, so an over-ambitious rate
+now simply gets clamped.
 
 ### 2.7 Consequence for the profiler
 
@@ -255,8 +239,8 @@ Estimated at full extension (8 modules, 800 mm) *(bench)*:
 | **Total** | **~150 pF** |
 
 With the 1 kΩ bus pull, τ ≈ 150 ns. That only governs how fast an *undriven*
-bus decays, which matters at frame start and after the last module finishes —
-never mid-frame, because the handoff window carries no sample.
+bus decays, which matters during arm clocks and after the last module finishes.
+Those samples are discarded, so it never gates a real reading.
 
 ### 4.2 Pull direction follows front-end polarity (HW-2)
 
@@ -441,19 +425,19 @@ wrong brightness:
 | Check | Action on failure |
 |---|---|
 | `num_modules × channels_per_module ≤ 128` | refuse to start |
-| `1/Fs − 16·N/f_spi ≥ 5τ` (reset gap fits) | **refuse to start** |
+| `1/Fs ≥ 17·N/f_spi` (burst fits in the period) | clamp Fs, log |
 | measured `t_frame` vs configured Fs | clamp Fs, log, use the clamped value for tau |
 | `t_led(led_count)` vs `refresh_hz` at 70% occupancy | clamp `refresh_hz`, log |
 | `led_count ≥ mapped channel count` | log unmapped channels |
 
 ## 7. To confirm on the bench
 
-1. **`ACT` fall time.** Scope `ACT` after the last clock edge; §2.2 predicts
-   ~6.2 µs. This single number sets both the minimum reset gap and the chain's
-   stall tolerance, so everything else depends on it.
-2. **First bit at frame start.** `ACT` is charging during the first half-period,
-   making line 0 of module 1 the tightest sample in the frame. If it is dirty,
-   clock one dummy bit and discard.
+1. **The arm clock does its job.** Confirm line 0 of each module is driven for
+   a full bit period and sampled mid-window, and that the arm sample itself is
+   discarded. This replaced the tightest timing in the rev B design, so it is
+   worth seeing on a scope once.
+2. **`/MR` reaches the far end.** With `CS` driving it, check the release-to-
+   first-edge margin (`cs_ena_pretrans`) at module 8 across 800 mm.
 3. **Accumulated clock skew.** Scope `CLK_OUT` at module 8 against `SCLK` at the
    master. §4.3 predicts ~100 ns with LVC; if it exceeds ~a third of a bit slot,
    drop the SPI clock.

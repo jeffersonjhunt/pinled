@@ -20,12 +20,11 @@ raised, and they take **increasing** ownership of the scan hardware.
 **the LED string does not update while either is active.** The log says so at
 startup.
 
-> **Both slow modes are bench-rig only.** A production module holds its bus
-> grant on an RC activity detector with τ ≈ 5.6 µs, so anything slower than
-> about a 1 MHz clock discharges it and resets the chain mid-frame. Stepping and
-> holding work only on hardware without the activity detector — which is exactly
-> the '161 + '151 breadboard rig described in §5. On a real chain the raw-frame
-> dump (`PINLED_SCAN_DEBUG`) is the diagnostic, and a scope is the escalation.
+> All four work on **production** hardware. Rev C removed the RC activity
+> detector in favour of a registered `STARTED` latch, so the chain holds no
+> analog state and can be clocked arbitrarily slowly or stopped outright. (Under
+> the rev B 4-wire design the two slow modes would have been bench-rig only —
+> stopping the clock there released the bus grant.)
 
 ## 1. `PINLED_SCAN_DEBUG` — is anything alive?
 
@@ -118,7 +117,8 @@ On a **chained** rig, add these:
 | Symptom | Cause |
 |---|---|
 | All channels beyond 16·k read 0 | module k+1 never asserts DONE, so the clock never forwards past it — everything downstream is dead, not just that module |
-| Frame tail duplicates the head | a mid-frame stall let `ACT` decay and the chain reset partway through; should be impossible with DMA |
+| Frame tail duplicates the head | chain reset partway through the frame — check `/MR` is not glitching mid-burst |
+| Every module's line 0 wrong, rest fine | the arm sample is not being discarded, or `ENP` is not wired to `STARTED` |
 | Far modules wrong, near modules fine, worse as modules are added | accumulated clock skew — HC parts, or the SPI clock is too fast (`TIMING.md` §4.3) |
 | First channel of module 1 unreliable | `ACT` still charging during the first half-period; clock one dummy bit and discard |
 | **Every channel off by one, perfectly stable** | chain clock above the ceiling. Past it the mux output has not propagated when the master samples, so `sample[k]` returns `line[k-1]` — stable and wrong, which reads as a mapping error rather than a timing one. Lower `PINLED_SPI_HZ`. |
@@ -150,8 +150,8 @@ Until the '251s arrive, a **74x151** works for a single module, with caveats:
   S3's `V_IH` (~2.48 V). Fit the bias when the tri-state parts go in.
 - **It cannot chain.** Push-pull outputs can't share a bus — that is the entire
   reason for the '251 (see the comparison table in `HARDWARE.md`). Module
-  chaining is untestable until the swap, and the rig also lacks the DONE latch,
-  gating and activity detector a real module carries (`CHAINING.md`).
+  chaining is untestable until the swap, and the rig also lacks the DONE and
+  STARTED latches and the clock gating a real module carries (`CHAINING.md`).
 - **Set `PINLED_CHANNELS_PER_MODULE=8`** for a single 8-input mux, otherwise
   channels 8–15 mirror 0–7 and light a second LED per input.
 - **Check the supply rail.** GPIO 9 is **not 5 V tolerant**. A '151 on 5 V
@@ -213,11 +213,10 @@ around a 74x151:
   channels 4–7 with no shift, confirming the sample lands mid-window and line 0
   is captured. Before the inverter, modes 0 and 1 both shifted by one — see §5.
 
-Outstanding, all dependent on rev B modules: `QD` bank select, the 1 kΩ bias at
+Outstanding, all dependent on rev C modules: `QD` bank select, the 1 kΩ bias at
 the master, module chaining, real lamp taps, and the chain-specific measurements
-in `TIMING.md` §7 — `ACT` fall time, accumulated clock skew, and first-bit
-validity at frame start.
+in `TIMING.md` §7 — the arm clock, `/MR` reach, and accumulated clock skew.
 
-Note the bench rig predates the chaining design: it has no DONE latch, no clock
-gating and no activity detector, so it exercises the counter, mux and polarity
-but nothing of the chaining protocol.
+Note the bench rig predates the chaining design: it has no DONE or STARTED
+latch and no clock gating, so it exercises the counter, mux, polarity and the
+SPI path but nothing of the chaining protocol itself.

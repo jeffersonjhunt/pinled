@@ -17,19 +17,21 @@ flowchart LR
     subgraph MOD["One module (×1..8 chained, identical)"]
       A["74LVC251 #A<br/>lines 0–7 (3-state Y)"]
       B["74LVC251 #B<br/>lines 8–15 (3-state Y)"]
-      C161["74LVC161 counter<br/>QA..QC addr, QD bank<br/>ENP = /DONE"]
-      FF["74LVC109 DONE latch<br/>J = RCO, K̄ = 1"]
-      ACT["activity detector<br/>D1 + 12kΩ/470pF<br/>τ ≈ 5.6 µs"]
+      C161["74LVC161 counter<br/>QA..QC addr, QD bank<br/>ENP = STARTED, ENT = /DONE"]
+      FF1["74LVC109 A: DONE<br/>J = RCO"]
+      FF2["74LVC109 B: STARTED<br/>J = 1"]
       GATE["74LVC10 NAND<br/>/E_A, /E_B, CLK_OUT"]
       LDO["3V3 LDO<br/>(local, from 5 V)"]
       C161 -- "QA..QC select" --> A
       C161 -- "QA..QC select" --> B
       C161 -- "QD → bank" --> GATE
-      C161 -- "RCO" --> FF
-      FF -- "DONE" --> GATE
-      ACT -- "ACT" --> GATE
-      ACT -- "async clear" --> C161
-      ACT -- "async clear" --> FF
+      C161 -- "RCO" --> FF1
+      FF1 -- "DONE" --> GATE
+      FF2 -- "STARTED" --> GATE
+      FF2 -- "STARTED → ENP" --> C161
+      MR["/MR (bussed)"] -- "async clear" --> C161
+      MR -- "async clear" --> FF1
+      MR -- "async clear" --> FF2
       GATE -- "/E_A (high-Z unless active)" --> A
       GATE -- "/E_B" --> B
     end
@@ -43,7 +45,8 @@ flowchart LR
     GATE -- "CLK_OUT = CLK_IN AND DONE" --> NEXT["next module (J2)"]
 
     subgraph ESP["ESP32-S3"]
-      SPI["SPI master + DMA<br/>mode 0, 2 MHz, 16·N bits"] -- "SCLK = CLK" --> C161
+      SPI["SPI master + DMA<br/>mode 0, 2 MHz, 17·N bits"] -- "SCLK = CLK" --> C161
+      SPI -- "CS (positive) = /MR" --> MR
       DATA -- "MISO" --> SPI
       SPI --> FIL["filament integrators"]
       FIL --> REN["render_task"]
@@ -57,15 +60,16 @@ flowchart LR
 | Signal | Direction | Scope | GPIO (QT Py ESP32-S3) |
 |---|---|---|---|
 | `CLK` (SPI `SCLK`) | out | chain input; forwarded module to module | 18 (A0) |
+| `/MR` (SPI `CS`, positive) | out | **shared bus (all modules)** | 17 (A1) |
 | `DATA` (SPI `MISO`) | in | **shared bus (all modules)** | 9 (A2) |
 | `LED` | out (RMT) | whole string | 8 (A3) |
 | status pixel | out (RMT) | onboard | 39 (power enable 38) |
 | profiler re-arm | in | onboard | 0 (BOOT button) |
 
-Per-module GPIO cost = **zero**, and the sense side now costs just **two** pins:
-`CLK` and `DATA`. GPIO 17, previously `/MR`, is free — the frame reset is a
-clock-idle timeout, so there is no reset conductor. A 64-lamp game (4 modules)
-and a 128-lamp game (8 modules) are the same pin budget.
+Per-module GPIO cost = **zero**; the sense side costs **three** pins regardless
+of chain length, and all three can come from one SPI peripheral (`SCLK`, `MISO`,
+and `CS` wired as `/MR`). A 64-lamp game (4 modules) and a 128-lamp game (8
+modules) are the same pin budget.
 
 > The POC pins (QT Py ESP32 Pico: 25/27/26/15) are **superseded and unusable
 > here** — GPIO 26 and 27 are SPI flash pins on the ESP32-S3, and 15 and 25 are
@@ -80,6 +84,7 @@ signals plus power land on the single header opposite `IO19`/`IO20`:
 | Signal | GPIO | QT Py label | DevKitC-1 (J1, counting from the antenna end) |
 |---|---|---|---|
 | `CLK` | 18 | `A0` | pin 11 |
+| `/MR` | 17 | `A1` | pin 10 |
 | `LED` | 8 | `A3` | pin 12 |
 | `DATA_IN` | 9 | `A2` | pin 15 |
 | `5V` | — | — | pin 21 |
@@ -123,20 +128,27 @@ above.
 ## '161 usage
 
 - Synchronous 4-bit binary counter, **asynchronous** active-low clear driven by
-  the activity detector (not by any external wire).
+  the bussed `/MR`.
 - Clocked on the **falling** edge of `CLK` (the incoming clock is Schmitt-
-  inverted), which is what keeps the handoff free of runt pulses.
+  inverted), which keeps the handoff free of runt pulses and puts the counter
+  transition half a period from the master's sampling edge.
 - `QA..QC` → both '251 select inputs.
 - `QD` → bank select, gated into `/E_A` / `/E_B` rather than driving them directly.
-- `ENT` tied high; **`ENP` = `/DONE`**, so the counter parks at 0 after its wrap
-  instead of running a second lap.
+- **The two count enables do two different jobs**, which is what avoids needing
+  an extra gate:
+  - `ENP` = `STARTED` — do not count until this module's turn begins. Because
+    `ENP` is *synchronous*, the first clock edge sets `STARTED` while the
+    counter still samples the old `0` and stays put. That is the arm clock, and
+    it is what gives line 0 a full bit period.
+  - `ENT` = `/DONE` — stop counting after the wrap. It also gates `RCO`, which
+    is harmless since `DONE` is already latched by then.
 - `/LOAD` tied high, load inputs grounded (no parallel load).
 - `RCO` goes only to the DONE latch's `J` input — never to a clock or an async
   control. See `CHAINING.md` for why that distinction matters.
 
 ## Chaining modules
 
-Modules chain on a **4-pin JST-SH harness in ~100 mm hops**, up to 8 modules /
+Modules chain on a **5-pin JST-SH harness in ~100 mm hops**, up to 8 modules /
 800 mm (HW-4). Full protocol in [`CHAINING.md`](CHAINING.md).
 
 | Pin | Signal |
@@ -145,9 +157,10 @@ Modules chain on a **4-pin JST-SH harness in ~100 mm hops**, up to 8 modules /
 | 2 | `GND` |
 | 3 | `DATA` |
 | 4 | `CLK` |
+| 5 | `/MR` |
 
-**There is no reset conductor and no addressing.** Modules are identical and
-interchangeable; nothing is strapped, jumpered, or configured per module.
+**No addressing.** Modules are identical and interchangeable; nothing is
+strapped, jumpered, or configured per module.
 
 Each module forwards the clock only once it has finished its own 16 lines:
 
@@ -156,25 +169,24 @@ CLK_OUT = CLK_IN AND DONE
 ```
 
 so a module that is still counting starves everything downstream, and the act of
-receiving a clock *is* the grant. The master issues 16xN clocks and every line
-appears on `DATA` exactly once, in order. A `/MR` wire is unnecessary because the
-frame reset is a **clock-idle timeout**: hold `CLK` low for >= 5*tau and the
-per-module RC activity detectors discharge, async-clearing every counter and DONE
-latch. That also makes a glitched frame self-healing.
+receiving a clock *is* the grant. A module spends its **first** clock arming
+(`ENP` = `STARTED`) and the next sixteen presenting lines, so the master issues
+17·N clocks and discards every 17th sample.
+
+`/MR` is bussed to every module and asynchronously clears all counters and both
+'109 latches. Driving it from the SPI `CS` line with positive polarity makes the
+frame reset hardware-timed.
 
 Firmware-visible consequences:
 
-- **Only `N` is configured.** No IDs to get wrong, so the missing-ID and
-  duplicate-ID faults of the old scheme are gone.
+- **Only `N` is configured.** No IDs to get wrong.
 - **A module that never asserts DONE kills everything downstream**, because the
-  clock stops there. This is a regression against the old scheme, where a bad
-  module cost only its own 16 channels. A chain returning all-zeros beyond
-  channel 16k is the diagnostic signature.
+  clock stops there. A chain returning all-zeros beyond channel 16k is the
+  diagnostic signature.
 - **Physical order is electrical order** — module 1 is whichever is nearest the
   master. Reordering the harness renumbers the channels.
-- **The chain cannot be single-stepped.** Bus grant is held on an RC, so slow
-  clocking discharges it. The slow-step and hold-channel bring-up modes are
-  valid only on a bench rig without the activity detector (see `BRINGUP.md`).
+- **The chain can be single-stepped.** Since rev C there is no analog state, so
+  the slow-step and hold-channel bring-up modes work on production hardware.
 
 ## Shared `DATA` bus
 
@@ -206,7 +218,7 @@ arms, and after the last one finishes.
      the master's sample slot and fails as a function of chain length. LVC's
      ~5–6.5 ns per gate keeps the whole chain inside ~100 ns.
 - **~100 Ω series termination on `CLK_OUT` at each module's source** (HW-5) —
-  a single ground return next to a fast clock in a 4-conductor harness.
+  a single ground return next to a fast clock in a 5-conductor harness.
 - **Local decoupling is mandatory** (HW-5): 100 nF per IC + ~10 µF bulk per
   module. 800 mm of thin wire is ~0.5–0.8 µH of loop inductance; a '251 slamming
   150 pF cannot source that transient down the harness.
