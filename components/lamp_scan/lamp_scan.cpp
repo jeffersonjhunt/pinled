@@ -265,10 +265,14 @@ namespace ooe::pinled
         t.tx_buffer = nullptr; // MOSI unused
         t.rx_buffer = rx_;
 
-        const esp_err_t err = spi_device_transmit(spi_, &t);
+        // Polling rather than interrupt-driven: the block-and-wake round trip
+        // costs ~37 us per transaction, which dwarfs the burst itself and does
+        // not fit a 100 us period at 128 channels. Polling busy-waits, so it
+        // trades CPU for latency -- see docs/TIMING.md section 2.4.
+        const esp_err_t err = spi_device_polling_transmit(spi_, &t);
         if (err != ESP_OK)
         {
-            ESP_LOGE(TAG, "spi_device_transmit: %s", esp_err_to_name(err));
+            ESP_LOGE(TAG, "spi_device_polling_transmit: %s", esp_err_to_name(err));
             return err;
         }
 

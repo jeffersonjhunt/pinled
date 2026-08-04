@@ -119,29 +119,51 @@ samples, so line 0 would be read while the '251 was still turning on. With
 period and sampled mid-window like every other line. It costs one clock per
 module (17·N rather than 16·N) and removes an entire class of marginal timing.
 
-### 2.4 Frame budget
+### 2.4 Frame budget *(measured)*
 
-The scan is pure hardware: 17·N bits at 2 MHz, rounded up to whole bytes,
-DMA-fed, zero CPU. The only CPU cost is unpacking plus the filament integrator
-(~50 ns/channel).
+A frame costs a **fixed ~17 µs of transaction overhead** plus the burst itself:
 
-| Ch | Mod | Bits (17·N) | Clocked | Scan @ 2 MHz | Max rate | CPU @ 10 kHz |
-|---|---|---|---|---|---|---|
-| 16 | 1 | 17 | 24 | 12 µs | ~77 kHz | 0.8% |
-| 32 | 2 | 34 | 40 | 20 µs | ~48 kHz | 1.6% |
-| 64 | 4 | 68 | 72 | 36 µs | ~27 kHz | 3.2% |
-| 96 | 6 | 102 | 104 | 52 µs | ~19 kHz | 4.8% |
-| 128 | 8 | 136 | 136 | 68 µs | **~14.5 kHz** | **6.4%** |
+```
+t_frame  ≈  17 µs  +  bits / f_spi
+bits      =  ceil(17·N / 8) · 8  +  4      (byte-rounded, plus CS pre/post)
+```
 
-"Clocked" is bits rounded up to a byte boundary; surplus clocks are harmless
-because every module is finished and tri-stated by then.
+The 17 µs was measured on hardware at three clock rates, and is essentially
+independent of `f_spi`:
 
-Rev C bought roughly 33% more headroom at the top of the range — the rev B
-figure was 10.9 kHz at 128 channels, limited by a 28 µs dead gap that no longer
-exists. The 10 kHz target now sits at 69% of maximum rather than 92%.
+| `f_spi` | Bits | Burst | Measured frame | Implied overhead |
+|---|---|---|---|---|
+| 1 MHz | 12 | 12 µs | 30.0 µs | 18 µs |
+| 2 MHz | 12 | 6 µs | 23.3 µs | 17.3 µs |
+| 8 MHz | 12 | 1.5 µs | 18.2 µs | 16.7 µs |
 
-There is no minimum inter-frame gap to respect, so unlike rev B a
-mis-configured rate cannot eat the reset.
+> **This corrects an earlier version of this section**, which counted only burst
+> time and claimed 6.4% CPU at 128 channels. That was wrong twice: it ignored
+> per-transaction overhead entirely, and it assumed the CPU was free during the
+> burst. The driver uses `spi_device_polling_transmit`, so the CPU is busy for
+> the whole frame — interrupt-driven transmit frees it but costs ~37 µs of
+> overhead instead of ~17 µs, which does not fit the target at 128 channels.
+> The boot check (§2.6) exists precisely because this kind of estimate is
+> unreliable; it caught this.
+
+At the **4 MHz** default:
+
+| Ch | Mod | Bits | Burst | Frame | Free-run | Fs at 60% | CPU @ 10 kHz |
+|---|---|---|---|---|---|---|---|
+| 16 | 1 | 28 | 7 µs | 24 µs | 42 kHz | 25 kHz | 24% |
+| 32 | 2 | 44 | 11 µs | 28 µs | 36 kHz | 21 kHz | 28% |
+| 64 | 4 | 76 | 19 µs | 36 µs | 28 kHz | 17 kHz | 36% |
+| 96 | 6 | 108 | 27 µs | 44 µs | 23 kHz | 14 kHz | 44% |
+| 128 | 8 | 140 | 35 µs | 52 µs | 19 kHz | **11.5 kHz** | **52%** |
+
+10 kHz is met across the whole range, but with far less margin than the old
+model implied — 52% of core 1 at full extension, not 6.4%. `scan_task` is
+pinned to core 1 and `render_task` to core 0, so that is affordable, but it is
+the number to watch if anything else ever wants core 1.
+
+Raising `f_spi` buys frame time cheaply (the burst shrinks, the 17 µs does not),
+bounded by chain skew — see §4.3. Dropping to interrupt-driven transmit trades
+CPU for wall-clock in the wrong direction for this workload.
 
 ### 2.5 Paced sampling (FR-SCAN-8)
 

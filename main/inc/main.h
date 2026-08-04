@@ -21,6 +21,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "driver/gptimer.h"
+
 #include "lamp_scan.h"
 #include "filament.h"
 #include "profiler.h"
@@ -43,6 +45,17 @@ namespace ooe::pinled
         void version();
         esp_err_t start_tasks();
         void profile_boot(); ///< run the boot-time auto-profiler pass
+
+        /// FR-SCAN-9: measure what the scan hardware actually sustains and
+        /// clamp the configured sample rate to it. The clamped value becomes
+        /// the authoritative Fs for every downstream time constant.
+        esp_err_t measure_and_clamp_fs();
+
+        /// FR-LED-8: clamp `refresh_hz` to what the strip length allows.
+        void clamp_refresh();
+
+        /// FR-SCAN-8: start the gptimer that paces one frame per tick.
+        esp_err_t start_pacing();
 
         static void scan_task(void *arg);
         static void render_task(void *arg);
@@ -88,5 +101,10 @@ namespace ooe::pinled
 
         TaskHandle_t scan_task_{nullptr};
         TaskHandle_t render_task_{nullptr};
+
+        gptimer_handle_t sample_timer_{nullptr};
+        float fs_actual_{0.0f};      ///< Fs after the boot clamp; the real one
+        uint32_t overruns_{0};       ///< frames the scan task failed to keep up with
+        uint32_t overrun_logged_{0}; ///< rate-limits the overrun warning
     };
 } // namespace ooe::pinled

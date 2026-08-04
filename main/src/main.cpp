@@ -11,6 +11,8 @@
 #include <new>
 
 #include "esp_rom_sys.h"
+#include "esp_check.h"
+#include "esp_timer.h"
 
 namespace ooe::pinled
 {
@@ -60,30 +62,38 @@ namespace ooe::pinled
         sc.active_low = cfg_.active_low;
         ESP_ERROR_CHECK(scan_.init(sc));
 
-        // 3. Filament bank.
-        ESP_ERROR_CHECK(filament_.init(num_channels_, cfg_.sample_rate_hz));
+        // 3. Boot feasibility check (FR-SCAN-9). Config is not trusted: measure
+        //    what the hardware actually does and derive Fs from that, so every
+        //    downstream tau is computed against reality.
+        ESP_ERROR_CHECK(measure_and_clamp_fs());
+
+        // 4. Filament bank, seeded with the MEASURED rate, not the configured one.
+        ESP_ERROR_CHECK(filament_.init(num_channels_, fs_actual_));
         filament_.set_gamma(cfg_.gamma);
         FilamentParams fp{};
         fp.attack_ms = cfg_.attack_ms;
         fp.decay_ms = cfg_.decay_ms;
         ESP_ERROR_CHECK(filament_.set_params_all(fp));
 
-        // 4. Profiler (used at boot, then idle).
-        ESP_ERROR_CHECK(profiler_.init(num_channels_, cfg_.sample_rate_hz));
+        // 5. Profiler (used at boot, then idle).
+        ESP_ERROR_CHECK(profiler_.init(num_channels_, fs_actual_));
 
-        // 5. LED map + string.
+        // 6. LED map + string.
         LampMapConfig mc{};
         mc.led_pin = cfg_.led_pin;
         mc.led_count = cfg_.led_count;
         mc.channel_count = num_channels_;
         ESP_ERROR_CHECK(map_.init(mc));
+        clamp_refresh(); // FR-LED-8
 
-        // 6. Boot-time auto-profiling pass.
+        // 7. Boot-time auto-profiling pass.
         profile_boot();
 
         ESP_ERROR_CHECK(start_tasks());
-        ESP_LOGI(TAG, "Initializing complete. %u channels, %u LEDs.",
-                 (unsigned)num_channels_, (unsigned)cfg_.led_count);
+        ESP_ERROR_CHECK(start_pacing());
+        ESP_LOGI(TAG, "Initializing complete. %u channels, %u LEDs, Fs %.0f Hz, %u Hz refresh.",
+                 (unsigned)num_channels_, (unsigned)cfg_.led_count,
+                 fs_actual_, (unsigned)cfg_.refresh_hz);
         return ESP_OK;
     }
 
@@ -117,6 +127,107 @@ namespace ooe::pinled
         }
     }
 
+    esp_err_t Main::measure_and_clamp_fs()
+    {
+        // Free-run the scan and time it. The measurement catches everything the
+        // arithmetic would miss: a clock divider that rounded, a slower chain
+        // than configured, a driver overhead we did not predict.
+        bool frame[LampScan::MAX_CHANNELS];
+        constexpr int kWarm = 16;
+        constexpr int kMeasure = 256;
+
+        for (int i = 0; i < kWarm; ++i)
+            scan_.read_frame(frame, num_channels_);
+
+        const int64_t t0 = esp_timer_get_time();
+        for (int i = 0; i < kMeasure; ++i)
+        {
+            if (scan_.read_frame(frame, num_channels_) != ESP_OK)
+            {
+                ESP_LOGE(TAG, "scan failed during feasibility measurement");
+                return ESP_FAIL;
+            }
+        }
+        const float t_frame_us = static_cast<float>(esp_timer_get_time() - t0) / kMeasure;
+        if (t_frame_us <= 0.0f)
+            return ESP_FAIL;
+
+        const float fs_free = 1e6f / t_frame_us;
+        // 60% ceiling leaves room for the integrator, the renderer and interrupts.
+        const float fs_max = fs_free * 0.60f;
+
+        fs_actual_ = cfg_.sample_rate_hz;
+        if (fs_actual_ > fs_max)
+        {
+            ESP_LOGW(TAG, "configured Fs %.0f Hz is not sustainable; clamping to %.0f Hz",
+                     cfg_.sample_rate_hz, fs_max);
+            fs_actual_ = fs_max;
+        }
+        if (fs_actual_ < 1.0f)
+        {
+            ESP_LOGE(TAG, "measured frame time %.1f us leaves no usable sample rate", t_frame_us);
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        ESP_LOGI(TAG, "frame %.1f us measured -> free-run %.0f Hz, Fs %.0f Hz (%.0f%% duty)",
+                 t_frame_us, fs_free, fs_actual_, 100.0f * fs_actual_ / fs_free);
+        return ESP_OK;
+    }
+
+    void Main::clamp_refresh()
+    {
+        const uint32_t max_hz = map_.max_refresh_hz();
+        if (max_hz == 0)
+            return;
+        // 70% ceiling: the strip transmit must not monopolize the RMT/I2S path.
+        const uint32_t cap = static_cast<uint32_t>(max_hz * 0.70f);
+        if (cfg_.refresh_hz > cap)
+        {
+            ESP_LOGW(TAG, "refresh %u Hz exceeds what %u LEDs allow; clamping to %u Hz",
+                     (unsigned)cfg_.refresh_hz, (unsigned)cfg_.led_count, (unsigned)cap);
+            cfg_.refresh_hz = cap;
+        }
+    }
+
+    // Paces one frame per alarm. Uniform dt is what the filament integrator
+    // assumes, so this is a fixed tick rather than a burst-then-sleep scheme.
+    static bool IRAM_ATTR on_sample_alarm(gptimer_handle_t, const gptimer_alarm_event_data_t *,
+                                          void *arg)
+    {
+        BaseType_t hpw = pdFALSE;
+        vTaskNotifyGiveFromISR(static_cast<TaskHandle_t>(arg), &hpw);
+        return hpw == pdTRUE;
+    }
+
+    esp_err_t Main::start_pacing()
+    {
+        if (scan_task_ == nullptr)
+            return ESP_OK; // a bring-up mode owns the scan hardware
+
+        gptimer_config_t tc{};
+        tc.clk_src = GPTIMER_CLK_SRC_DEFAULT;
+        tc.direction = GPTIMER_COUNT_UP;
+        tc.resolution_hz = 1000000; // 1 us tick
+        ESP_RETURN_ON_ERROR(gptimer_new_timer(&tc, &sample_timer_), TAG, "gptimer_new_timer");
+
+        gptimer_event_callbacks_t cbs{};
+        cbs.on_alarm = on_sample_alarm;
+        ESP_RETURN_ON_ERROR(gptimer_register_event_callbacks(sample_timer_, &cbs, scan_task_),
+                            TAG, "gptimer callbacks");
+
+        gptimer_alarm_config_t ac{};
+        ac.alarm_count = static_cast<uint64_t>(1e6f / fs_actual_);
+        ac.reload_count = 0;
+        ac.flags.auto_reload_on_alarm = true;
+        ESP_RETURN_ON_ERROR(gptimer_set_alarm_action(sample_timer_, &ac), TAG, "gptimer alarm");
+        ESP_RETURN_ON_ERROR(gptimer_enable(sample_timer_), TAG, "gptimer_enable");
+        ESP_RETURN_ON_ERROR(gptimer_start(sample_timer_), TAG, "gptimer_start");
+
+        ESP_LOGI(TAG, "pacing at %.0f Hz (%llu us period)", fs_actual_,
+                 (unsigned long long)ac.alarm_count);
+        return ESP_OK;
+    }
+
     esp_err_t Main::start_tasks()
     {
 #if CONFIG_PINLED_SCAN_STEP_MS > 0 || CONFIG_PINLED_SCAN_HOLD_CH >= 0 || defined(CONFIG_PINLED_SPI_SWEEP)
@@ -140,10 +251,28 @@ namespace ooe::pinled
     {
         Main *self = static_cast<Main *>(arg);
         bool frame[LampScan::MAX_CHANNELS];
-        uint32_t ticks = 0;
 
         for (;;)
         {
+            // One frame per pacing tick (FR-SCAN-8). The take clears the count,
+            // so a value above 1 means alarms fired while we were still busy --
+            // i.e. we are not keeping up.
+            const uint32_t pending = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
+            if (pending == 0)
+            {
+                ESP_LOGW(TAG, "no pacing tick for 1 s");
+                continue;
+            }
+            if (pending > 1)
+            {
+                self->overruns_ += pending - 1;
+                if (self->overruns_ >= self->overrun_logged_ + 1000)
+                {
+                    self->overrun_logged_ = self->overruns_;
+                    ESP_LOGW(TAG, "scan overrun: %u frames missed", (unsigned)self->overruns_);
+                }
+            }
+
             if (self->scan_.read_frame(frame, self->num_channels_) == ESP_OK)
             {
                 for (size_t ch = 0; ch < self->num_channels_; ++ch)
@@ -158,11 +287,6 @@ namespace ooe::pinled
                 }
 #endif
             }
-
-            // Keep the task WDT fed during bring-up. Replace with a hardware
-            // timer / dedic_gpio pacing loop to hit an exact sample rate.
-            if ((++ticks & 0x3F) == 0)
-                vTaskDelay(1);
         }
     }
 

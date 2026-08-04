@@ -64,12 +64,17 @@ menu "pinled configuration"
     menu "Chain clock (SPI)"
         config PINLED_SPI_HZ
             int "Chain clock rate (Hz)"
-            default 2000000
+            default 4000000
             range 100000 10000000
             help
-                SCLK rate for the scan burst. 2 MHz gives a 500 ns bit slot,
+                SCLK rate for the scan burst. 4 MHz gives a 250 ns bit slot,
                 against ~100 ns of accumulated clock skew across 8 LVC modules
                 (docs/TIMING.md section 4.3).
+
+                4 MHz rather than 2 because a frame carries ~17 us of fixed
+                transaction overhead on top of the burst (measured). At 2 MHz
+                a 128-channel frame is 87 us, which the boot check clamps to
+                below the 10 kHz target; at 4 MHz it is 52 us and fits.
 
                 Raising this shortens the frame and buys idle-gap margin;
                 lowering it is the first thing to try if far modules read wrong
@@ -130,7 +135,15 @@ menu "pinled configuration"
     menu "Timing"
         config PINLED_SAMPLE_RATE_HZ
             int "Per-channel raw sample rate (Hz)"
-            default 2000
+            default 10000
+            help
+                Target rate, paced by a hardware timer so dt is uniform --
+                which is what the filament integrator assumes.
+
+                This is a request, not a promise: at boot the driver measures
+                what the scan hardware actually sustains and clamps to 60% of
+                the free-run ceiling. The clamped value is what every time
+                constant is derived from. See docs/TIMING.md section 2.6.
         config PINLED_REFRESH_HZ
             int "LED frame rate (Hz)"
             range 30 240
