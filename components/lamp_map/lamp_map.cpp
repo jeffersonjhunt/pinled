@@ -35,6 +35,14 @@ namespace ooe::pinled
         if (!map_)
             return ESP_ERR_NO_MEM;
 
+        // Allocated once here, never in the render path (NFR-4).
+        frame_ = new (std::nothrow) tNeopixel[cfg_.led_count];
+        if (!frame_)
+        {
+            deinit();
+            return ESP_ERR_NO_MEM;
+        }
+
         tNeopixelContext ctx = neopixel_Init(cfg_.led_count, cfg_.led_pin);
         if (ctx == nullptr)
         {
@@ -47,8 +55,10 @@ namespace ooe::pinled
 
         set_default_mapping();
         initialized_ = true;
-        ESP_LOGI(TAG, "init: %u LEDs on GPIO %d, %u channels",
+        ESP_LOGI(TAG, "init: %u LEDs on GPIO %d, %u channels, 1 transmit/frame",
                  (unsigned)cfg_.led_count, (int)cfg_.led_pin, (unsigned)cfg_.channel_count);
+        ESP_LOGI(TAG, "  strip supports up to %u Hz refresh",
+                 (unsigned)max_refresh_hz());
         return ESP_OK;
     }
 
@@ -61,6 +71,8 @@ namespace ooe::pinled
         }
         delete[] map_;
         map_ = nullptr;
+        delete[] static_cast<tNeopixel *>(frame_);
+        frame_ = nullptr;
         initialized_ = false;
     }
 
@@ -84,6 +96,13 @@ namespace ooe::pinled
         return ESP_OK;
     }
 
+    uint32_t LampMap::max_refresh_hz() const
+    {
+        if (!initialized_)
+            return 0;
+        return neopixel_GetRefreshRate(static_cast<tNeopixelContext>(neopixel_));
+    }
+
     esp_err_t LampMap::render(const uint8_t *levels, size_t n)
     {
         if (!initialized_)
@@ -91,20 +110,31 @@ namespace ooe::pinled
         if (!levels)
             return ESP_ERR_INVALID_ARG;
 
-        const size_t count = n < cfg_.channel_count ? n : cfg_.channel_count;
+        tNeopixel *frame = static_cast<tNeopixel *>(frame_);
 
-        // Build the frame. One pixel per mapped channel; unmapped channels skip.
+        // Build the whole strip, dark by default, so an LED with no channel
+        // mapped to it is driven off rather than left showing whatever it had.
+        for (size_t i = 0; i < cfg_.led_count; ++i)
+        {
+            frame[i].index = static_cast<uint32_t>(i);
+            frame[i].rgb = 0;
+        }
+
+        const size_t count = n < cfg_.channel_count ? n : cfg_.channel_count;
         for (size_t ch = 0; ch < count; ++ch)
         {
             const LampMapEntry &e = map_[ch];
             if (e.led_index < 0 || static_cast<size_t>(e.led_index) >= cfg_.led_count)
                 continue;
             const uint8_t v = levels[ch];
-            tNeopixel px{
-                static_cast<uint32_t>(e.led_index),
-                NP_RGB(scale8(e.r, v), scale8(e.g, v), scale8(e.b, v))};
-            neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_), &px, 1);
+            frame[e.led_index].rgb = NP_RGB(scale8(e.r, v), scale8(e.g, v), scale8(e.b, v));
         }
-        return ESP_OK;
+
+        // ONE transmit per refresh (FR-LED-6). The driver drops SetPixel calls
+        // spaced closer than a strip time, so the old per-channel loop was
+        // discarding most of its own updates, not merely wasting time.
+        const bool ok = neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_),
+                                          frame, static_cast<uint32_t>(cfg_.led_count));
+        return ok ? ESP_OK : ESP_FAIL;
     }
 } // namespace ooe::pinled
