@@ -52,11 +52,10 @@ namespace ooe::pinled
         LampScanConfig sc{};
         sc.clk_pin = cfg_.clk_pin;
         sc.data_pin = cfg_.data_pin;
-        sc.mr_pin = cfg_.mr_pin;
+        sc.pl_pin = cfg_.pl_pin;
         sc.spi_hz = cfg_.spi_hz;
         sc.spi_mode = cfg_.spi_mode;
-        sc.mr_from_cs = cfg_.mr_from_cs;
-        sc.arm_clock = cfg_.arm_clock;
+        sc.pl_from_cs = cfg_.pl_from_cs;
         sc.num_modules = cfg_.num_modules;
         sc.channels_per_module = cfg_.channels_per_module;
         sc.active_low = cfg_.active_low;
@@ -402,19 +401,69 @@ namespace ooe::pinled
     }
 #endif
 
+#if CONFIG_PINLED_SCAN_HOLD_CH >= 0 || CONFIG_PINLED_SCAN_STEP_MS > 0
+    // Where a global channel index physically lands. A '165 presents input H
+    // first and shifts H,G,F,E,D,C,B,A, so channel 0 is wired to H -- and U1
+    // (channels 0..7) sits at the head of each module's pair. Pin numbers are
+    // from docs/BRINGUP.md §5 and are still unverified against a datasheet.
+    struct ChannelSite
+    {
+        unsigned module;
+        char chip;     ///< '1' for U1 (ch 0..7), '2' for U2 (ch 8..15)
+        char input;    ///< A..H
+        unsigned pin;  ///< DIP/SOIC pin number of that input
+        unsigned local; ///< channel index within the module
+    };
+
+    static ChannelSite channel_site(unsigned ch, size_t channels_per_module)
+    {
+        static const char kOrder[] = "HGFEDCBA";
+        static const unsigned kPins[] = {6, 5, 4, 3, 14, 13, 12, 11};
+        const unsigned cpm = (unsigned)channels_per_module;
+        const unsigned local = ch % cpm;
+        return {ch / cpm, local < 8 ? '1' : '2', kOrder[local % 8],
+                kPins[local % 8], local};
+    }
+#endif
+
 #if CONFIG_PINLED_SCAN_HOLD_CH >= 0
     void Main::hold_channel()
     {
         const unsigned ch = CONFIG_PINLED_SCAN_HOLD_CH;
+        if (ch >= num_channels_)
+        {
+            ESP_LOGE(TAG, "hold channel %u is past the configured %u channels",
+                     ch, (unsigned)num_channels_);
+            for (;;)
+                vTaskDelay(pdMS_TO_TICKS(1000));
+        }
 
-        scan_.reset_counter();
-        for (unsigned i = 0; i < ch; ++i)
-            scan_.step_counter();
+        const ChannelSite s = channel_site(ch, cfg_.channels_per_module);
 
-        ESP_LOGI(TAG, "counter parked on channel %u; Q3..Q0 = %u%u%u%u, '151 C/B/A = %u%u%u",
-                 ch, (ch >> 3) & 1, (ch >> 2) & 1, (ch >> 1) & 1, ch & 1,
-                 (ch >> 2) & 1, (ch >> 1) & 1, ch & 1);
-        ESP_LOGI(TAG, "address lines are now static -- measure D%u -> Y -> MCU DATA pin", ch);
+        if (ch == 0)
+        {
+            // FR-DIAG-3's useful special case: hold /PL low and the registers
+            // stay transparent, so DATA tracks channel 0 continuously and a
+            // meter follows the button in real time. Freezing a snapshot of
+            // channel 0 would work too, and would tell you strictly less.
+            scan_.hold_transparent();
+            ESP_LOGI(TAG, "/PL held LOW: registers transparent, DATA tracks module 0 "
+                          "ch 0 (U1 input H, pin %u) LIVE -- press the button and watch",
+                     s.pin);
+        }
+        else
+        {
+            scan_.reload_chain();
+            for (unsigned i = 0; i < ch; ++i)
+                scan_.step_clock();
+            ESP_LOGI(TAG, "chain parked on channel %u (module %u, U%c input %c, pin %u); "
+                          "%u clocks issued",
+                     ch, s.module, s.chip, s.input, s.pin, ch);
+            ESP_LOGI(TAG, "DATA is now a static level -- trace input pin %u -> U1 QH "
+                          "(pin 9) -> after R2 -> the MCU DATA pin; the first node that "
+                          "stops tracking is the fault",
+                     s.pin);
+        }
 
         for (;;)
         {
@@ -427,25 +476,33 @@ namespace ooe::pinled
 #if CONFIG_PINLED_SCAN_STEP_MS > 0
     void Main::step_walk()
     {
-        ESP_LOGI(TAG, "slow-step scan: %d ms/channel, %u channels",
+        ESP_LOGI(TAG, "slow-step scan: %d ms/bit, %u channels",
                  CONFIG_PINLED_SCAN_STEP_MS, (unsigned)num_channels_);
-        ESP_LOGI(TAG, "watch the '161 Q outputs; 'expect' is the count they should show");
+        ESP_LOGI(TAG, "DATA is the only observable -- rev D has no counter to scope, "
+                      "so the log names the pin each bit came from");
 
         for (;;)
         {
-            scan_.reset_counter();
-            ESP_LOGI(TAG, "--- /MR pulsed, counter should now read 0000 ---");
+            ESP_LOGI(TAG, "--- pass start: /PL re-asserted before every step ---");
 
             for (size_t ch = 0; ch < num_channels_; ++ch)
             {
                 vTaskDelay(pdMS_TO_TICKS(CONFIG_PINLED_SCAN_STEP_MS));
-                const bool v = scan_.sample_now(0);
-                ESP_LOGI(TAG, "count %2u  expect Q3..Q0 = %u%u%u%u  DATA=%d",
-                         (unsigned)ch,
-                         (unsigned)((ch >> 3) & 1), (unsigned)((ch >> 2) & 1),
-                         (unsigned)((ch >> 1) & 1), (unsigned)(ch & 1),
-                         v ? 1 : 0);
-                scan_.step_counter();
+
+                // FR-DIAG-2: take a fresh snapshot and re-advance to bit ch
+                // rather than walking one frozen frame, so an input toggled
+                // part-way through the pass is still visible. The chain has no
+                // addressing, so re-advancing means clocking from the head
+                // every time -- free at 250 ms per step.
+                scan_.reload_chain();
+                for (size_t i = 0; i < ch; ++i)
+                    scan_.step_clock();
+                esp_rom_delay_us(1);
+
+                const ChannelSite s = channel_site((unsigned)ch, cfg_.channels_per_module);
+                ESP_LOGI(TAG, "bit %3u  -> module %u ch %2u  ('165 U%c pin %c)  DATA=%d",
+                         (unsigned)ch, s.module, s.local, s.chip, s.input,
+                         scan_.sample_now(0) ? 1 : 0);
             }
         }
     }

@@ -67,14 +67,17 @@ namespace ooe::pinled
 #endif
 
 #if CONFIG_PINLED_SCAN_HOLD_CH >= 0
-        /// Bring-up only: park the counter on one channel so every node in the
-        /// chain is a static level a meter can read. Never returns.
+        /// Bring-up only: snapshot the chain and clock it to one channel, so
+        /// every node on the serial path is a static level a meter can read.
+        /// Channel 0 instead holds `/PL` low and tracks live (FR-DIAG-3).
+        /// Owns the chain, so scan_task is not started. Never returns.
         void hold_channel();
 #endif
 
 #if CONFIG_PINLED_SCAN_STEP_MS > 0
-        /// Bring-up only: walk the counter one channel at a time, slowly enough
-        /// to watch. Owns the counter, so scan_task is not started. Never returns.
+        /// Bring-up only: walk the serial stream one bit at a time, slowly
+        /// enough to watch, re-snapshotting before each step. Owns the chain,
+        /// so scan_task is not started. Never returns.
         void step_walk();
 #endif
 

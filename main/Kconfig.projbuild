@@ -2,29 +2,36 @@ menu "pinled configuration"
 
     menu "GPIO assignment (ESP32-S3 defaults)"
         config PINLED_CLK_GPIO
-            int "74x161 CLK GPIO (shared bus)"
+            int "74x165 CLK GPIO (bussed to every module)"
             default 18
             help
                 A0 on the QT Py ESP32-S3; IO18 on the S3-DevKitC-1.
-        config PINLED_MR_GPIO
-            int "/MR reset GPIO (-1 = not fitted)"
+
+                Driven as SPI SCLK. Daisy this along the harness rather than
+                star-wiring it (HW-14): the skew then arrives in the direction
+                that ADDS to hold margin instead of eating it.
+        config PINLED_PL_GPIO
+            int "/PL parallel-load GPIO (-1 = not fitted)"
             default 17
             range -1 48
             help
                 A1 on the QT Py ESP32-S3; IO17 on the S3-DevKitC-1.
 
-                /MR is bussed to every module and asynchronously clears all
-                counters and both '109 latches. It is pin 5 of the 5-pin
-                harness. See docs/CHAINING.md.
+                /PL is bussed to every '165 and is LEVEL-sensitive, not edge:
+                while low the registers are transparent and continuously load
+                their inputs; the rising edge freezes the whole chain, which is
+                what makes every channel share one capture instant. It is pin 5
+                of the 5-pin harness. See docs/CHAINING.md.
         config PINLED_DATA_GPIO
-            int "DATA_IN GPIO (shared by every module on the chain)"
+            int "DATA_IN GPIO (serial stream off the head of the chain)"
             default 9
             help
                 A2 on the QT Py ESP32-S3; IO9 on the S3-DevKitC-1.
 
-                All modules bus their tri-state '251 outputs onto this one
-                line; only the addressed module drives it. This is not
-                per-module — chaining costs no additional GPIO.
+                Read as SPI MISO. This is NOT a bus: it is the QH output of the
+                first module's U1, one push-pull driver point-to-point, with a
+                10k pull-down so an absent or unpowered chain reads a clean zero
+                (HW-11). Chaining costs no additional GPIO.
         config PINLED_LED_GPIO
             int "WS2812B/SK6812 data GPIO (RMT)"
             default 8
@@ -42,7 +49,7 @@ menu "pinled configuration"
             range 1 8
             default 1
         config PINLED_CHANNELS_PER_MODULE
-            int "Channels per module (8 = single mux, 16 = dual '251)"
+            int "Channels per module (8 = one '165, 16 = two)"
             range 8 16
             default 16
         config PINLED_ACTIVE_LOW
@@ -67,69 +74,56 @@ menu "pinled configuration"
             default 4000000
             range 100000 10000000
             help
-                SCLK rate for the scan burst. 4 MHz gives a 250 ns bit slot,
-                against ~100 ns of accumulated clock skew across 8 LVC modules
-                (docs/TIMING.md section 4.3).
+                SCLK rate for the scan burst. A frame is 16*N bits plus ~17 us
+                of fixed per-transaction overhead (measured, docs/TIMING.md
+                section 2.4), so the burst is the smaller half of the cost.
 
-                4 MHz rather than 2 because a frame carries ~17 us of fixed
-                transaction overhead on top of the burst (measured). At 2 MHz
-                a 128-channel frame is 87 us, which the boot check clamps to
-                below the 10 kHz target; at 4 MHz it is 52 us and fits.
+                4 MHz rather than 2 because at 2 MHz a 128-channel frame is
+                81 us, which the boot check clamps below the 10 kHz target; at
+                4 MHz it is 49 us and fits.
 
-                Raising this shortens the frame and buys idle-gap margin;
-                lowering it is the first thing to try if far modules read wrong
-                while near ones are fine.
+                Raising this shortens the frame; lowering it is the first thing
+                to try if far modules read wrong while near ones are fine, since
+                multi-drop CLK integrity is the rev D binding constraint
+                (docs/TIMING.md section 4.3). On breadboarded 74HC165 parts at
+                3.3 V, start at 2 MHz.
 
         config PINLED_SPI_MODE
-            int "SPI mode (0 or 1)"
-            default 0
-            range 0 1
+            int "SPI mode (0..3)"
+            default 2
+            range 0 3
             help
-                Leave this at 0 for production hardware.
+                Leave this at 2 for rev D hardware.
 
-                A module Schmitt-inverts its incoming clock, so the '161 counts
-                on the FALLING edge and line n is valid from fall(n) to
-                fall(n+1). Mode 0 (CPOL=0, CPHA=0) samples on rising edges --
-                the middle of that window, with margin on both sides.
+                A '165 shifts QH on the RISING clock edge, and after /PL rises
+                QH already presents channel 0 with no clock at all. Mode 2
+                (CPOL=1, CPHA=0) idles the clock high and samples on the falling
+                edge, which lands mid bit-cell -- half a period after the shift
+                that produced the bit and half a period before the next.
 
-                Mode 1 samples on the falling edge, which is exactly the counter
-                transition. It is wrong for this hardware.
+                Mode 3 samples on the same rising edge the '165 shifts on, so
+                the whole frame slides by one channel and channel 0 becomes
+                unreachable. That clean off-by-one is the signature.
 
-                Measured caveat: on a bench rig that clocks the '161 directly,
-                the counter advances on the same rising edges SPI samples, and
-                NEITHER mode aligns -- every sample reads line[k+1] and line 0
-                is unreachable. Add an inverter in the CLK path to make such a
-                rig behave like production.
+                CAVEAT: mode 2 is reasoned from the shift edge and has never
+                been measured on a '165. It is bring-up check #1
+                (docs/BRINGUP.md section 5). If every channel reads its
+                neighbour, try 3 before suspecting the wiring.
 
-        config PINLED_MR_FROM_CS
-            bool "Drive /MR from the SPI CS line"
+        config PINLED_PL_FROM_CS
+            bool "Drive /PL from the SPI CS line"
             default y
             help
-                Wires /MR to the SPI peripheral's chip-select with positive
-                polarity, so it is LOW between transactions (clearing the
-                chain) and HIGH during (counting). The frame reset becomes
-                hardware-timed and cannot be forgotten or mistimed.
+                Wires /PL to the SPI peripheral's chip-select with positive
+                polarity, so it is LOW between transactions (registers
+                transparent, tracking their inputs) and HIGH during one
+                (frozen, shifting). The capture instant becomes hardware-timed
+                and cannot be forgotten or mistimed.
 
-                Turn off to drive /MR as a plain GPIO pulsed before each
-                frame -- useful on a rig where CS is not routed to the
-                counter's clear pin.
-
-        config PINLED_ARM_CLOCK
-            bool "Modules arm on their first clock (rev C hardware)"
-            default y
-            help
-                On rev C a module's ENP comes from its STARTED latch. Because
-                ENP is a synchronous enable, the first clock edge sets STARTED
-                while the counter samples the old 0 and stays put -- so the
-                module spends one clock arming and the next sixteen presenting
-                lines. That is what gives line 0 a full bit period.
-
-                A frame is therefore 17 clocks per module and every 17th sample
-                is discarded.
-
-                Turn OFF for a legacy bench rig whose '161 has ENP tied high:
-                there the first clock counts, so an arm clock would shift every
-                channel by one.
+                Turn off to drive /PL as a plain GPIO, pulsed low then high
+                before each frame -- useful on a rig where CS is not routed to
+                the load pin. The GPIO path costs two extra register writes per
+                frame and puts the capture instant back under software timing.
     endmenu
 
     menu "Timing"
@@ -177,7 +171,11 @@ menu "pinled configuration"
                 Use this to prove the scan bus is alive independently of the
                 filament model and the LED string: press a test input and watch
                 the corresponding bit move. A channel that never toggles is
-                unconnected, unpopulated, or pinned by the bus bias.
+                unconnected, unpopulated, or pinned by the chain terminator.
+
+                Bits are grouped in eights, and each group is one '165: the
+                first is U1 (ch 0..7), the second U2 (ch 8..15), and so on down
+                the chain.
 
                 Turn off for production -- it costs an array write per channel
                 per frame inside the scan loop.
@@ -187,18 +185,24 @@ menu "pinled configuration"
             default 0
             range 0 2000
             help
-                Bring-up only. At normal speed the scan runs tens of thousands
-                of frames per second, so the '161 Q outputs toggle far too fast
-                to watch and indicator LEDs on them just look steadily lit.
+                Bring-up only. At normal speed CLK toggles in the megahertz, so
+                indicator LEDs on the chain signals sit at a steady half
+                brightness -- which reads as "not running" and sends you hunting
+                a fault that is not there.
 
-                Set this to e.g. 250 and the scan advances one channel every
-                250 ms instead, logging the count, the Q pattern to expect, and
-                the DATA_IN level at each step. The counter then walks slowly
-                enough to read by eye or follow with a meter.
+                Set this to e.g. 250 and the scan advances one bit every 250 ms,
+                logging the bit index, the module / '165 / input pin it came
+                from, and the DATA level read. Unlike rev C there is no counter
+                to watch on a scope: DATA is the only observable, which is why
+                the log names the pin.
 
-                While non-zero, scan_task is NOT started -- the slow walk owns
-                the counter -- so the filament model and the LED string do not
-                update. Set back to 0 for normal operation.
+                The walk re-asserts /PL and re-advances before every step
+                (FR-DIAG-2) rather than walking one frozen snapshot, so an input
+                toggled part-way through is still visible.
+
+                While non-zero, scan_task is NOT started -- the walk owns the
+                chain -- so the filament model and the LED string do not update.
+                Set back to 0 for normal operation.
 
         config PINLED_SPI_SWEEP
             bool "Sweep the chain clock and report where it breaks"
@@ -217,25 +221,32 @@ menu "pinled configuration"
                 so the LEDs do not update.
 
         config PINLED_SCAN_HOLD_CH
-            int "Park the counter on one channel (-1 = disabled)"
+            int "Park the chain on one channel (-1 = disabled)"
             default -1
             range -1 127
             help
                 Bring-up only, and takes precedence over the slow-step walk.
 
-                Pulses /MR, clocks the counter to this channel, then stops and
-                never clocks again, sampling DATA_IN at 2 Hz. The address lines
-                hold a fixed value, so every node in the chain becomes a static
+                Snapshots the chain, clocks exactly k times, then stops and
+                never clocks again, sampling DATA at 2 Hz. DATA becomes a static
                 DC level you can measure with an ordinary meter:
 
-                  - '161 Q outputs   -> the channel number in binary
-                  - '151 A/B/C       -> the low three bits of it
-                  - '151 D<n>        -> your input, follow it with the button
-                  - '151 Y (pin 5)   -> should equal D<n> while /E is low
-                  - the MCU DATA pin -> should equal Y
+                  - front-end output at the '165 input pin -> your input,
+                    follow it with the button
+                  - U1 QH (pin 9)  -> equal to that input, for the parked channel
+                  - after R2 (33R) -> the same
+                  - the MCU DATA pin -> the same
 
-                Whichever link in that chain stops tracking is the fault. Set
-                back to -1 for normal operation.
+                Whichever link stops tracking is the fault. On a chained rig,
+                park on a channel in the FAR module: if near modules track and
+                far ones do not, the fault is the QH -> SER handoff between them.
+
+                Channel 0 is special-cased to hold /PL LOW instead of clocking
+                (FR-DIAG-3). The registers then stay transparent and DATA tracks
+                channel 0 LIVE, so you can watch a meter move as you press the
+                button -- rev C had no equivalent.
+
+                Set back to -1 for normal operation.
     endmenu
 
 endmenu

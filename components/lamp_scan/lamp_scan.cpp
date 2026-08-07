@@ -1,6 +1,6 @@
 /**
  * @file lamp_scan.cpp
- * @brief Chained '161 + dual '251 scan driver over SPI + DMA.
+ * @brief Chained 74x165 scan driver over SPI + DMA (rev D).
  * @copyright Copyright (c) 2024-2026 Jefferson J. Hunt (MIT)
  */
 
@@ -13,10 +13,11 @@
 #include "esp_rom_sys.h" // esp_rom_delay_us
 #include "sdkconfig.h"
 
-// The slow-step and hold-channel diagnostics need per-edge control of CLK, which
-// the SPI peripheral does not give us. When either is compiled in, fall back to
-// the bit-bang backend. Both are bench-rig only anyway (FR-DIAG-2/3): a
-// production module releases its bus grant if the clock stops.
+// The slow-step and hold-channel diagnostics need per-edge control of CLK and
+// of /PL, neither of which the SPI peripheral gives us. When either is compiled
+// in, fall back to the bit-bang backend. Unlike rev B this is a driver
+// limitation only -- the '165 chain itself is happy to be clocked at any speed
+// or stopped indefinitely, so these modes work on production hardware too.
 #if CONFIG_PINLED_SCAN_STEP_MS > 0 || CONFIG_PINLED_SCAN_HOLD_CH >= 0
 #define LAMPSCAN_BITBANG 1
 #else
@@ -35,21 +36,25 @@ namespace ooe::pinled
             return ESP_ERR_INVALID_ARG;
         if (cfg.channels_per_module != 8 && cfg.channels_per_module != 16)
             return ESP_ERR_INVALID_ARG;
-        if (cfg.spi_mode > 1)
+        if (cfg.spi_mode > 3)
             return ESP_ERR_INVALID_ARG;
 
         deinit();
         cfg_ = cfg;
 
-        // When /MR is driven from SPI CS the peripheral owns the pin, so only
+        // When /PL is driven from SPI CS the peripheral owns the pin, so only
         // configure it as a GPIO for the bit-bang path or when CS is not used.
-        mr_is_gpio_ = (cfg_.mr_pin != GPIO_NUM_NC) &&
-                      (LAMPSCAN_BITBANG || !cfg_.mr_from_cs);
-        if (mr_is_gpio_)
+        pl_is_gpio_ = (cfg_.pl_pin != GPIO_NUM_NC) &&
+                      (LAMPSCAN_BITBANG || !cfg_.pl_from_cs);
+        if (pl_is_gpio_)
         {
-            gpio_reset_pin(cfg_.mr_pin);
-            gpio_set_direction(cfg_.mr_pin, GPIO_MODE_OUTPUT);
-            gpio_set_level(cfg_.mr_pin, 1); // idle high (not clearing)
+            gpio_reset_pin(cfg_.pl_pin);
+            gpio_set_direction(cfg_.pl_pin, GPIO_MODE_OUTPUT);
+            // Idle LOW: registers transparent, tracking their inputs. This is
+            // the opposite of rev C's /MR, which idled high. Idling high here
+            // would leave the chain frozen on whatever it held at boot and
+            // shift the terminator's zeros in behind it.
+            gpio_set_level(cfg_.pl_pin, 0);
         }
 
         const esp_err_t err = LAMPSCAN_BITBANG ? init_bitbang() : init_spi();
@@ -60,19 +65,23 @@ namespace ooe::pinled
         }
 
         initialized_ = true;
-        reset_counter();
 
         ESP_LOGI(TAG, "init: %u module(s) x %u ch, %u clocks/frame (%u bytes), active_%s, %s",
                  (unsigned)cfg_.num_modules, (unsigned)cfg_.channels_per_module,
                  (unsigned)frame_bits(), (unsigned)frame_bytes(),
                  cfg_.active_low ? "low" : "high",
                  LAMPSCAN_BITBANG ? "bit-bang (diagnostic build)" : "SPI+DMA");
-        ESP_LOGI(TAG, "  arm clock %s", cfg_.arm_clock ? "on (rev C)" : "OFF (legacy rig)");
         if (!LAMPSCAN_BITBANG)
-            ESP_LOGI(TAG, "  SPI host %d, %d Hz, mode %u, SCLK=%d MISO=%d, /MR=%d (%s)",
+        {
+            ESP_LOGI(TAG, "  SPI host %d, %d Hz, mode %u, SCLK=%d MISO=%d, /PL=%d (%s)",
                      (int)cfg_.spi_host, cfg_.spi_hz, (unsigned)cfg_.spi_mode,
-                     (int)cfg_.clk_pin, (int)cfg_.data_pin, (int)cfg_.mr_pin,
-                     (cfg_.mr_from_cs && cfg_.mr_pin != GPIO_NUM_NC) ? "SPI CS" : "GPIO");
+                     (int)cfg_.clk_pin, (int)cfg_.data_pin, (int)cfg_.pl_pin,
+                     (cfg_.pl_from_cs && cfg_.pl_pin != GPIO_NUM_NC) ? "SPI CS" : "GPIO");
+            if (cfg_.spi_mode != 2)
+                ESP_LOGW(TAG, "  mode %u is not the expected 2 for a '165 chain; "
+                              "a whole-frame off-by-one is the signature",
+                         (unsigned)cfg_.spi_mode);
+        }
         return ESP_OK;
     }
 
@@ -82,7 +91,7 @@ namespace ooe::pinled
 
         // Must be DMA-capable. 16 bytes at the 128-channel maximum, so this
         // also fits the SPI FIFO outright — the burst is gapless because the
-        // shift register is hardware-clocked, not because DMA keeps up.
+        // clock comes out of the peripheral, not because DMA keeps up.
         rx_ = static_cast<uint8_t *>(heap_caps_malloc(bytes, MALLOC_CAP_DMA));
         if (!rx_)
             return ESP_ERR_NO_MEM;
@@ -106,13 +115,15 @@ namespace ooe::pinled
         spi_device_interface_config_t dev{};
         dev.clock_speed_hz = cfg_.spi_hz;
         dev.mode = cfg_.spi_mode;
-        // CS drives /MR. Positive polarity puts it LOW between transactions
-        // (clearing the chain) and HIGH during (counting), so the frame reset
-        // is hardware-timed. cs_ena_pretrans sets the release-to-first-edge
-        // margin, in SPI bit times.
-        if (cfg_.mr_from_cs && cfg_.mr_pin != GPIO_NUM_NC)
+        // CS drives /PL. Positive polarity puts it LOW between transactions
+        // (registers transparent, loading) and HIGH during one (frozen,
+        // shifting), so the capture instant is hardware-timed. cs_ena_pretrans
+        // is the CS-rise-to-first-clock-edge margin in SPI bit times: it is
+        // what guarantees the load has actually settled before the first shift,
+        // and it is why channel 0 needs no clock of its own.
+        if (cfg_.pl_from_cs && cfg_.pl_pin != GPIO_NUM_NC)
         {
-            dev.spics_io_num = cfg_.mr_pin;
+            dev.spics_io_num = cfg_.pl_pin;
             dev.flags |= SPI_DEVICE_POSITIVE_CS;
             dev.cs_ena_pretrans = 2;
             dev.cs_ena_posttrans = 2;
@@ -148,13 +159,16 @@ namespace ooe::pinled
     {
         gpio_reset_pin(cfg_.clk_pin);
         gpio_set_direction(cfg_.clk_pin, GPIO_MODE_OUTPUT);
-        gpio_set_level(cfg_.clk_pin, 0);
+        // Idle HIGH, matching mode 2's CPOL=1 so the bit-bang path presents the
+        // same edge sequence as the SPI path. step_clock() then pulses low and
+        // back, and it is the trailing rising edge that shifts.
+        gpio_set_level(cfg_.clk_pin, 1);
 
         // gpio_reset_pin() leaves the internal pull-UP enabled and
-        // gpio_set_direction() does not clear it. That fights the master's
-        // 1 kOhm bias and, with the non-inverting front end, makes an undriven
-        // bus read "lamp on" -- the opposite of HW-2. Bias follows polarity:
-        // the two are one decision.
+        // gpio_set_direction() does not clear it. That fights the chain
+        // terminator and, with the non-inverting front end, makes an undriven
+        // DATA line read "lamp on" -- the opposite of HW-2/HW-11. Bias follows
+        // polarity: the two are one decision.
         gpio_config_t io{};
         io.pin_bit_mask = 1ULL << static_cast<uint32_t>(cfg_.data_pin);
         io.mode = GPIO_MODE_INPUT;
@@ -180,9 +194,9 @@ namespace ooe::pinled
         dev.clock_speed_hz = hz;
         dev.mode = cfg_.spi_mode;
         dev.queue_size = 1;
-        if (cfg_.mr_from_cs && cfg_.mr_pin != GPIO_NUM_NC)
+        if (cfg_.pl_from_cs && cfg_.pl_pin != GPIO_NUM_NC)
         {
-            dev.spics_io_num = cfg_.mr_pin;
+            dev.spics_io_num = cfg_.pl_pin;
             dev.flags |= SPI_DEVICE_POSITIVE_CS;
             dev.cs_ena_pretrans = 2;
             dev.cs_ena_posttrans = 2;
@@ -224,16 +238,25 @@ namespace ooe::pinled
         initialized_ = false;
     }
 
-    void LampScan::reset_counter()
+    void LampScan::reload_chain()
     {
-        // '161 /MR is asynchronous: a low pulse zeroes the counter and both
-        // '109 latches immediately. No-op when CS is driving /MR, since the
-        // peripheral already deasserts it between transactions.
-        if (!mr_is_gpio_)
+        // /PL is level-sensitive: low makes every register transparent, and the
+        // rising edge freezes the whole chain at one instant. QH then already
+        // holds channel 0, so the first bit costs no clock. No-op when CS is
+        // driving /PL -- the peripheral does exactly this around every
+        // transaction, and more precisely than software can.
+        if (!pl_is_gpio_)
             return;
-        gpio_set_level(cfg_.mr_pin, 0);
-        esp_rom_delay_us(1);
-        gpio_set_level(cfg_.mr_pin, 1);
+        gpio_set_level(cfg_.pl_pin, 0);
+        esp_rom_delay_us(1); // coarse load-settle; datasheet wants nanoseconds
+        gpio_set_level(cfg_.pl_pin, 1);
+    }
+
+    void LampScan::hold_transparent()
+    {
+        if (!pl_is_gpio_)
+            return;
+        gpio_set_level(cfg_.pl_pin, 0);
     }
 
     esp_err_t LampScan::read_frame(bool *out, size_t n)
@@ -245,22 +268,21 @@ namespace ooe::pinled
             return ESP_ERR_INVALID_ARG;
 
 #if LAMPSCAN_BITBANG
-        reset_counter();
-        if (cfg_.arm_clock)
-            step_counter(); // mirrors the SPI path's arm clock
+        reload_chain(); // snapshot; QH now presents channel 0 with no clock
         for (size_t ch = 0; ch < total; ++ch)
         {
             esp_rom_delay_us(1); // coarse settle; this path is diagnostic only
             out[ch] = sample_now(0);
-            step_counter();
+            step_clock(); // rising edge advances to channel ch+1
         }
+        hold_transparent(); // back to the idle state: registers tracking
         return ESP_OK;
 #else
-        reset_counter(); // no-op when CS drives /MR
+        reload_chain(); // no-op when CS drives /PL
 
         const size_t bits = frame_bytes() * 8;
         spi_transaction_t t{};
-        t.length = bits;       // clocks generated (>= 17*N; surplus is harmless)
+        t.length = bits;       // exactly 16*N; both channel counts are whole bytes
         t.rxlength = bits;     // bits captured on MISO
         t.tx_buffer = nullptr; // MOSI unused
         t.rx_buffer = rx_;
@@ -276,28 +298,27 @@ namespace ooe::pinled
             return err;
         }
 
-        // MSB-first. Every clocks_per_module()'th sample is an arm clock and
-        // carries no data; the sixteen after it are lines 0..15 of that module.
-        const size_t stride = clocks_per_module();
-        size_t ch = 0;
-        for (size_t i = 0; i < frame_bits() && ch < total; ++i)
+        // MSB-first, one bit per channel, nothing discarded: stream bit i is
+        // channel i (FR-SCAN-4). The stream is module-major because U1 sits at
+        // the head of each module's pair and each module sits ahead of the next.
+        for (size_t ch = 0; ch < total; ++ch)
         {
-            if (cfg_.arm_clock && i % stride == 0)
-                continue; // arm clock, carries no data
-            const bool bit = (rx_[i / 8] >> (7 - (i % 8))) & 1;
-            out[ch++] = cfg_.active_low ? !bit : bit;
+            const bool bit = (rx_[ch / 8] >> (7 - (ch % 8))) & 1;
+            out[ch] = cfg_.active_low ? !bit : bit;
         }
         return ESP_OK;
 #endif
     }
 
-    void LampScan::step_counter()
+    void LampScan::step_clock()
     {
 #if LAMPSCAN_BITBANG
         if (!initialized_)
             return;
-        gpio_set_level(cfg_.clk_pin, 1);
+        // Idle high (CPOL=1). The trailing rising edge is the one that shifts,
+        // so callers must sample BEFORE calling this, not after.
         gpio_set_level(cfg_.clk_pin, 0);
+        gpio_set_level(cfg_.clk_pin, 1);
 #endif
     }
 

@@ -123,9 +123,12 @@ length, so a frame must be one transaction and not one per module. At 128
 channels that is 49 µs a frame — 49% of a core at 10 kHz, not the 6.4% an
 earlier estimate claimed (`TIMING.md` §2.4).
 
-`mr_pin` may be driven either from `CS` (preferred) or as a plain GPIO pulsed
-before each transaction; the latter is what a bench rig without `CS` routing
-uses.
+`pl_pin` may be driven either from `CS` (preferred) or as a plain GPIO pulsed
+low-then-high before each transaction; the latter is what a bench rig without
+`CS` routing uses. Note the idle level inverted between revisions: rev C's `/MR`
+idled **high**, rev D's `/PL` idles **low** so the registers sit transparent
+between frames. Idling it high instead freezes the chain on whatever it held at
+boot and then shifts the terminator's zeros in behind it.
 
 ### 3.3 Profiler (classifier)
 
@@ -244,9 +247,12 @@ instead of quietly corrupting every time constant:
    `Filament::init()` and `Profiler::init()`. Batch the LED frame into one
    transmit (`lamp_map::render()` currently issues one strip transmit per
    channel, which is FR-LED-6's exact anti-pattern). Needs no chained hardware —
-   a single module exercises the whole path. *(SPI driver done and validated on
-   the bench rig at 1 MHz, including the mode-0 sampling phase; pacing and the
-   reset-gap check still outstanding. See `BRINGUP.md` §7.)*
+   a single module exercises the whole path. *(Done in code: single-transaction
+   SPI path, 16·N unpack with no discards, `/PL` from `CS`, 10 kHz gptimer
+   pacing, the boot feasibility clamp, and one strip transmit per frame. The
+   **rev C** version of this was measured on the '161 + '151 rig at 1 MHz; the
+   rev D framing that replaced it has never been run against hardware, so treat
+   M1a as compiled-but-unproven until M1b passes. See `BRINGUP.md` §7.)*
 4. **M1b — one '165 module on the bench.** Two '165s on a breadboard, 16 test
    inputs, driving LEDs. The three things to settle, in order:
    1. **SPI mode 2** — the only rev D claim that is reasoned rather than
@@ -255,8 +261,9 @@ instead of quietly corrupting every time constant:
       input `H`, and that no byte-reverse is needed.
    3. **`/PL` from `CS`** — confirm the positive-polarity `CS` loads between
       frames, and that holding `/PL` low makes `DATA` track channel 0 live.
-   *(Not started. The existing bench validation is all rev C hardware — '161 +
-   '151 — and does not transfer beyond the SPI plumbing. See `BRINGUP.md`.)*
+   *(Not started — blocked on parts. The firmware side is ready; the existing
+   bench validation is all rev C hardware — '161 + '151 — and does not transfer
+   beyond the SPI plumbing. See `BRINGUP.md` §5 for the rig.)*
 5. **M1c — two modules, then eight.** Two modules is the important step: it
    proves the chain handoff, the 10 kΩ terminator, and that unplugging the last
    module blanks its channels to a stable zero rather than noise (HW-11). Then

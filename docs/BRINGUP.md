@@ -58,9 +58,9 @@ sends you hunting a fault that isn't there.
 Set it to `250` and the scan advances one bit every 250 ms:
 
 ```
-I (127)  --- /PL pulsed low, chain reloaded ---
-I (377)  bit  0  -> module 0 ch  0  ('165 U1 pin H)  DATA=0
-I (627)  bit  1  -> module 0 ch  1  ('165 U1 pin G)  DATA=1
+I (127)  --- pass start: /PL re-asserted before every step ---
+I (377)  bit   0  -> module 0 ch  0  ('165 U1 pin H)  DATA=0
+I (627)  bit   1  -> module 0 ch  1  ('165 U1 pin G)  DATA=1
 ```
 
 A 16-channel module takes 4 s per frame. Unlike rev C there is no counter to
@@ -89,7 +89,7 @@ which is useless for tracing with a meter. Hold snapshots the chain, clocks
 exactly *k* times and stops, so `DATA` becomes a static DC level:
 
 ```
-I (127) chain parked on channel 4 (module 0, U1 pin D); 4 clocks issued
+I (127) chain parked on channel 4 (module 0, U1 input D, pin 14); 4 clocks issued
 I (627) hold ch 4  DATA=1
 ```
 
@@ -102,7 +102,8 @@ Measure along the path and find the first link that stops tracking:
 | after `R2` (33 Ω) | the same |
 | MCU `DATA_IN` | the same |
 
-**The more useful variant is `/PL` held low.** The registers then stay
+**The more useful variant is `/PL` held low**, which is what
+`PINLED_SCAN_HOLD_CH=0` does rather than clocking. The registers stay
 transparent, so `U1.QH` continuously tracks module 1 channel 0 — press the
 button and watch the meter move in real time. Rev C had no equivalent; its mux
 only presented a channel while the counter addressed it.
@@ -217,18 +218,18 @@ Each input gets a switch to 3V3 and a 10 kΩ pull-down. Nothing floats.
 ### Firmware settings
 
 ```
-PINLED_SPI_MODE=2          # the thing being tested
+PINLED_SPI_MODE=2          # the thing being tested; the default
 PINLED_SPI_HZ=2000000      # HC parts on a breadboard
-PINLED_MR_FROM_CS=y        # CS drives /PL, positive polarity
+PINLED_PL_FROM_CS=y        # CS drives /PL, positive polarity
 PINLED_NUM_MODULES=1       # then 2
 PINLED_CHANNELS_PER_MODULE=16
 PINLED_ACTIVE_LOW=n
 PINLED_SCAN_DEBUG=y
 ```
 
-`PINLED_ARM_CLOCK` no longer applies and should be removed — rev D has no arm
-clocks. **The firmware has not yet been updated for rev D**; as of this writing
-`lamp_scan` still implements the rev C 17·N framing and defaults to mode 0.
+Only `SPI_HZ` and `NUM_MODULES` differ from the shipped defaults. `PINLED_MR_*`
+and `PINLED_ARM_CLOCK` no longer exist — they were replaced by `PINLED_PL_*` and
+deleted respectively when the firmware moved to rev D framing.
 
 ### What to check, in order
 
@@ -326,12 +327,13 @@ Superseded by rev D — do not carry these forward:
 
 ### Outstanding for rev D
 
-Everything. No rev D hardware exists yet.
+Everything on the hardware side. No rev D hardware exists yet.
 
-1. `lamp_scan` still implements rev C framing (17·N, arm-clock discard, mode 0).
-   The change is small — drop the stride arithmetic, default the mode to 2 —
-   but it has not been made.
-2. SPI mode 2, bit order, and `/PL`-from-`CS` on two '165s (§5).
-3. Chain handoff and terminator behaviour on four '165s (§5).
-4. Everything in `TIMING.md` §7: `/PL` edge quality at 800 mm, clock-skew
+The firmware **is** converted: `lamp_scan` frames 16·N bits with no discard,
+defaults to mode 2, and drives `/PL` rather than `/MR`. That is compiled and
+nothing more — not one line of it has met a '165.
+
+1. SPI mode 2, bit order, and `/PL`-from-`CS` on two '165s (§5).
+2. Chain handoff and terminator behaviour on four '165s (§5).
+3. Everything in `TIMING.md` §7: `/PL` edge quality at 800 mm, clock-skew
    direction, multi-drop `CLK` integrity, and the terminator under live unplug.
