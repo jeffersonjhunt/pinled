@@ -1,8 +1,22 @@
 # pinled v2 build defaults (ESP-IDF 5.5.x, target esp32s3)
-# Board: Adafruit QT Py ESP32-S3, 8 MB flash, no PSRAM (chip marking FN8C0).
-
+#
+# Board: Adafruit QT Py ESP32-S3. Two variants ship under the same silkscreen
+# and the same USB VID/PID (239a:8143) — tell them apart by the chip marking or
+# the USB descriptor string:
+#
+#   FN8C0 -> 8 MB flash, no PSRAM
+#   FH4R2 -> 4 MB flash, 2 MB PSRAM   <- the 2026-08-07 bench board
+#
+# 4 MB is the correct setting for BOTH. partitions.csv tops out at 0x10000 + 1M
+# = ~1.06 MB, so nothing wants the upper half; declaring 8 MB on an FH4R2 makes
+# the bootloader configure flash that is not there. Do not "restore" this to 8 MB
+# without checking which part is on the bench.
 CONFIG_IDF_TARGET="esp32s3"
-CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# PSRAM stays disabled. The FH4R2's 2 MB is quad-SPI and nothing in the firmware
+# needs it — the scan/level buffers are a few hundred bytes. Enabling it only
+# costs boot time and pins.
 
 # The QT Py ESP32-S3 has no USB-UART bridge — USB-C goes straight to the S3's
 # native USB. Without this the console is on UART0 and `idf.py monitor` shows
