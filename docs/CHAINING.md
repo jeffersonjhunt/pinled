@@ -351,11 +351,15 @@ pull-down on `MISO` (HW-2, HW-11).
 > choice for a **DIP breadboard bench build**, where LVC is not made in a
 > through-hole package.
 >
-> The ≤ 2 MHz figure for HC was conservative. **4 MHz ran clean on a 4-chip
-> breadboard rig** (2 modules, 32 ch) at 3.3 V for millions of frames with zero
-> read errors, 2026-08-06/07. That does not license 4 MHz at eight modules —
-> what fails first is multi-drop `CLK` integrity across 800 mm (§4.3), which is
-> a harness-length problem rather than a part-speed one, and is untested.
+> **HW-3 allows HC up to 4 MHz**, relaxed from ≤ 2 MHz on 2026-08-07 after a
+> 4-chip breadboard rig (2 modules, 32 ch) at 3.3 V ran clean at 4 MHz for
+> millions of frames with zero read errors. The old figure had also been
+> contradicting the shipped `PINLED_SPI_HZ` default, which was already 4 MHz.
+>
+> That ceiling is a property of the *device*. It does not license 4 MHz at
+> eight modules: what fails first there is multi-drop `CLK` integrity across
+> 800 mm (§4.3), a harness-length problem governed separately by HW-14, and
+> still untested.
 >
 > Pin numbers: most are now confirmed against silicon (see `HARDWARE.md`), but
 > pins 3, 4, 5 and 13 are not. Confirm the exact part's pinout against its

@@ -231,7 +231,8 @@ Family choice (HW-3) is now a preference rather than a correctness requirement:
 the old 1 kΩ standing load that made HC marginal is gone, and there is no
 per-hop gate delay left to accumulate. LVC is still preferred for edge rate into
 the multi-drop clock; **74HC165 in DIP is the right part for a breadboard bench
-build** at ≤ 2 MHz.
+build** at **≤ 4 MHz** — relaxed from 2 MHz on 2026-08-07 after a 4-chip rig ran
+clean at 4 MHz for millions of frames.
 
 ## Front-end (per channel) checklist
 
