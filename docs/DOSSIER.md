@@ -282,10 +282,30 @@ Stated so the first cut can proceed; flag any to change:
    is a documented alternative.
 4. **Sensing point:** at/near each **socket** (one tap = one lamp = one LED),
    so no matrix row/column decoding is required.
-5. **First target machines:** not yet fixed. The profiler + config layer is
-   generic; real per-machine calibration profiles want a named first target
-   (era, GI scheme, lamp voltages, matrix rate) to validate against.
+5. **First target: Bally/Stern solid-state, 1977–1985** *(fixed 2026-08-07)*.
+   The bench target is an **Alltek Ultimate MPU** — a universal replacement for
+   Bally `AS2518-17/-35/-133`, `AS-2517-35` and Stern `MPU-100`/`MPU-200` — with
+   the **Alltek Ultimate Test Card** on `J2`. Selecting *Enhanced Diagnostics
+   Mode* on the game-select dipswitch lets the card fire **individual lamps, or
+   whole rows and columns**, plus single solenoids and arbitrary display digits.
 
-**To move forward I'd want:** the first one or two target machines (manufacturer
-+ era), so the profiler thresholds and the first shipped config profile are
-validated against a real drive scheme rather than nominal datasheet numbers.
+   This is a better validation target than one machine: the MPU carries **90+
+   Bally/Stern titles** in EPROM, dipswitch-selectable, so one bench setup
+   reproduces the lamp behaviour of the whole era rather than a single game's.
+   The test card also gives *deterministic* lamp patterns on demand, which is
+   what a classifier needs — real gameplay is not reproducible.
+
+   > **The drive waveform is not yet measured, and it matters more than usual.**
+   > Bally/Stern of this era does not use a Williams-style scanned lamp matrix.
+   > It latches lamps with **SCRs on an AC supply**, so a lit lamp sees
+   > phase-related AC rather than a few-hundred-Hz low-duty burst. Scope one
+   > lamp on this rig before trusting any number here: supply voltage, whether
+   > conduction is half- or full-wave, the envelope rate (50/60 Hz vs 100/120 Hz)
+   > and the duty of a lamp the game is *dimming* rather than holding on.
+   > Everything the profiler thresholds on comes from that measurement.
+
+   **Consequence for §6's classifier:** this target exercises `AC_STEADY` and
+   `AC_DIMMED`, and **not** `MATRIX`. The matrix path — the one the filament
+   argument leads with — will stay unvalidated on hardware until a scanned-matrix
+   machine (Williams System 11, Data East, later Sterns) joins the bench. Until
+   then it rests on host unit tests with synthetic waveforms alone.
