@@ -246,8 +246,29 @@ clean at 4 MHz for millions of frames.
 - **Hysteresis** comes from that Schmitt (V_hys ≈ 0.4–0.6 V at 3.3 V), and it is
   the primary defense against solenoid-induced ground bounce walking every
   channel's threshold at once. See `TIMING.md` §5.4.
-- **AC handling:** diode steers/rectifies AC taps. Do **not** RC-filter to DC in
-  hardware — keep the digital pulse train fast so firmware recovers duty.
+- **AC handling: half-wave rectify** the tap. A single diode is enough — the
+  goal is a clean digital pulse train, not a DC level. Do **not** RC-filter to
+  DC in hardware; keep it fast so firmware recovers duty. Half-wave also means
+  the sensed envelope is at the line rate rather than twice it, which the
+  profiler's `AC_STEADY`/`AC_DIMMED` thresholds must match — measure it, do not
+  assume 50 vs 60 vs 100 vs 120 Hz.
+- **Phantom load (power resistor), jumper-selectable per channel.** The
+  original incandescent is **removed** — replacing it is the entire point — and
+  it was doing two electrical jobs besides making light:
+  1. **Holding an SCR latched.** Bally/Stern-era lamp drivers latch with SCRs,
+     which conduct only while their load draws holding current. A ~250 mA bulb
+     supplied that for free; a high-impedance sense tap does not, and the lamp
+     never properly turns on. The known field fix is ~470 Ω across the socket
+     (~13 mA at 6.3 VAC).
+  2. **Loading the lamp supply so it regulates.** These rails are unregulated
+     and specified under load. Strip most of the load out of a machine and the
+     rail climbs out of spec, which is a whole-system effect rather than a
+     per-lamp one — it does not announce itself as "this lamp flickers."
+  Hence **power** resistors, not signal resistors, and **jumpers** so the load
+  is fitted only where a machine needs it. A modern transistor-driven game with
+  a regulated supply wants none; a Bally/Stern SCR machine wants them
+  populated. Budget the dissipation deliberately — see `TIMING.md` §5.1, where
+  this dominates the front end rather than the FET does.
 - **Trip point:** design the divider for the full era voltage span (≈6.3 V GI to
   ≈18–20 V feature).
 - The Schmitt costs nothing in scan timing: it sits *before* the mux, so its
