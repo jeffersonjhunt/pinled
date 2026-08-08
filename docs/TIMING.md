@@ -526,9 +526,13 @@ wrong brightness:
 
 ## 7. To confirm on the bench
 
-1. **SPI mode 2 is right.** The highest-value check, and the only rev D claim
-   that is reasoned rather than measured. Two '165s and a button will settle it:
-   mode 2 should read the pressed channel, mode 3 should read its neighbour.
+1. ~~**SPI mode 2 is right.**~~ **Settled 2026-08-06.** A 4× 74HC165 rig
+   (2 modules, 32 ch) at 4 MHz read `U1.D` as channel 4 and `U2.D` as channel
+   12, exactly. The alignment is only possible if the first falling edge
+   captures the pre-clock bit, so it fixes CPHA as well as CPOL. Same run
+   settled bit order (`H` first, no byte reversal) and the `QH`→`SER` handoff
+   within and across modules. Nothing below was affected — these all remain
+   open, and items 2–4 need chain lengths the bench rig does not have.
 2. **`/PL` reaches the far end, and its edge is clean.** With `CS` driving it,
    check the release-to-first-edge margin (`cs_ena_pretrans`) at module 8 across
    800 mm. This edge is now the capture instant for all 128 channels, so a slow

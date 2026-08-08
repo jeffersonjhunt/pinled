@@ -78,8 +78,9 @@ namespace ooe::pinled
                      (int)cfg_.clk_pin, (int)cfg_.data_pin, (int)cfg_.pl_pin,
                      (cfg_.pl_from_cs && cfg_.pl_pin != GPIO_NUM_NC) ? "SPI CS" : "GPIO");
             if (cfg_.spi_mode != 2)
-                ESP_LOGW(TAG, "  mode %u is not the expected 2 for a '165 chain; "
-                              "a whole-frame off-by-one is the signature",
+                ESP_LOGW(TAG, "  mode %u is wrong for a '165 chain: mode 2 is "
+                              "measured, not assumed. Expect a whole-frame "
+                              "off-by-one and an unreachable channel 0",
                          (unsigned)cfg_.spi_mode);
         }
         return ESP_OK;

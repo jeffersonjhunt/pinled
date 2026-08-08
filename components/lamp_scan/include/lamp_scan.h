@@ -33,7 +33,7 @@
  * of clock rate, and paying it once per frame rather than once per module is
  * what keeps 128 channels inside the 10 kHz budget. See docs/TIMING.md §2.4.
  *
- * @par SPI mode (reasoned, NOT yet measured)
+ * @par SPI mode (MEASURED 2026-08-06)
  * A '165 shifts `QH` on the **rising** clock edge. **Mode 2** (`CPOL=1,
  * CPHA=0`) idles the clock high and samples on the falling edge, which lands
  * mid bit-cell: half a period after the shift that produced the bit, half a
@@ -41,10 +41,16 @@
  *
  * Mode 3 samples on the same rising edge the register shifts on, so the frame
  * slides by one channel and channel 0 becomes unreachable. A clean whole-frame
- * off-by-one is that signature, and it is the most likely rev D bring-up fault.
+ * off-by-one is that signature.
  *
- * Unlike rev C, this is derived from the shift edge rather than measured -- no
- * '165 has been on the bench yet. It is bring-up check #1, docs/BRINGUP.md §5.
+ * Confirmed on a 4x 74HC165 rig (2 modules, 32 ch) at 4 MHz: `U1.D` read as
+ * channel 4 and `U2.D` as channel 12, exactly, with no off-by-one. That
+ * alignment is only possible if the first falling edge captures the bit `/PL`
+ * presented before any clock -- i.e. channel 0 -- so it settles CPHA as well
+ * as CPOL. The same run confirms MSB-first `H`-then-`A` bit order with no byte
+ * reversal, and the `QH` -> `SER` handoff both within a module and across one.
+ * Re-confirmed 2026-08-07 on a QT Py ESP32-S3 (FH4R2).
+ *
  * Rev C's inverter in the `CLK` path has no rev D counterpart: phase is handled
  * entirely by the SPI mode.
  *

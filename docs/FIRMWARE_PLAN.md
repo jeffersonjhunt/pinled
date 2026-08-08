@@ -247,26 +247,32 @@ instead of quietly corrupting every time constant:
    `Filament::init()` and `Profiler::init()`. Batch the LED frame into one
    transmit (`lamp_map::render()` currently issues one strip transmit per
    channel, which is FR-LED-6's exact anti-pattern). Needs no chained hardware —
-   a single module exercises the whole path. *(Done in code: single-transaction
-   SPI path, 16·N unpack with no discards, `/PL` from `CS`, 10 kHz gptimer
-   pacing, the boot feasibility clamp, and one strip transmit per frame. The
-   **rev C** version of this was measured on the '161 + '151 rig at 1 MHz; the
-   rev D framing that replaced it has never been run against hardware, so treat
-   M1a as compiled-but-unproven until M1b passes. See `BRINGUP.md` §7.)*
+   a single module exercises the whole path. *(**Done and proven, 2026-08-06.**
+   Single-transaction SPI path, 16·N unpack with no discards, `/PL` from `CS`,
+   10 kHz gptimer pacing, the boot feasibility clamp, and one strip transmit per
+   frame — all now measured against real '165s rather than compiled only. Frame
+   time 26.8 µs for 32 channels at 4 MHz → 37274 Hz free-run, 27% duty at the
+   10 kHz target.)*
 4. **M1b — one '165 module on the bench.** Two '165s on a breadboard, 16 test
    inputs, driving LEDs. The three things to settle, in order:
-   1. **SPI mode 2** — the only rev D claim that is reasoned rather than
-      measured. Mode 2 should read the pressed channel; mode 3 its neighbour.
-   2. **Bit order** — confirm channel 0 is the first bit out with channel 0 on
-      input `H`, and that no byte-reverse is needed.
-   3. **`/PL` from `CS`** — confirm the positive-polarity `CS` loads between
-      frames, and that holding `/PL` low makes `DATA` track channel 0 live.
-   *(Not started — blocked on parts. The firmware side is ready; the existing
-   bench validation is all rev C hardware — '161 + '151 — and does not transfer
-   beyond the SPI plumbing. See `BRINGUP.md` §5 for the rig.)*
+   1. ~~**SPI mode 2**~~ — **PASSED 2026-08-06.** `U1.D` read as channel 4 and
+      `U2.D` as channel 12, exactly, at 4 MHz. The exact landing is the proof:
+      a mode-3 sample on the shift edge would slide the whole frame by one.
+   2. ~~**Bit order**~~ — **PASSED**, same run. Channel 0 is the first bit out,
+      on input `H`, and no byte-reverse is needed.
+   3. **`/PL` from `CS`** — the positive-polarity `CS` load between frames is
+      **confirmed** (the rig runs on `PL_FROM_CS=y`). Holding `/PL` low to make
+      `DATA` track channel 0 live is **still untested** — needs a
+      `PINLED_SCAN_HOLD_CH=0` build.
+   *(Substantially passed. The rig went further than M1b required — 4× 74HC165
+   = 2 modules / 32 channels — so the M1c handoff result below came free. See
+   `BRINGUP.md` §5.)*
 5. **M1c — two modules, then eight.** Two modules is the important step: it
    proves the chain handoff, the 10 kΩ terminator, and that unplugging the last
-   module blanks its channels to a stable zero rather than noise (HW-11). Then
+   module blanks its channels to a stable zero rather than noise (HW-11).
+   *(**Chain handoff passed 2026-08-06** on the 4× '165 rig — channels 16–31
+   appear in order with no gap. The terminator and live-unplug half is still
+   open and is now the highest-value remaining check.)* Then
    scale to 8 / 128 channels, where the remaining risks live: multi-drop `CLK`
    integrity at the far end (`TIMING.md` §4.3 — the new binding constraint),
    clock-skew *direction* (module 8 must be clocked after module 1, HW-14), and

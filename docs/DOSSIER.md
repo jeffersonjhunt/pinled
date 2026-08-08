@@ -255,8 +255,10 @@ Stated so the first cut can proceed; flag any to change:
 
 1. **Topology:** two chained `74x165` shift registers, 16 ch/module, one SPI
    transaction per frame (rev D). Supersedes the counter+mux topology of rev B/C.
-   The '165 pin numbers throughout these docs are **from memory** and want
-   checking against a datasheet before layout.
+   **Bench-validated 2026-08-06** on 4× 74HC165 (2 modules, 32 ch) at 4 MHz:
+   SPI mode 2, `H`-first bit order and the `QH`→`SER` handoff all measured.
+   Most '165 pin numbers are now confirmed against silicon; pins 3, 4, 5, 6
+   and 13 remain unexercised — see `HARDWARE.md`.
 2. **MCU:** original ESP32 (QT Py ESP32 Pico), ESP-IDF **5.5.x**, matching the
    POC's `CMakePresets`. S3 is a drop-in later (more RAM/RMT channels).
 3. **LED driver:** `zorxx/neopixel` (RMT) as in the POC; `espressif/led_strip`

@@ -105,10 +105,10 @@ menu "pinled configuration"
                 the whole frame slides by one channel and channel 0 becomes
                 unreachable. That clean off-by-one is the signature.
 
-                CAVEAT: mode 2 is reasoned from the shift edge and has never
-                been measured on a '165. It is bring-up check #1
-                (docs/BRINGUP.md section 5). If every channel reads its
-                neighbour, try 3 before suspecting the wiring.
+                MEASURED 2026-08-06 on a 4x 74HC165 rig at 4 MHz: U1.D read as
+                channel 4 and U2.D as channel 12, exactly. This is no longer an
+                assumption -- if every channel reads its neighbour, suspect the
+                wiring or the clock rate, not the mode.
 
         config PINLED_PL_FROM_CS
             bool "Drive /PL from the SPI CS line"

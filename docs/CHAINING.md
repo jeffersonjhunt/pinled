@@ -380,7 +380,8 @@ The '165's ground is pin 8 and its supply is pin 16.
 | File | What |
 |---|---|
 | `chain_timing.svg` | Rev D waveforms: load, snapshot edge, shift, mode 2 sampling |
-| `pinled_module_revC.kicad_sch` | **Superseded.** Rev C schematic, retained for reference until rev D is bench-validated. |
+| `pinled_module_revC.kicad_sch` | **Superseded.** Rev C schematic, retained for reference only — rev D was bench-validated 2026-08-06 (`BRINGUP.md` §7) and this can be dropped once a rev D schematic exists. |
 
 No rev D schematic exists yet. The net list above is the authority; it is short
-enough to wire from directly, which is the intent for the bench build.
+enough to wire from directly, which is the intent for the bench build — and it
+has now been wired from directly, on a 4× 74HC165 rig, without correction.

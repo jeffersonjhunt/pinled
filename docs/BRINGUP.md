@@ -211,9 +211,16 @@ Test inputs, module-local channel order:
 
 Each input gets a switch to 3V3 and a 10 kΩ pull-down. Nothing floats.
 
-> Confirm these pin numbers against the datasheet of the part you actually
-> receive. They are written from memory and have not been checked against
-> silicon.
+> **Partly confirmed against silicon, 2026-08-06/07.** Working end to end on a
+> 4× 74HC165 rig proves pins 1 (`/PL`), 2 (`CLK`), 8 (`GND`), 9 (`QH`),
+> 10 (`SER`), 15 (`CLK INH`) and 16 (`VCC`). Pin 14 (`D`) was confirmed by
+> button press on two separate chips, and pins 11/12 (`A`/`B`) by their
+> floating-input signature landing on local channels 7/6 as this table
+> predicts. **Pins 3, 4, 5, 6 and 13 (`E`, `F`, `G`, `H`, `C`) have not been
+> individually exercised** — the order is right, but check them against the
+> datasheet before layout. Pin 6 (`H`, channel 0) is the one worth pressing
+> first: it is the only channel whose timing differs from the rest, being the
+> bit `/PL` presents before any clock.
 
 ### Firmware settings
 
@@ -233,16 +240,21 @@ deleted respectively when the firmware moved to rev D framing.
 
 ### What to check, in order
 
-1. **Mode 2.** Hold one switch. Mode 2 should report that channel; mode 3 its
-   neighbour. This is the only rev D claim that is reasoned rather than
-   measured — settle it first.
-2. **Bit order.** Channels should ascend with no byte reversal, given channel 0
-   on pin `H`.
-3. **`/PL` held low.** `DATA` should track channel 0 live on a meter.
-4. **Second module.** Channels 16–31 appear, in order, with no gap.
+1. ~~**Mode 2.**~~ **PASSED 2026-08-06.** `U1.D` read as channel 4 and `U2.D`
+   as channel 12, exactly, at 4 MHz on 4× 74HC165. Re-confirmed 2026-08-07 on a
+   QT Py ESP32-S3 (FH4R2).
+2. ~~**Bit order.**~~ **PASSED** — same run. Channels ascend with no byte
+   reversal, channel 0 on pin `H`. The exact landing of `D` on channel 4 is
+   itself the proof: a dropped first bit would slide the whole frame.
+3. ~~**Second module.**~~ **PASSED** — the rig is 2 modules / 32 channels.
+   Channels 16–31 appear in order with no gap, so the `QH`→`SER` handoff works
+   across a module boundary as well as within one.
+4. **`/PL` held low.** `DATA` should track channel 0 live on a meter. *Still
+   open* — needs a `PINLED_SCAN_HOLD_CH=0` build, which the bench has not run.
 5. **Unplug the second module** while running. Channels 16–31 must go to a
    stable, hard zero — not noise. That is HW-11 in one test, and it is the claim
    that makes `num_modules` a performance setting rather than a correctness one.
+   *Still open, and now the highest-value remaining check.*
 
 ### What does *not* transfer from the rev C rig
 
@@ -327,13 +339,28 @@ Superseded by rev D — do not carry these forward:
 
 ### Outstanding for rev D
 
-Everything on the hardware side. No rev D hardware exists yet.
+**Rev D hardware exists and runs.** A 4× 74HC165 breadboard rig (2 modules,
+32 channels) at 4 MHz, driven first by an ESP32-S3-DevKitC-1 (2026-08-06) and
+then by a QT Py ESP32-S3 FH4R2 (2026-08-07).
 
-The firmware **is** converted: `lamp_scan` frames 16·N bits with no discard,
-defaults to mode 2, and drives `/PL` rather than `/MR`. That is compiled and
-nothing more — not one line of it has met a '165.
+Settled on that rig:
 
-1. SPI mode 2, bit order, and `/PL`-from-`CS` on two '165s (§5).
-2. Chain handoff and terminator behaviour on four '165s (§5).
-3. Everything in `TIMING.md` §7: `/PL` edge quality at 800 mm, clock-skew
-   direction, multi-drop `CLK` integrity, and the terminator under live unplug.
+- **SPI mode 2** — `U1.D` → channel 4, `U2.D` → channel 12, exactly. The single
+  claim the whole rev D framing rested on.
+- **Bit order** — `H` first, channels ascending, no byte reversal.
+- **`QH`→`SER` handoff** — within a module *and* across a module boundary.
+- **`/PL` from `CS`** — positive-polarity `CS` loads between frames.
+- **Frame timing** — 26.8 µs for 32 ch → 37274 Hz free-run, 27% duty at 10 kHz.
+
+Still outstanding:
+
+1. **`/PL` held low** makes `DATA` track channel 0 live (FR-DIAG-3) — needs a
+   `PINLED_SCAN_HOLD_CH=0` build (§5 check 4).
+2. **Terminator under live unplug** (HW-11) — the highest-value remaining
+   check, and the one that makes `num_modules` a performance rather than a
+   correctness setting (§5 check 5).
+3. **Pins 3, 4, 5, 6 and 13** of the '165 have not been individually
+   exercised; pin 6 (`H`, channel 0) is the one worth pressing first.
+4. Everything in `TIMING.md` §7 items 2–4: `/PL` edge quality at 800 mm,
+   clock-skew direction, and multi-drop `CLK` integrity. All three need chain
+   lengths the bench rig does not have.

@@ -137,8 +137,11 @@ moot: nothing shares a line, so nothing needs to release one.
 - The '165's supply is pin 16 and its ground is pin 8. Pin 15 is `CLK INH`, not a
   supply pin, despite sitting next to `VCC`.
 
-> Pin numbers here are from memory and have **not** been checked against a
-> physical part or datasheet. Confirm before layout.
+> **Partly confirmed against silicon, 2026-08-06/07.** A working 4× 74HC165
+> rig proves pins 1 (`/PL`), 2 (`CLK`), 8 (`GND`), 9 (`QH`), 10 (`SER`),
+> 14 (`D`), 15 (`CLK INH`) and 16 (`VCC`), plus 11/12 (`A`/`B`) from their
+> floating-input signature. Pins 3, 4, 5, 6 and 13 (`E`, `F`, `G`, `H`, `C`)
+> are still unexercised — confirm those against a datasheet before layout.
 
 ## Chaining modules
 
