@@ -58,10 +58,42 @@ desired, "MAY" = optional.
 
 | ID | Req | Status |
 |---|---|---|
-| FR-CFG-1 | Machine profiles (channel map, colors, integrator params, profiler locks) SHALL persist in NVS. | v1 |
+| FR-CFG-1 | Machine profiles (per-lamp name, color, integrator params, profiler locks) SHALL persist across reboots. | v1 |
 | FR-CFG-2 | Build-time defaults SHALL be settable via Kconfig (`idf.py menuconfig`). | MVP |
-| FR-CFG-3 | Profiles SHOULD be loadable/exportable as a human-readable text/JSON blob. | future |
+| FR-CFG-3 | Profiles SHALL be loadable/exportable as human-readable JSON. | v1 |
 | FR-CFG-4 | The system SHALL boot to sane defaults with no stored profile. | MVP |
+| FR-CFG-5 | Configuration SHALL be split into two documents: a **machine profile**, keyed by the lamp's number in the machine's own lamp matrix and containing nothing install-specific, and an **install config** holding geometry, pins, wiring and credentials. Only the machine profile is shareable. | v1 |
+| FR-CFG-6 | The install config SHALL carry the channel → lamp-number → LED-index binding that joins the two documents. Importing a machine profile SHALL NOT modify geometry, pins or wiring. | v1 |
+| FR-CFG-7 | Both documents SHALL be stored as JSON files in a filesystem partition, not as NVS blobs (a 128-channel profile is ~16 KB; the NVS partition is 24 KB total). NVS SHALL retain only Wi-Fi credentials, author handle and the active-profile pointer. | v1 |
+| FR-CFG-8 | Per-channel state SHALL include name, LED index, base color, profiler class lock, and attack/decay overrides — one record written by both the profiler and the UI, with the class lock deciding precedence. | v1 |
+
+## 5a. Configuration UI
+
+Architecture, schema and rationale in `WEBUI.md`. The governing constraint is
+that the cloud is a convenience and is never required: every function of the
+product SHALL be reachable with no internet connection.
+
+| ID | Req | Status |
+|---|---|---|
+| FR-UI-1 | The device SHALL serve an SPA shell over HTTP on the local network. The application bundle, images, help and registry content MAY be loaded from cloud storage over HTTPS. | v1 |
+| FR-UI-2 | The device SHALL NOT make outbound requests to any web service. The browser is the only participant that communicates with both the device and the cloud. | v1 |
+| FR-UI-3 | The device API SHALL be unauthenticated and SHALL send `Access-Control-Allow-Origin: *`, so that a standalone copy of the SPA run from `file://` (origin `null`) can reach it. | v1 |
+| FR-UI-4 | `GET /api/v1/info` SHALL report an **API version** distinct from the firmware version, so a cloud-updated bundle can support field devices running older firmware. | v1 |
+| FR-UI-5 | The device SHALL push live per-channel state and profiler classification over a WebSocket at ~30 Hz, carrying a **sticky "active since last push"** bit per channel (cleared on send) so activity between pushes is not lost. This reuses the FR-DIAG-1 mechanism. | v1 |
+| FR-UI-6 | Unprovisioned, the device SHALL raise a SoftAP with a captive portal whose provisioning page is **self-contained on the device**, with no cloud dependency. After joining, it SHALL report both its mDNS name and its numeric IP. | v1 |
+| FR-UI-7 | A button-held rescue path SHALL return a provisioned device to SoftAP mode. | v1 |
+| FR-UI-8 | The SPA SHALL be downloadable as a standalone bundle that runs locally against the device API with no cloud access. | v1 |
+
+## 5b. Firmware update
+
+| ID | Req | Status |
+|---|---|---|
+| FR-OTA-1 | The device SHALL accept a firmware image by HTTP POST from the browser and apply it via the OTA API. It SHALL NOT fetch images itself. | v1 |
+| FR-OTA-2 | The OTA endpoint SHALL be armed by a **physical button press**, valid for ~60 s, with armed state readable from the API. Physical presence is the entire authorisation; open CORS otherwise leaves a bricking endpoint permanently exposed. | v1 |
+| FR-OTA-3 | Image integrity SHALL be checked against a published SHA-256 before upload, and ESP-IDF's app-descriptor validation SHALL remain enabled. Signed images / secure boot are `future`. | v1 |
+| FR-OTA-4 | USB flashing SHALL remain a fully supported first-class update path, not a recovery hatch. | MVP |
+| FR-OTA-5 | The partition table SHALL provide two OTA app slots plus a filesystem partition (`WEBUI.md` §7). | v1 |
+| FR-REG-1 | Device identity SHALL derive from the factory eFuse MAC — no provisioning step and no stored secret. An optional author handle in NVS SHALL be stamped into exported profiles for attribution. Profile ownership itself is a cloud-side association and no device function SHALL depend on it. | v1 |
 
 ## 6. Diagnostics
 
@@ -86,6 +118,7 @@ see `BRINGUP.md` for how they are used together.
 | NFR-5 | BOM target ≤ ~$25/strip; original ESP32-class MCU. | v1 |
 | NFR-6 | License MIT; third-party attributions retained under `licenses/`. | MVP |
 | NFR-7 | The CPU SHALL run at 240 MHz (`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240`). Every figure in `TIMING.md` §2 derives from it and the IDF default for `esp32s3` is 160 MHz, which inflates the frame budget by 1.5×. | MVP |
+| NFR-8 | The shipping board SHALL carry **8 MB** flash (no PSRAM required). Two 3 MB OTA slots plus a filesystem partition do not fit in 4 MB with any margin (`WEBUI.md` §7). *(Settled 2026-08-08; the mainboard places a bare S3, so flash size is a BOM choice — cheap now, expensive after layout.)* | v1 |
 
 ## 8. Hardware contract
 
@@ -110,7 +143,16 @@ firmware change, not just a hardware change — see `TIMING.md` for derivations.
 | HW-14 | The `CLK` bus SHALL be routed so it propagates *along* the harness, master to downstream, rather than star-wired. This keeps each module clocked before the one feeding it, so harness skew adds to the inter-device hold margin instead of eroding it (`CHAINING.md`). | MVP |
 
 ## 9. Out of scope (first cut)
-- OTA / Wi-Fi provisioning UI, web config portal.
+- Any device-initiated call to a cloud service (FR-UI-2) — including
+  device-pull OTA, telemetry, and cert issuance. The browser mediates.
+- TLS on the device, and the per-device certificate infrastructure a
+  cloud-hosted SPA would require (`WEBUI.md` §1).
+- Device-side authentication or user accounts. Ownership and verification live
+  in the sharing service (FR-REG-1).
+- The cloud sharing service itself, and native mobile apps.
 - Reverse-engineering per-title lamp tables (baseline behavior comes from
   sensing, not decoding ROM state).
 - PCB/gerber design (tracked in the hardware repo, not firmware).
+
+*Web config portal, Wi-Fi provisioning and OTA were out of scope through
+2026-08-08 and are now specified in §5a/§5b.*

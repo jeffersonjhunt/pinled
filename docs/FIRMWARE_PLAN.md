@@ -184,13 +184,23 @@ in polish (FR-LED-7).
 - **Kconfig** (`main/Kconfig.projbuild`): pins, channel count, modules, default
   time constants, sample/refresh rates, LED count, active polarity — so
   `idf.py menuconfig` sets sane build-time defaults (FR-CFG-2).
-- **NVS** (`machine_config`): runtime machine profiles — channel map, colors,
-  integrator params, profiler locks (FR-CFG-1). Boots to Kconfig defaults with
-  no stored profile (FR-CFG-4). JSON import/export is `future`.
+- **Filesystem** (`machine_config`): runtime configuration as two JSON files —
+  a shareable **machine profile** keyed by lamp number, and an **install
+  config** holding geometry, pins, wiring and credentials (FR-CFG-5/6/7). Boots
+  to Kconfig defaults with no stored profile (FR-CFG-4).
+- **NVS**: only what must survive a filesystem wipe — Wi-Fi credentials, author
+  handle, active-profile pointer.
 
 With 1:1 LED mapping and a single sense bus, the whole topology stays
-expressible in Kconfig, so NVS profiles remain an M3 item rather than a
+expressible in Kconfig, so stored profiles remain an M3 item rather than a
 prerequisite.
+
+Schema, device API, provisioning and update flows are specified in `WEBUI.md`.
+Two of its conclusions constrain code written before M3 and are worth carrying
+early: per-lamp presentation is the *same* per-channel record the profiler
+writes (so `MachineConfig` needs a per-channel array, which it currently
+lacks), and the UI's live view reuses FR-DIAG-1's sticky per-channel flag
+rather than sampling `level[]`.
 
 Pin map (QT Py ESP32-S3). **The POC defaults are unusable on this board**:
 GPIO 26/27 are SPI flash pins on the S3, and 15/25 are not broken out.
@@ -289,9 +299,24 @@ instead of quietly corrupting every time constant:
    period estimation, AC_DIMMED vs AC_STEADY, ground-bounce robustness. Boot
    classification seeds integrator params; verify a matrixed lamp reads as
    steady-on and a dimmed GI tracks brightness. BOOT button re-arms.
-7. **M3 — profiles.** NVS profile load/save; per-channel tint and profiler
-   locks; power cap; first named-machine calibration profile.
-8. **M4 — polish.** Gamma/dither tuning, docs, release BOM.
+7. **M3 — profiles and the config API.** The headless half of `WEBUI.md`, and
+   the part everything else depends on: the two-document JSON schema
+   (FR-CFG-5/6), a LittleFS store replacing the NVS-blob plan (FR-CFG-7), a
+   per-channel record carrying name / LED index / colour / class lock / tau
+   overrides (FR-CFG-8), then `esp_http_server` with the `/api/v1` surface,
+   SoftAP + captive-portal provisioning (FR-UI-6/7), and the live WebSocket
+   (FR-UI-5). Per-channel tint and profiler locks, power cap, and the first
+   named-machine calibration profile land here. Testable entirely with `curl`,
+   before any UI exists.
+   *Partition table and `CONFIG_ESPTOOLPY_FLASHSIZE` change at the start of
+   this milestone — they cannot until the 8 MB board is in hand (`WEBUI.md`
+   §7).*
+8. **M4 — UI and updates.** SPA shell served from the device, bundle in S3
+   (FR-UI-1/2), API versioning (FR-UI-4), standalone offline bundle (FR-UI-8),
+   browser-mediated OTA with button arming (FR-OTA-1/2/3), device identity and
+   author attribution (FR-REG-1). The mapping flow is the acceptance test:
+   fire a lamp from the test card and bind it by clicking.
+9. **M5 — polish.** Gamma/dither tuning, docs, release BOM.
 
 ## 6. Test strategy
 
