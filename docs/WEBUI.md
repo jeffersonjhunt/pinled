@@ -69,6 +69,9 @@ protecting — the machine is on the owner's LAN and the payload is lamp colours
 | `GET` | `info` | device id, firmware version, **API version**, channel geometry, author handle |
 | `GET`/`PUT` | `config` | install config (§3) |
 | `GET`/`PUT` | `profile` | machine profile (§3) |
+| `GET`/`POST` | `snapshots` | list; capture current state as a new snapshot (§3a) |
+| `GET`/`DELETE` | `snapshots/{id}` | export one; delete one |
+| `PUT` | `snapshots/{id}/activate` | switch to it; response says whether a restart was needed |
 | `GET` | `wifi/scan` | visible SSIDs |
 | `PUT` | `wifi` | credentials; device joins and reports its address |
 | `WS` | `live` | live per-channel state, ~30 Hz (§4) |
@@ -126,7 +129,12 @@ as the operator's manual numbers it), never by channel index.
 }
 ```
 
-### Install config — never leaves the device
+### Install config — private, but not device-bound
+
+Never published to the **shared registry**, because it describes one physical
+build and would mis-map or mis-configure anyone else's. But it is ordinary user
+data: exportable, importable, backed up to the user's **private** cloud area,
+and restorable onto a replacement device.
 
 ```json
 {
@@ -136,8 +144,7 @@ as the operator's manual numbers it), never by channel index.
   "pins":     { "clk": 18, "pl": 17, "data": 9, "led": 8 },
   "scan":     { "sample_rate_hz": 10000, "spi_hz": 4000000, "spi_mode": 2, "active_low": false },
   "render":   { "refresh_hz": 90, "gamma": 2.2, "brightness_cap": 180 },
-  "wiring":   [ { "channel": 0, "lamp": 17, "led_index": 0 } ],
-  "wifi":     { "ssid": "…" }
+  "wiring":   [ { "channel": 0, "lamp": 17, "led_index": 0 } ]
 }
 ```
 
@@ -147,6 +154,64 @@ physical order of the LED string is a property of how this install was built.
 
 Importing a shared profile therefore never touches geometry, pins or wiring. It
 repaints lamps the user has already bound.
+
+**Wi-Fi credentials are not part of this document** and are never exported, at
+any privacy level. They live in NVS only. That is where "never leaves the
+device" actually applies — at the field, not at the document. Restoring a backup
+consequently requires re-provisioning, which is correct anyway: a restore is
+usually onto different hardware or a different network.
+
+## 3a. Snapshots and versioning
+
+A **snapshot** is a named, timestamped capture of the install config *and* the
+machine profile together, so a user can keep a backup, try an alternative setup,
+compare the two on the playfield, and go back.
+
+Versioning the pair rather than each document independently is the deliberate
+choice: what a user A/B tests is a *look*, and a look is not confined to one
+document — insert colours live in the profile, while gamma, brightness cap and
+LED order live in the install config. At ~30 KB per snapshot against a 1.875 MB
+filesystem, storing the pair costs nothing worth optimising.
+
+```json
+{
+  "schema": 1,
+  "kind": "snapshot",
+  "snapshot_id": "01J8…",
+  "label": "warm GI, dimmer inserts",
+  "created": "2026-08-08T19:04:11Z",
+  "parent": "01J8…",
+  "install_config":  { … },
+  "machine_profile": { … }
+}
+```
+
+`parent` records lineage, so an A/B pair is visibly two branches from a common
+point rather than two unrelated blobs.
+
+### Hot and cold fields
+
+For A/B comparison to be usable the switch has to be immediate — nobody
+evaluates a colour change across a reboot. Fields therefore divide:
+
+| | Fields | On activate |
+|---|---|---|
+| **Hot** | everything in the per-lamp record (name, colour, class lock, attack/decay, gain), plus `gamma` and `brightness_cap` | applied live, no restart |
+| **Cold** | `geometry`, `pins`, `scan.*`, `refresh_hz` | requires re-init; the API reports this |
+
+The cold set is exactly the fields the boot-time validation in
+`FIRMWARE_PLAN.md` §4 checks (FR-SCAN-9, FR-LED-8) — changing them invalidates
+the measured Fs that every filament time constant is derived from. They are also
+the fields nobody A/B tests, so the restriction costs nothing.
+
+An **automatic snapshot before any destructive operation** — profile import,
+snapshot restore, OTA — gives undo for free and is the cheapest safety feature
+available here.
+
+### What the shared registry accepts
+
+Only `kind: "machine_profile"`. Snapshots and install configs go to the user's
+private area, which is a backup store, not a publishing surface.
 
 ### Per-lamp presentation costs almost nothing
 
@@ -174,8 +239,12 @@ Both documents are JSON files in a LittleFS partition, not NVS blobs. A
 export is serving the file — and keeps the offline path (§6) working with
 ordinary file downloads.
 
+Snapshots (§3a) live in the same partition at ~30 KB each. 1.875 MB is far more
+than anyone needs; cap the on-device count (16 is generous) and let the user's
+private cloud area hold the rest.
+
 NVS keeps only what must survive a filesystem wipe: Wi-Fi credentials, author
-handle, active-profile pointer.
+handle, active-snapshot pointer.
 
 ## 4. The live view is what makes mapping tractable
 
@@ -252,6 +321,12 @@ Ownership itself is a cloud-side association between an account, a verified
 email, and a `profile_id`. The SPA registers on the user's behalf; the device
 is simply where the profile was edited.
 
+The account also owns a **private area** holding snapshot backups (§3a) — the
+user's own install configs and profile versions, distinct from the public
+registry. Same transport as everything else: the browser reads from the device
+and writes to the cloud. The device is not involved and does not know the area
+exists.
+
 ### Running with no cloud at all
 
 Every function must remain reachable offline:
@@ -261,6 +336,7 @@ Every function must remain reachable offline:
 | Provisioning | on-device captive portal, no S3 dependency |
 | Configuration | **standalone SPA download**, run locally from `file://` |
 | Profiles | plain JSON files, import/export over the device API |
+| Backup / A-B | snapshots stored on-device; export to local disk |
 | Firmware update | **USB flashing**, or manual `.bin` upload via the SPA |
 
 The standalone SPA is why the device API must answer `Origin: null`. Note that

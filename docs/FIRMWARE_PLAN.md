@@ -185,11 +185,13 @@ in polish (FR-LED-7).
   time constants, sample/refresh rates, LED count, active polarity — so
   `idf.py menuconfig` sets sane build-time defaults (FR-CFG-2).
 - **Filesystem** (`machine_config`): runtime configuration as two JSON files —
-  a shareable **machine profile** keyed by lamp number, and an **install
-  config** holding geometry, pins, wiring and credentials (FR-CFG-5/6/7). Boots
-  to Kconfig defaults with no stored profile (FR-CFG-4).
-- **NVS**: only what must survive a filesystem wipe — Wi-Fi credentials, author
-  handle, active-profile pointer.
+  a shareable **machine profile** keyed by lamp number, and a private but
+  exportable **install config** holding geometry, pins and wiring
+  (FR-CFG-5/6/7) — plus **snapshots** pairing the two for backup and A/B
+  comparison (FR-CFG-9/10/11). Boots to Kconfig defaults with none stored
+  (FR-CFG-4).
+- **NVS**: only what must survive a filesystem wipe — Wi-Fi credentials (which
+  never appear in an export, FR-CFG-12), author handle, active-snapshot pointer.
 
 With 1:1 LED mapping and a single sense bus, the whole topology stays
 expressible in Kconfig, so stored profiles remain an M3 item rather than a
@@ -303,7 +305,8 @@ instead of quietly corrupting every time constant:
    the part everything else depends on: the two-document JSON schema
    (FR-CFG-5/6), a LittleFS store replacing the NVS-blob plan (FR-CFG-7), a
    per-channel record carrying name / LED index / colour / class lock / tau
-   overrides (FR-CFG-8), then `esp_http_server` with the `/api/v1` surface,
+   overrides (FR-CFG-8), snapshots with hot/cold activation (FR-CFG-9/10/11),
+   then `esp_http_server` with the `/api/v1` surface,
    SoftAP + captive-portal provisioning (FR-UI-6/7), and the live WebSocket
    (FR-UI-5). Per-channel tint and profiler locks, power cap, and the first
    named-machine calibration profile land here. Testable entirely with `curl`,
