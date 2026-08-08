@@ -69,9 +69,6 @@ protecting — the machine is on the owner's LAN and the payload is lamp colours
 | `GET` | `info` | device id, firmware version, **API version**, channel geometry, author handle |
 | `GET`/`PUT` | `config` | install config (§3) |
 | `GET`/`PUT` | `profile` | machine profile (§3) |
-| `GET`/`POST` | `snapshots` | list; capture current state as a new snapshot (§3a) |
-| `GET`/`DELETE` | `snapshots/{id}` | export one; delete one |
-| `PUT` | `snapshots/{id}/activate` | switch to it; response says whether a restart was needed |
 | `GET` | `wifi/scan` | visible SSIDs |
 | `PUT` | `wifi` | credentials; device joins and reports its address |
 | `WS` | `live` | live per-channel state, ~30 Hz (§4) |
@@ -161,23 +158,22 @@ device" actually applies — at the field, not at the document. Restoring a back
 consequently requires re-provisioning, which is correct anyway: a restore is
 usually onto different hardware or a different network.
 
-## 3a. Snapshots and versioning
+## 3a. Versions live off the device
 
-A **snapshot** is a named, timestamped capture of the install config *and* the
-machine profile together, so a user can keep a backup, try an alternative setup,
-compare the two on the playfield, and go back.
+**The device stores exactly one active configuration.** Only one can be in
+effect at a time, so a version library on the device would be dead weight in a
+partition and a second thing to keep consistent. Versions are managed by the
+SPA and stored where the user's other data already lives: their private cloud
+area, or plain files on local disk for the offline path.
 
-Versioning the pair rather than each document independently is the deliberate
-choice: what a user A/B tests is a *look*, and a look is not confined to one
-document — insert colours live in the profile, while gamma, brightness cap and
-LED order live in the install config. At ~30 KB per snapshot against a 1.875 MB
-filesystem, storing the pair costs nothing worth optimising.
+A **version** is the install config and machine profile captured together, with
+a label, a timestamp and parent lineage:
 
 ```json
 {
   "schema": 1,
-  "kind": "snapshot",
-  "snapshot_id": "01J8…",
+  "kind": "version",
+  "version_id": "01J8…",
   "label": "warm GI, dimmer inserts",
   "created": "2026-08-08T19:04:11Z",
   "parent": "01J8…",
@@ -186,31 +182,26 @@ filesystem, storing the pair costs nothing worth optimising.
 }
 ```
 
-`parent` records lineage, so an A/B pair is visibly two branches from a common
-point rather than two unrelated blobs.
+Pairing the two documents is deliberate: what a user compares is a *look*, and
+a look is not confined to one document — insert colours live in the profile,
+while gamma, brightness cap and LED order live in the install config. `parent`
+records lineage, so an A/B pair reads as two branches from a common point rather
+than two unrelated blobs.
 
-### Hot and cold fields
+Flipping between versions is `PUT config` + `PUT profile` — no special API, no
+device-side history. It need not be instantaneous; applying a configuration may
+require re-initialisation, and the device reports whether it did.
 
-For A/B comparison to be usable the switch has to be immediate — nobody
-evaluates a colour change across a reboot. Fields therefore divide:
-
-| | Fields | On activate |
-|---|---|---|
-| **Hot** | everything in the per-lamp record (name, colour, class lock, attack/decay, gain), plus `gamma` and `brightness_cap` | applied live, no restart |
-| **Cold** | `geometry`, `pins`, `scan.*`, `refresh_hz` | requires re-init; the API reports this |
-
-The cold set is exactly the fields the boot-time validation in
-`FIRMWARE_PLAN.md` §4 checks (FR-SCAN-9, FR-LED-8) — changing them invalidates
-the measured Fs that every filament time constant is derived from. They are also
-the fields nobody A/B tests, so the restriction costs nothing.
-
-An **automatic snapshot before any destructive operation** — profile import,
-snapshot restore, OTA — gives undo for free and is the cheapest safety feature
-available here.
+**Fallback is inherent.** The SPA is what applied the change, so it still holds
+the outgoing version — going back is one action. No device-side rollback slot is
+needed, because **no value in an install config can lock the user out**: pins,
+geometry and rates affect scanning and rendering, never the HTTP server. Wi-Fi
+credentials are the only setting that could, they are not part of this document
+(§3), and they have the button rescue path (FR-UI-7).
 
 ### What the shared registry accepts
 
-Only `kind: "machine_profile"`. Snapshots and install configs go to the user's
+Only `kind: "machine_profile"`. Versions and install configs go to the user's
 private area, which is a backup store, not a publishing surface.
 
 ### Per-lamp presentation costs almost nothing
@@ -239,12 +230,8 @@ Both documents are JSON files in a LittleFS partition, not NVS blobs. A
 export is serving the file — and keeps the offline path (§6) working with
 ordinary file downloads.
 
-Snapshots (§3a) live in the same partition at ~30 KB each. 1.875 MB is far more
-than anyone needs; cap the on-device count (16 is generous) and let the user's
-private cloud area hold the rest.
-
-NVS keeps only what must survive a filesystem wipe: Wi-Fi credentials, author
-handle, active-snapshot pointer.
+One of each, not a library (§3a). NVS keeps only what must survive a filesystem
+wipe: Wi-Fi credentials and the author handle.
 
 ## 4. The live view is what makes mapping tractable
 
@@ -321,11 +308,12 @@ Ownership itself is a cloud-side association between an account, a verified
 email, and a `profile_id`. The SPA registers on the user's behalf; the device
 is simply where the profile was edited.
 
-The account also owns a **private area** holding snapshot backups (§3a) — the
-user's own install configs and profile versions, distinct from the public
-registry. Same transport as everything else: the browser reads from the device
-and writes to the cloud. The device is not involved and does not know the area
-exists.
+The account also owns a **private area** holding the user's version library
+(§3a) — their own install configs and profile versions, distinct from the public
+registry. This is the *only* version store; the device keeps one active
+configuration and no history. Same transport as everything else: the browser
+reads from the device and writes to the cloud. The device is not involved and
+does not know the area exists.
 
 ### Running with no cloud at all
 
@@ -336,7 +324,7 @@ Every function must remain reachable offline:
 | Provisioning | on-device captive portal, no S3 dependency |
 | Configuration | **standalone SPA download**, run locally from `file://` |
 | Profiles | plain JSON files, import/export over the device API |
-| Backup / A-B | snapshots stored on-device; export to local disk |
+| Backup / A-B | versions as JSON files on local disk, applied via the SPA |
 | Firmware update | **USB flashing**, or manual `.bin` upload via the SPA |
 
 The standalone SPA is why the device API must answer `Origin: null`. Note that

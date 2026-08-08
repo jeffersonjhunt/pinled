@@ -66,9 +66,9 @@ desired, "MAY" = optional.
 | FR-CFG-6 | The install config SHALL carry the channel → lamp-number → LED-index binding that joins the two documents. Importing a machine profile SHALL NOT modify geometry, pins or wiring. | v1 |
 | FR-CFG-7 | Both documents SHALL be stored as JSON files in a filesystem partition, not as NVS blobs (a 128-channel profile is ~16 KB; the NVS partition is 24 KB total). NVS SHALL retain only Wi-Fi credentials, author handle and the active-profile pointer. | v1 |
 | FR-CFG-8 | Per-channel state SHALL include name, LED index, base color, profiler class lock, and attack/decay overrides — one record written by both the profiler and the UI, with the class lock deciding precedence. | v1 |
-| FR-CFG-9 | The system SHALL support named, timestamped **snapshots** capturing the install config and machine profile together, with parent lineage recorded, so a user can back up, keep alternative setups, A/B compare them and revert. Snapshots SHALL be listable, activatable, exportable and deletable. | v1 |
-| FR-CFG-10 | Activating a snapshot SHALL apply **hot** fields (per-lamp record, gamma, brightness cap) live with no restart, and SHALL report when a change touches **cold** fields (geometry, pins, scan params, refresh rate) that require re-initialisation. A/B comparison is only useful if the switch is immediate. | v1 |
-| FR-CFG-11 | The system SHALL take an automatic snapshot before any destructive operation — profile import, snapshot restore, firmware update. | v1 |
+| FR-CFG-9 | A **version** SHALL be the install config and machine profile captured together with a label, timestamp and parent lineage, so a user can back up, keep alternative setups, compare them and revert. Versions SHALL be managed by the UI and stored in the user's private cloud area or as local files. | v1 |
+| FR-CFG-10 | The device SHALL store exactly **one active configuration** and no version history — only one can be in effect, so on-device copies would be dead weight and a second thing to keep consistent. Switching versions is an ordinary config write; it need not be instantaneous, but the device SHALL report whether applying one required re-initialisation. | v1 |
+| FR-CFG-11 | The UI SHALL retain the outgoing configuration when applying a new one, so fallback is a single action. No device-side rollback slot is required: no install-config value can lock the user out (pins, geometry and rates affect only scan and render, never the HTTP server), and Wi-Fi credentials are covered by FR-UI-7. | v1 |
 | FR-CFG-12 | Wi-Fi credentials SHALL live in NVS only and SHALL NOT appear in any exported document, at any privacy level. Restoring a backup therefore requires re-provisioning. | v1 |
 
 ## 5a. Configuration UI
@@ -98,7 +98,7 @@ product SHALL be reachable with no internet connection.
 | FR-OTA-4 | USB flashing SHALL remain a fully supported first-class update path, not a recovery hatch. | MVP |
 | FR-OTA-5 | The partition table SHALL provide two OTA app slots plus a filesystem partition (`WEBUI.md` §7). | v1 |
 | FR-REG-1 | Device identity SHALL derive from the factory eFuse MAC — no provisioning step and no stored secret. An optional author handle in NVS SHALL be stamped into exported profiles for attribution. Profile ownership itself is a cloud-side association and no device function SHALL depend on it. | v1 |
-| FR-REG-2 | A registered account SHALL have a **private** area for snapshot backups, distinct from the public registry. The registry SHALL accept only machine profiles; install configs and snapshots are private. As with everything else, the browser mediates and the device is not involved (FR-UI-2). | v1 |
+| FR-REG-2 | A registered account SHALL have a **private** area holding the user's version library, distinct from the public registry, and it is the only version store in the system (FR-CFG-10). The registry SHALL accept only machine profiles; install configs and versions are private. As with everything else, the browser mediates and the device is not involved (FR-UI-2). | v1 |
 
 ## 6. Diagnostics
 
