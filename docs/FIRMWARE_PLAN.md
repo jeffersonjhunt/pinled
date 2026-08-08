@@ -260,13 +260,15 @@ instead of quietly corrupting every time constant:
       a mode-3 sample on the shift edge would slide the whole frame by one.
    2. ~~**Bit order**~~ — **PASSED**, same run. Channel 0 is the first bit out,
       on input `H`, and no byte-reverse is needed.
-   3. **`/PL` from `CS`** — the positive-polarity `CS` load between frames is
-      **confirmed** (the rig runs on `PL_FROM_CS=y`). Holding `/PL` low to make
-      `DATA` track channel 0 live is **still untested** — needs a
-      `PINLED_SCAN_HOLD_CH=0` build.
-   *(Substantially passed. The rig went further than M1b required — 4× 74HC165
-   = 2 modules / 32 channels — so the M1c handoff result below came free. See
-   `BRINGUP.md` §5.)*
+   3. ~~**`/PL` from `CS`**~~ — **PASSED.** The positive-polarity `CS` load
+      between frames is confirmed by the rig running on `PL_FROM_CS=y`, and
+      holding `/PL` low was confirmed 2026-08-07 with a
+      `PINLED_SCAN_HOLD_CH=0` build: `DATA` sat at 0, went to 1 for the ~24 s
+      the channel-0 button was held, and returned to 0 on release — one clean
+      transition each way, no chatter, no clocking involved. FR-DIAG-3 works.
+   ***M1b complete, 2026-08-07.*** *The rig went further than M1b required —
+   4× 74HC165 = 2 modules / 32 channels — so the M1c handoff result below came
+   free. See `BRINGUP.md` §5.*
 5. **M1c — two modules, then eight.** Two modules is the important step: it
    proves the chain handoff, the 10 kΩ terminator, and that unplugging the last
    module blanks its channels to a stable zero rather than noise (HW-11).

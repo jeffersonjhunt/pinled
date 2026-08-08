@@ -279,8 +279,11 @@ deleted respectively when the firmware moved to rev D framing.
 3. ~~**Second module.**~~ **PASSED** — the rig is 2 modules / 32 channels.
    Channels 16–31 appear in order with no gap, so the `QH`→`SER` handoff works
    across a module boundary as well as within one.
-4. **`/PL` held low.** `DATA` should track channel 0 live on a meter. *Still
-   open* — needs a `PINLED_SCAN_HOLD_CH=0` build, which the bench has not run.
+4. ~~**`/PL` held low.**~~ **PASSED 2026-08-07.** A `PINLED_SCAN_HOLD_CH=0`
+   build logged `DATA=0` at idle, `DATA=1` for the ~24 s the channel-0 button
+   was held, and `DATA=0` on release — one clean transition each way with no
+   chatter, and no clocking involved at all. The registers really do stay
+   transparent and follow the input. FR-DIAG-3 works as designed.
 5. ~~**Unplug the second module** while running.~~ **PASSED 2026-08-07.**
    Chips 3–4 pulled live; channels 16–31 held a hard zero across **~4.9 M
    frames** with not one toggle flag set. The positive control matters as much
@@ -392,16 +395,14 @@ Settled on that rig:
   actively switching. `num_modules` is a performance setting, not a correctness
   one.
 
-**Every rev D correctness claim is now measured.** What remains is either
-diagnostic polish or needs a longer chain than four chips:
+**Every rev D correctness claim is measured, and all four diagnostics
+(FR-DIAG-1..4) are exercised on real hardware.** What remains needs either a
+longer chain than four chips or a rig rewire:
 
-1. **`/PL` held low** makes `DATA` track channel 0 live (FR-DIAG-3) — needs a
-   `PINLED_SCAN_HOLD_CH=0` build (§5 check 4). Diagnostic convenience only;
-   nothing depends on it.
-2. **Pins 3, 4, 5 and 13** (`E`, `F`, `G`, `C`) of the '165 have not been
+1. **Pins 3, 4, 5 and 13** (`E`, `F`, `G`, `C`) of the '165 have not been
    individually exercised, and are hard-grounded on the rig so it cannot
    exercise them. Channel 0 (pin 6) is done.
-3. Everything in `TIMING.md` §7 items 2–4: `/PL` edge quality at 800 mm,
+2. Everything in `TIMING.md` §7 items 2–4: `/PL` edge quality at 800 mm,
    clock-skew direction, and multi-drop `CLK` integrity. All three need chain
    lengths the bench rig does not have, and all three are about *scaling* a
    design whose correctness is now established at 2 modules.
