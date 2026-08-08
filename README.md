@@ -69,7 +69,7 @@ components/
   lamp_map/            channel -> LED mapping + WS2812B (RMT) render
   machine_config/      NVS profiles + Kconfig defaults
 docs/                  DOSSIER, FIRMWARE_PLAN, REQUIREMENTS, HARDWARE, CHAINING, TIMING, BRINGUP,
-                       WEBUI + chain_timing.svg
+                       WEBUI + chain_timing.svg, ui-mockup.html
 ```
 
 Two FreeRTOS tasks: `scan_task` samples every channel at a fixed 10 kHz and

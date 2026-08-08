@@ -1,0 +1,1635 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pinled — configuration</title>
+
+<!--
+  Design reference for the configuration UI specified in docs/WEBUI.md.
+
+  Self-contained: no build step, no network, no dependencies. Open it in a
+  browser. Everything behind it is simulated in the script at the bottom —
+  there is no device, and none of this is production code.
+
+  What it is for: making the decisions in WEBUI.md arguable before any of it
+  is built. In particular the learn-wiring flow (WEBUI.md §4), the machine
+  profile / install config split (§3), per-lamp presentation, and OTA arming
+  (§5). The channel grid runs the same leaky integrator the firmware does, so
+  attack/decay changes show the reconstruction behaving, not a mock of it.
+-->
+
+<style>
+  :root {
+    /* ground — warm cabinet dark, brown bias, never neutral */
+    --ink-900: #12100d;
+    --ink-850: #17140f;
+    --ink-800: #1b1815;
+    --ink-750: #211d18;
+    --ink-700: #26221d;
+    --ink-650: #2e2922;
+    --rule:    #37312a;
+    --rule-sw: #453d33;
+
+    --dim:     #8a8076;
+    --dim-2:   #a89c8e;
+    --text:    #ede7de;
+
+    /* accent — a #44 bulb */
+    --amber:     #ffb23f;
+    --amber-dim: #c4832a;
+    --amber-ink: #2a1c07;
+
+    /* semantic, deliberately cool so it never reads as lamp colour */
+    --ok:   #5fbf9b;
+    --crit: #e5604d;
+
+    --r-sm: 3px;
+    --r-md: 5px;
+    --r-lg: 8px;
+
+    --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+
+    --rail-w: 176px;
+    --insp-w: 320px;
+
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ink-900);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  p, .prose { font-family: var(--font-ui); }
+
+  a { color: var(--amber); }
+
+  :focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* ---------------------------------------------------------------- shell */
+
+  .app {
+    display: grid;
+    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas: "bar bar" "rail stage";
+    min-height: 100vh;
+  }
+
+  .topbar {
+    grid-area: bar;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 0 18px;
+    height: 52px;
+    background: var(--ink-850);
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-size: 13px;
+  }
+  .brand .filament {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--amber);
+    box-shadow: 0 0 9px 1px rgba(255, 178, 63, 0.75);
+    align-self: center;
+  }
+  .brand small {
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    color: var(--dim);
+    text-transform: none;
+  }
+
+  .machine-id {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding-left: 20px;
+    border-left: 1px solid var(--rule);
+    min-width: 0;
+  }
+  .machine-id b { font-weight: 600; font-size: 12.5px; letter-spacing: 0.01em; }
+  .machine-id span { color: var(--dim); font-size: 11px; }
+
+  .topbar-spacer { flex: 1; }
+
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 11px 5px 9px;
+    border: 1px solid var(--rule-sw);
+    border-radius: 100px;
+    background: var(--ink-750);
+    font-size: 11.5px;
+    letter-spacing: 0.03em;
+  }
+  .status .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 7px rgba(95, 191, 155, 0.8);
+  }
+  .status .host { color: var(--dim-2); }
+
+  .meta-chip {
+    font-size: 11px;
+    color: var(--dim);
+    letter-spacing: 0.05em;
+  }
+  .meta-chip b { color: var(--dim-2); font-weight: 500; }
+
+  /* ----------------------------------------------------------------- rail */
+
+  .rail {
+    grid-area: rail;
+    background: var(--ink-850);
+    border-right: 1px solid var(--rule);
+    padding: 14px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .rail-label {
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--dim);
+    padding: 12px 10px 6px;
+  }
+  .rail-label:first-child { padding-top: 2px; }
+
+  .navitem {
+    appearance: none;
+    background: none;
+    border: 0;
+    border-radius: var(--r-md);
+    color: var(--dim-2);
+    font: inherit;
+    text-align: left;
+    padding: 7px 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    letter-spacing: 0.02em;
+  }
+  .navitem:hover { background: var(--ink-750); color: var(--text); }
+  .navitem[aria-current="true"] {
+    background: var(--ink-700);
+    color: var(--text);
+    box-shadow: inset 2px 0 0 var(--amber);
+  }
+  .navitem .k {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--dim);
+    opacity: 0.7;
+  }
+
+  .rail-foot {
+    margin-top: auto;
+    padding: 10px;
+    border-top: 1px solid var(--rule);
+    font-size: 10.5px;
+    color: var(--dim);
+    line-height: 1.7;
+  }
+  .rail-foot b { color: var(--dim-2); font-weight: 500; }
+
+  /* ---------------------------------------------------------------- stage */
+
+  .stage { grid-area: stage; min-width: 0; overflow: hidden; }
+
+  .panel { display: none; height: 100%; }
+  .panel[data-active="true"] { display: block; }
+
+  .panel-scroll {
+    height: calc(100vh - 52px);
+    overflow-y: auto;
+    padding: 22px 26px 60px;
+  }
+
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--insp-w);
+    height: calc(100vh - 52px);
+  }
+  .split > .work { overflow-y: auto; padding: 22px 24px 60px; min-width: 0; }
+  .split > .inspector {
+    border-left: 1px solid var(--rule);
+    background: var(--ink-850);
+    overflow-y: auto;
+  }
+
+  /* --------------------------------------------------------------- typing */
+
+  h2.sec {
+    margin: 0 0 3px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text);
+  }
+  .sec-note {
+    margin: 0 0 20px;
+    color: var(--dim);
+    font-size: 12.5px;
+    max-width: 66ch;
+    line-height: 1.65;
+  }
+  .sec-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .sec-head .sec-note { margin-bottom: 0; }
+  .sec-head > div { min-width: 0; }
+
+  /* -------------------------------------------------------------- buttons */
+
+  .btn {
+    appearance: none;
+    font: inherit;
+    letter-spacing: 0.04em;
+    border-radius: var(--r-md);
+    border: 1px solid var(--rule-sw);
+    background: var(--ink-700);
+    color: var(--text);
+    padding: 6px 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  }
+  .btn:hover { background: var(--ink-650); border-color: var(--dim); }
+  .btn:active { transform: translateY(0.5px); }
+  .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+  .btn[disabled]:hover { background: var(--ink-700); border-color: var(--rule-sw); }
+
+  .btn.primary {
+    background: var(--amber);
+    border-color: var(--amber);
+    color: var(--amber-ink);
+    font-weight: 600;
+  }
+  .btn.primary:hover { background: #ffc25f; border-color: #ffc25f; }
+  .btn.primary[disabled]:hover { background: var(--amber); border-color: var(--amber); }
+
+  .btn.ghost { background: transparent; }
+  .btn.ghost:hover { background: var(--ink-750); }
+
+  .btn.sm { padding: 4px 9px; font-size: 11.5px; }
+
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  /* ---------------------------------------------------------------- cards */
+
+  .card {
+    background: var(--ink-800);
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    padding: 16px 18px;
+  }
+
+  .card-title {
+    font-size: 10.5px;
+    letter-spacing: 0.17em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 12px;
+  }
+
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+
+  /* ----------------------------------------------------- the channel grid */
+
+  .learnbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 14px;
+    margin-bottom: 18px;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    background: var(--ink-800);
+    flex-wrap: wrap;
+  }
+  .learnbar[data-on="true"] {
+    border-color: var(--amber-dim);
+    background: linear-gradient(var(--ink-800), var(--ink-800)) padding-box,
+                var(--ink-800);
+    box-shadow: inset 0 0 0 1px rgba(255, 178, 63, 0.18);
+  }
+  .learnbar .lb-title {
+    font-size: 10.5px; letter-spacing: 0.17em; text-transform: uppercase; color: var(--dim);
+  }
+  .learnbar .lb-hint { color: var(--dim); font-size: 11.5px; }
+  .learnbar[data-on="true"] .lb-hint { color: var(--dim-2); }
+
+  .switch {
+    appearance: none;
+    width: 34px; height: 19px;
+    border-radius: 100px;
+    background: var(--ink-700);
+    border: 1px solid var(--rule-sw);
+    position: relative;
+    cursor: pointer;
+    flex: none;
+    transition: background 140ms ease, border-color 140ms ease;
+  }
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: var(--dim-2);
+    transition: transform 140ms ease, background 140ms ease;
+  }
+  .switch:checked { background: var(--amber-dim); border-color: var(--amber); }
+  .switch:checked::after { transform: translateX(15px); background: var(--amber-ink); }
+
+  .modblock { margin-bottom: 16px; }
+  .modhead {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 7px;
+  }
+  .modhead .hr { flex: 1; height: 1px; background: var(--rule); }
+  .modhead .ch-range { color: var(--rule-sw); letter-spacing: 0.08em; }
+
+  .chgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(62px, 1fr));
+    gap: 7px;
+  }
+
+  .cell {
+    appearance: none;
+    font: inherit;
+    border: 1px solid var(--rule);
+    background: var(--ink-800);
+    border-radius: var(--r-md);
+    padding: 9px 4px 6px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+    transition: border-color 120ms ease, background 120ms ease;
+  }
+  .cell:hover { border-color: var(--dim); background: var(--ink-750); }
+  .cell[data-sel="true"] {
+    border-color: var(--amber);
+    background: var(--ink-750);
+  }
+  .cell[data-unbound="true"] { border-style: dashed; }
+  .cell[data-unused="true"] { opacity: 0.32; cursor: default; }
+  .cell[data-unused="true"]:hover { border-color: var(--rule); background: var(--ink-800); }
+
+  .bulb {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: #000;
+    border: 1px solid rgba(255,255,255,0.07);
+    flex: none;
+  }
+
+  .cell .cid {
+    font-size: 10px;
+    color: var(--dim);
+    letter-spacing: 0.06em;
+    font-variant-numeric: tabular-nums;
+  }
+  .cell .lampno {
+    position: absolute;
+    top: 4px; right: 5px;
+    font-size: 9px;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+  .cell[data-sel="true"] .lampno { color: var(--amber); }
+
+  .cell .sticky {
+    position: absolute;
+    top: 5px; left: 5px;
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--amber);
+    box-shadow: 0 0 6px 1px rgba(255,178,63,0.9);
+    opacity: 0;
+    transition: opacity 180ms ease;
+  }
+  .cell[data-sticky="true"] .sticky { opacity: 1; }
+
+  .legend {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule);
+    font-size: 11px;
+    color: var(--dim);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .legend .swatch {
+    width: 14px; height: 14px; border-radius: var(--r-sm);
+    border: 1px solid var(--rule-sw);
+    flex: none;
+  }
+  .legend .swatch.dashed { border-style: dashed; }
+
+  /* ------------------------------------------------------------ inspector */
+
+  .insp-head {
+    padding: 16px 18px 14px;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .insp-head .bulb { width: 30px; height: 30px; }
+  .insp-head .who { min-width: 0; }
+  .insp-head .who b { display: block; font-weight: 600; font-size: 13px; }
+  .insp-head .who span { color: var(--dim); font-size: 11px; letter-spacing: 0.05em; }
+
+  .insp-body { padding: 4px 18px 40px; }
+  .insp-empty {
+    padding: 40px 24px;
+    color: var(--dim);
+    font-family: var(--font-ui);
+    font-size: 12.5px;
+    line-height: 1.7;
+    text-align: center;
+  }
+
+  .field { padding: 14px 0; border-bottom: 1px solid var(--rule); }
+  .field:last-child { border-bottom: 0; }
+  .field > label,
+  .field > .flabel {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    letter-spacing: 0.17em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 8px;
+  }
+
+  .input {
+    width: 100%;
+    font: inherit;
+    background: var(--ink-750);
+    border: 1px solid var(--rule-sw);
+    border-radius: var(--r-md);
+    color: var(--text);
+    padding: 6px 9px;
+  }
+  .input:hover { border-color: var(--dim); }
+  .input[type="number"] { font-variant-numeric: tabular-nums; }
+
+  .swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sw {
+    appearance: none;
+    width: 26px; height: 26px;
+    border-radius: var(--r-md);
+    border: 1px solid rgba(255,255,255,0.14);
+    cursor: pointer;
+    padding: 0;
+    position: relative;
+  }
+  .sw[aria-pressed="true"] {
+    box-shadow: 0 0 0 2px var(--ink-850), 0 0 0 3px var(--amber);
+  }
+
+  .classrow { display: flex; flex-direction: column; gap: 5px; }
+  .classopt {
+    appearance: none;
+    font: inherit;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    background: var(--ink-750);
+    border: 1px solid transparent;
+    border-radius: var(--r-md);
+    color: var(--dim-2);
+    padding: 5px 9px;
+    cursor: pointer;
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+  }
+  .classopt:hover { border-color: var(--rule-sw); color: var(--text); }
+  .classopt[aria-pressed="true"] {
+    border-color: var(--amber-dim);
+    color: var(--text);
+    background: var(--ink-700);
+  }
+  .classopt svg { flex: none; }
+  .classopt .cls-tag {
+    margin-left: auto;
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+    color: var(--dim);
+  }
+
+  .lockrow {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: 9px;
+    font-size: 11.5px;
+    color: var(--dim);
+  }
+  .lockrow[data-locked="true"] { color: var(--dim-2); }
+
+  .slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 3px;
+    border-radius: 3px;
+    background: var(--rule-sw);
+    outline-offset: 6px;
+  }
+  .slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: var(--amber);
+    cursor: pointer;
+    border: 0;
+  }
+  .slider::-moz-range-thumb {
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: var(--amber);
+    cursor: pointer;
+    border: 0;
+  }
+
+  .slabel {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--dim);
+    margin-bottom: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .slabel b { color: var(--text); font-weight: 500; }
+
+  .readout {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 11.5px;
+    padding: 3px 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .readout dt { color: var(--dim); }
+  .readout dd { margin: 0; color: var(--dim-2); }
+
+  /* --------------------------------------------------------------- tables */
+
+  .tablewrap {
+    overflow-x: auto;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    background: var(--ink-800);
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  thead th {
+    text-align: left;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--dim);
+    font-weight: 500;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+    background: var(--ink-850);
+  }
+  tbody td {
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--ink-750);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover td { background: var(--ink-750); }
+  td.name { white-space: normal; min-width: 150px; }
+  td.num { color: var(--dim-2); }
+
+  .dotswatch {
+    display: inline-block;
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    vertical-align: -1px;
+    margin-right: 7px;
+    border: 1px solid rgba(255,255,255,0.16);
+  }
+
+  /* ------------------------------------------------------------- versions */
+
+  .vlist { display: flex; flex-direction: column; gap: 9px; }
+  .vrow {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 15px;
+    border: 1px solid var(--rule);
+    border-radius: var(--r-lg);
+    background: var(--ink-800);
+    flex-wrap: wrap;
+  }
+  .vrow[data-active="true"] { border-color: var(--amber-dim); }
+  .vrow .vmain { min-width: 190px; flex: 1; }
+  .vrow .vlabel { font-weight: 600; font-size: 12.5px; display: flex; align-items: center; gap: 9px; }
+  .vrow .vmeta { color: var(--dim); font-size: 11px; margin-top: 2px; letter-spacing: 0.03em; }
+  .vrow .vmeta .lineage { color: var(--rule-sw); }
+
+  .tag {
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 100px;
+    border: 1px solid currentColor;
+  }
+  .tag.live { color: var(--amber); }
+  .tag.cloud { color: var(--dim); }
+
+  .storenote {
+    display: flex;
+    gap: 11px;
+    align-items: flex-start;
+    padding: 13px 15px;
+    border: 1px dashed var(--rule-sw);
+    border-radius: var(--r-lg);
+    color: var(--dim);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    line-height: 1.65;
+    margin-top: 16px;
+  }
+  .storenote .marker { color: var(--amber-dim); flex: none; font-family: var(--font-mono); }
+  .storenote b { color: var(--dim-2); font-weight: 600; }
+
+  /* ------------------------------------------------------------- firmware */
+
+  .fwgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: start; }
+
+  .steps { list-style: none; margin: 0; padding: 0; counter-reset: s; }
+  .steps li {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 11px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--ink-750);
+    align-items: start;
+  }
+  .steps li:last-child { border-bottom: 0; }
+  .steps li::before {
+    counter-increment: s;
+    content: counter(s);
+    font-size: 10px;
+    color: var(--dim);
+    border: 1px solid var(--rule-sw);
+    border-radius: 50%;
+    width: 20px; height: 20px;
+    display: grid;
+    place-items: center;
+    margin-top: 1px;
+  }
+  .steps li[data-done="true"]::before {
+    content: "✓";
+    color: var(--ok);
+    border-color: var(--ok);
+  }
+  .steps li[data-current="true"]::before { color: var(--amber); border-color: var(--amber); }
+  .steps .st { font-size: 12.5px; }
+  .steps .sd { color: var(--dim); font-size: 11.5px; font-family: var(--font-ui); margin-top: 2px; }
+
+  .armbox {
+    margin-top: 13px;
+    padding: 13px 15px;
+    border-radius: var(--r-lg);
+    border: 1px solid var(--rule-sw);
+    background: var(--ink-750);
+  }
+  .armbox[data-armed="true"] { border-color: var(--amber); }
+  .armstate {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 11.5px; letter-spacing: 0.06em; color: var(--dim);
+    margin-bottom: 10px;
+  }
+  .armstate .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--rule-sw); flex: none; }
+  .armbox[data-armed="true"] .armstate { color: var(--amber); }
+  .armbox[data-armed="true"] .armstate .dot {
+    background: var(--amber);
+    box-shadow: 0 0 8px 1px rgba(255,178,63,0.85);
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+
+  .bar {
+    height: 4px;
+    border-radius: 4px;
+    background: var(--ink-700);
+    overflow: hidden;
+    margin-top: 11px;
+  }
+  .bar i { display: block; height: 100%; background: var(--amber); width: 0; transition: width 200ms linear; }
+
+  .hash {
+    font-size: 10.5px;
+    color: var(--dim);
+    word-break: break-all;
+    white-space: normal;
+    line-height: 1.6;
+  }
+
+  /* --------------------------------------------------------------- toasts */
+
+  .toasts {
+    position: fixed;
+    right: 18px; bottom: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 50;
+    max-width: min(360px, calc(100vw - 36px));
+  }
+  .toast {
+    background: var(--ink-700);
+    border: 1px solid var(--rule-sw);
+    border-left: 2px solid var(--amber);
+    border-radius: var(--r-md);
+    padding: 9px 13px;
+    font-size: 12px;
+    color: var(--text);
+    box-shadow: 0 8px 22px rgba(0,0,0,0.45);
+    animation: rise 200ms ease;
+  }
+  .toast[data-kind="ok"] { border-left-color: var(--ok); }
+  .toast[data-kind="warn"] { border-left-color: var(--crit); }
+  .toast small { display: block; color: var(--dim); font-size: 11px; margin-top: 2px; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  }
+
+  @media (max-width: 1080px) {
+    .split { grid-template-columns: minmax(0, 1fr); height: auto; }
+    .split > .inspector { border-left: 0; border-top: 1px solid var(--rule); }
+    .split > .work { height: auto; }
+  }
+  @media (max-width: 720px) {
+    .app { grid-template-columns: minmax(0, 1fr); grid-template-areas: "bar" "rail" "stage"; }
+    .rail { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--rule); }
+    .rail-label, .rail-foot { display: none; }
+    .machine-id { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand"><i class="filament"></i>pinled <small>v0.2.0</small></div>
+    <div class="machine-id">
+      <b>Bally · Eight Ball Deluxe</b>
+      <span>1981 · 60 lamps · 4 modules</span>
+    </div>
+    <div class="topbar-spacer"></div>
+    <span class="meta-chip">api <b>v1</b></span>
+    <span class="meta-chip">id <b>7c:df:a1:9e:22:04</b></span>
+    <div class="status"><i class="dot"></i><span>connected</span><span class="host">pinled.local</span></div>
+  </header>
+
+  <nav class="rail">
+    <div class="rail-label">Configure</div>
+    <button class="navitem" data-nav="map" aria-current="true">Map<span class="k">1</span></button>
+    <button class="navitem" data-nav="lamps">Lamps<span class="k">2</span></button>
+    <button class="navitem" data-nav="install">Install<span class="k">3</span></button>
+    <div class="rail-label">Manage</div>
+    <button class="navitem" data-nav="versions">Versions<span class="k">4</span></button>
+    <button class="navitem" data-nav="firmware">Firmware<span class="k">5</span></button>
+    <div class="rail-foot">
+      scan <b>10.0 kHz</b><br>
+      frame <b>41.2 µs</b><br>
+      render <b>90 Hz</b>
+    </div>
+  </nav>
+
+  <div class="stage">
+
+    <!-- ===================================================== MAP ======= -->
+    <section class="panel" data-panel="map" data-active="true">
+      <div class="split">
+        <div class="work">
+
+          <div class="sec-head">
+            <div>
+              <h2 class="sec">Channel map</h2>
+              <p class="sec-note">Each channel is one lamp tap. Brightness below is what the
+                filament model reconstructs from the drive it senses — not the raw pulse train.</p>
+            </div>
+          </div>
+
+          <div class="learnbar" data-on="false">
+            <label class="lb-title" for="learn-toggle">Learn wiring</label>
+            <input type="checkbox" class="switch" id="learn-toggle">
+            <div id="learn-controls" style="display:none; align-items:center; gap:10px; flex-wrap:wrap;">
+              <label class="lb-title" for="fire-lamp" style="margin:0;">Fire lamp</label>
+              <input class="input" id="fire-lamp" type="number" min="1" max="60" value="41" style="width:74px;">
+              <button class="btn sm" id="fire-btn">Fire from test card</button>
+            </div>
+            <span class="lb-hint" id="learn-hint">Off — turn on to bind channels by firing lamps at the playfield.</span>
+          </div>
+
+          <div id="modules"></div>
+
+          <div class="legend">
+            <span><i class="swatch" style="background:var(--ink-800)"></i>bound</span>
+            <span><i class="swatch dashed" style="background:var(--ink-800)"></i>not yet bound to a lamp</span>
+            <span><i class="swatch" style="background:var(--ink-800); opacity:0.32"></i>beyond this machine's lamp count</span>
+            <span><i class="swatch" style="background:var(--amber); border-color:var(--amber); border-radius:50%; width:9px; height:9px; margin:0 2px;"></i>active since last update</span>
+          </div>
+
+        </div>
+
+        <aside class="inspector" id="inspector"></aside>
+      </div>
+    </section>
+
+    <!-- =================================================== LAMPS ======= -->
+    <section class="panel" data-panel="lamps">
+      <div class="panel-scroll">
+        <div class="sec-head">
+          <div>
+            <h2 class="sec">Lamps</h2>
+            <p class="sec-note">Presentation for every bound lamp. These values travel with the
+              machine profile when you publish it — colour, fade and class lock, keyed by lamp
+              number so they land correctly on someone else's build.</p>
+          </div>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Lamp</th><th>Name</th><th>Ch</th><th>LED</th>
+                <th>Colour</th><th>Class</th><th>Attack</th><th>Decay</th>
+              </tr>
+            </thead>
+            <tbody id="lamps-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================= INSTALL ======= -->
+    <section class="panel" data-panel="install">
+      <div class="panel-scroll">
+        <div class="sec-head">
+          <div>
+            <h2 class="sec">Install</h2>
+            <p class="sec-note">How this particular build is wired. Private to you — it describes
+              one physical machine, so it is never published to the shared registry, though you can
+              export it and restore it onto a replacement board.</p>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3 class="card-title">Geometry</h3>
+            <dl class="readout"><dt>Modules</dt><dd>4</dd></dl>
+            <dl class="readout"><dt>Channels per module</dt><dd>16</dd></dl>
+            <dl class="readout"><dt>Total channels</dt><dd>64</dd></dl>
+            <dl class="readout"><dt>LEDs in string</dt><dd>64</dd></dl>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Pins</h3>
+            <dl class="readout"><dt>CLK</dt><dd>GPIO 18</dd></dl>
+            <dl class="readout"><dt>/PL</dt><dd>GPIO 17</dd></dl>
+            <dl class="readout"><dt>DATA</dt><dd>GPIO 9</dd></dl>
+            <dl class="readout"><dt>LED string</dt><dd>GPIO 8</dd></dl>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Scan</h3>
+            <dl class="readout"><dt>Sample rate</dt><dd>10 000 Hz</dd></dl>
+            <dl class="readout"><dt>Chain clock</dt><dd>4 MHz</dd></dl>
+            <dl class="readout"><dt>SPI mode</dt><dd>2</dd></dl>
+            <dl class="readout"><dt>Active polarity</dt><dd>high</dd></dl>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Render</h3>
+            <dl class="readout"><dt>Refresh</dt><dd>90 Hz</dd></dl>
+            <dl class="readout"><dt>Gamma</dt><dd>2.2</dd></dl>
+            <dl class="readout"><dt>Brightness cap</dt><dd>180 / 255</dd></dl>
+          </div>
+        </div>
+
+        <div class="storenote">
+          <span class="marker">!</span>
+          <div>Wi-Fi credentials are <b>not part of this document</b> and appear in no export, at any
+            privacy level. Restoring a backup onto a new board therefore starts with provisioning —
+            which is correct, since the network is usually different too.</div>
+        </div>
+
+        <div class="btn-row" style="margin-top:18px;">
+          <button class="btn" data-toast="Exported install-config.json|64 channels, 4 modules — credentials excluded.">Export</button>
+          <button class="btn ghost" data-toast="Choose a file to import|Import replaces geometry, pins and wiring.">Import</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================ VERSIONS ======= -->
+    <section class="panel" data-panel="versions">
+      <div class="panel-scroll">
+        <div class="sec-head">
+          <div>
+            <h2 class="sec">Versions</h2>
+            <p class="sec-note">A version pairs the install config with the machine profile, because
+              what you are comparing is a look — and a look spans both. Applying one is an ordinary
+              write; the board reports whether it had to re-initialise.</p>
+          </div>
+        </div>
+
+        <div class="vlist" id="vlist"></div>
+
+        <div class="storenote">
+          <span class="marker">!</span>
+          <div>Versions live <b>here in the app</b> — in your private library, or as files on disk if
+            you would rather not use the cloud. The board keeps one active configuration and no
+            history: only one can be in effect, so copies on the device would be dead weight and a
+            second thing to keep in step.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================ FIRMWARE ======= -->
+    <section class="panel" data-panel="firmware">
+      <div class="panel-scroll">
+        <div class="sec-head">
+          <div>
+            <h2 class="sec">Firmware</h2>
+            <p class="sec-note">The board never contacts the internet. This app checks the version,
+              fetches the image, and hands it over on your local network — so an update works the
+              same whether the machine is online or not.</p>
+          </div>
+        </div>
+
+        <div class="fwgrid">
+          <div class="card">
+            <h3 class="card-title">Installed</h3>
+            <dl class="readout"><dt>Firmware</dt><dd>0.2.0</dd></dl>
+            <dl class="readout"><dt>API</dt><dd>v1</dd></dl>
+            <dl class="readout"><dt>Built</dt><dd>2026-08-07</dd></dl>
+            <dl class="readout"><dt>Slot</dt><dd>ota_0</dd></dl>
+            <div style="margin-top:14px; padding-top:13px; border-top:1px solid var(--rule);">
+              <h3 class="card-title" style="margin-bottom:9px;">Available</h3>
+              <dl class="readout"><dt>Firmware</dt><dd style="color:var(--amber)">0.3.1</dd></dl>
+              <dl class="readout"><dt>Size</dt><dd>1.42 MB</dd></dl>
+              <p class="hash" style="margin:9px 0 0;">sha256 9f3c1a44b7e0d258c6ab91e4f70d3b5e28cc7a16d09f4b3e5c81aa27de6094f1</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3 class="card-title">Update</h3>
+            <ol class="steps" id="fw-steps">
+              <li data-done="true"><div><div class="st">Image downloaded</div><div class="sd">Fetched and checksum verified in the browser.</div></div></li>
+              <li data-current="true"><div><div class="st">Arm the board</div><div class="sd">Press the button on the device. Physical presence is the whole authorisation — there is no password to lose.</div></div></li>
+              <li><div><div class="st">Send</div><div class="sd">Uploads over your local network to the spare slot.</div></div></li>
+              <li><div><div class="st">Restart</div><div class="sd">Boots the new slot. The old one stays intact.</div></div></li>
+            </ol>
+
+            <div class="armbox" data-armed="false" id="armbox">
+              <div class="armstate"><i class="dot"></i><span id="armtext">Not armed</span></div>
+              <div class="btn-row">
+                <button class="btn sm ghost" id="sim-press">Simulate button press</button>
+                <button class="btn sm primary" id="send-fw" disabled>Send 0.3.1</button>
+              </div>
+              <div class="bar" id="fwbar" style="display:none;"><i></i></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="storenote">
+          <span class="marker">!</span>
+          <div>You can also flash over <b>USB</b>, or hand the board a file you saved yourself.
+            Neither path needs this app, and none of them needs the internet.</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ------------------------------------------------------------ model --- */
+
+  var MODULES = 4, PER_MODULE = 16, TOTAL = MODULES * PER_MODULE;
+  var LAMP_COUNT = 60;
+
+  // Drive classes. The glyph is the point: a class IS a waveform, so we draw
+  // one rather than assigning it an arbitrary hue.
+  var CLASSES = {
+    STEADY:    { tag: "dc",     duty: 1.00, glyph: "steady" },
+    AC_STEADY: { tag: "2× line", duty: 0.62, glyph: "acs" },
+    AC_DIMMED: { tag: "phase",   duty: 0.24, glyph: "acd" },
+    MATRIX:    { tag: "strobe",  duty: 0.14, glyph: "matrix" },
+    OFF:       { tag: "—",       duty: 0.00, glyph: "off" }
+  };
+  var CLASS_ORDER = ["STEADY", "AC_STEADY", "AC_DIMMED", "MATRIX", "OFF"];
+
+  var PRESETS = [
+    { name: "Warm white", hex: "#ffe9c4" },
+    { name: "Amber",      hex: "#ffb23f" },
+    { name: "Red",        hex: "#ff4436" },
+    { name: "Deep red",   hex: "#c9203a" },
+    { name: "Green",      hex: "#3ad171" },
+    { name: "Blue",       hex: "#2f8fe8" },
+    { name: "Ice",        hex: "#9fd8ff" },
+    { name: "Purple",     hex: "#a95cf0" },
+    { name: "Pink",       hex: "#ff6b9d" },
+    { name: "Teal",       hex: "#19c7b4" }
+  ];
+
+  var NAMES = [
+    "Left Drop Target", "Centre Drop Target", "Right Drop Target", "Spinner Lane",
+    "Left Outlane", "Right Outlane", "Left Return", "Right Return",
+    "Top Rollover A", "Top Rollover B", "Top Rollover C", "Bullseye",
+    "Left Bumper", "Right Bumper", "Top Bumper", "Kickback",
+    "Special", "Extra Ball", "Double Bonus", "Triple Bonus",
+    "Bonus 1k", "Bonus 2k", "Bonus 3k", "Bonus 4k",
+    "Bonus 5k", "Bonus 10k", "Bonus 20k", "Shoot Again",
+    "Left Saucer", "Right Saucer", "Captive Ball", "Ball Lock 1",
+    "Ball Lock 2", "Ball Lock 3", "Left Ramp", "Right Ramp",
+    "Centre Post", "Sling Left", "Sling Right", "Jackpot",
+    "Lane 1", "Lane 2", "Lane 3", "Lane 4",
+    "GI Upper Left", "GI Upper Right", "GI Mid Left", "GI Mid Right",
+    "GI Lower Left", "GI Lower Right", "Backbox Left", "Backbox Centre",
+    "Backbox Right", "Playfield Arch", "Apron Left", "Apron Right",
+    "Cabinet Left", "Cabinet Right", "Insert Star", "Insert Moon"
+  ];
+
+  // Deterministic bijection over 1..60 so the "true" wiring looks scrambled
+  // but the learn demo stays coherent between reloads.
+  function trueLamp(ch) { return ch < LAMP_COUNT ? ((ch * 17 + 5) % LAMP_COUNT) + 1 : null; }
+
+  var channels = [];
+  for (var i = 0; i < TOTAL; i++) {
+    var lamp = trueLamp(i);
+    var bound = lamp !== null && i < 40;          // 40 done, 20 left to learn
+    var cls;
+    if (lamp === null)          cls = "OFF";
+    else if (lamp > 44)         cls = "AC_STEADY";   // general illumination
+    else if (i % 9 === 0)       cls = "AC_DIMMED";
+    else if (i % 13 === 0)      cls = "MATRIX";
+    else if (i % 7 === 0)       cls = "OFF";
+    else                        cls = "STEADY";
+
+    channels.push({
+      ch: i,
+      module: Math.floor(i / PER_MODULE),
+      lamp: bound ? lamp : null,
+      name: bound ? NAMES[lamp - 1] : null,
+      led: bound ? i : null,
+      color: bound ? PRESETS[(lamp * 3) % PRESETS.length].hex : "#ffe9c4",
+      cls: cls,
+      locked: false,
+      attack: 30,
+      decay: 40,
+      level: 0,
+      target: 0,
+      sticky: false,
+      unused: lamp === null
+    });
+  }
+
+  var selected = 0;
+  var learning = false;
+  var firedChannel = -1, firedUntil = 0;
+
+  /* ------------------------------------------------------------- glyphs -- */
+
+  function waveGlyph(kind, color) {
+    var c = color || "currentColor";
+    var d;
+    switch (kind) {
+      case "steady": d = "M1 3 L27 3"; break;
+      case "acs":    d = "M1 9 L1 3 L5 3 L5 9 L9 9 L9 3 L13 3 L13 9 L17 9 L17 3 L21 3 L21 9 L25 9 L25 3 L27 3"; break;
+      case "acd":    d = "M1 9 L3 9 L3 3 L5 3 L5 9 L9 9 L9 3 L11 3 L11 9 L15 9 L15 3 L17 3 L17 9 L21 9 L21 3 L23 3 L23 9 L27 9"; break;
+      case "matrix": d = "M1 9 L4 9 L4 3 L5 3 L5 9 L11 9 L11 3 L12 3 L12 9 L18 9 L18 3 L19 3 L19 9 L25 9 L25 3 L26 3 L26 9 L27 9"; break;
+      default:       d = "M1 9 L27 9";
+    }
+    return '<svg width="28" height="12" viewBox="0 0 28 12" fill="none" aria-hidden="true">' +
+           '<path d="' + d + '" stroke="' + c + '" stroke-width="1.25" stroke-linejoin="round"/></svg>';
+  }
+
+  /* --------------------------------------------------------- simulation -- */
+  // A leaky integrator with the firmware's own attack/decay split, so what the
+  // grid shows is the reconstruction, not the raw drive.
+
+  var scene = 0, sceneAt = 0;
+
+  function driveTarget(c, now) {
+    if (c.unused || c.cls === "OFF") return 0;
+    var base = CLASSES[c.cls].duty;
+    // game-level activity: a slow chase so the board reads as a live playfield
+    var phase = (c.ch * 2.4 + scene * 3.1) % 12;
+    var on = phase < 7.5;
+    if (c.cls === "AC_STEADY") {
+      return base + Math.sin(now / 900 + c.ch) * 0.03;          // GI stays lit
+    }
+    if (c.cls === "AC_DIMMED") {
+      return base + Math.sin(now / 1700 + c.ch * 0.7) * 0.12;   // conduction angle drifts
+    }
+    if (c.ch === firedChannel && now < firedUntil) return 1;
+    return on ? base : 0;
+  }
+
+  var lastT = 0;
+  function tick(now) {
+    if (!lastT) lastT = now;
+    var dt = Math.min(100, now - lastT);
+    lastT = now;
+    if (now - sceneAt > 700) { scene++; sceneAt = now; }
+
+    for (var i = 0; i < channels.length; i++) {
+      var c = channels[i];
+      var t = driveTarget(c, now);
+      var tau = (t > c.level ? c.attack : c.decay);
+      var k = 1 - Math.exp(-dt / Math.max(1, tau));
+      c.level += (t - c.level) * k;
+      if (c.level > 0.06) c.sticky = true;
+      paintCell(c);
+    }
+    paintInspectorLive();
+    requestAnimationFrame(tick);
+  }
+
+  // sticky flags clear on each push, exactly as the WebSocket contract does
+  setInterval(function () {
+    for (var i = 0; i < channels.length; i++) {
+      if (!(learning && channels[i].level > 0.06)) channels[i].sticky = false;
+    }
+  }, 1400);
+
+  /* ------------------------------------------------------------ render -- */
+
+  var cellEls = {};
+
+  function buildGrid() {
+    var host = document.getElementById("modules");
+    var html = "";
+    for (var m = 0; m < MODULES; m++) {
+      html += '<div class="modblock"><div class="modhead"><span>Module ' + (m + 1) +
+              '</span><span class="ch-range">ch ' + (m * PER_MODULE) + '–' + (m * PER_MODULE + PER_MODULE - 1) +
+              '</span><i class="hr"></i></div><div class="chgrid">';
+      for (var i = 0; i < PER_MODULE; i++) {
+        var c = channels[m * PER_MODULE + i];
+        html += '<button class="cell" data-ch="' + c.ch + '"' +
+                (c.unused ? ' data-unused="true" disabled' : '') +
+                (c.lamp === null && !c.unused ? ' data-unbound="true"' : '') + '>' +
+                '<i class="sticky"></i>' +
+                (c.lamp !== null ? '<span class="lampno">' + c.lamp + '</span>' : '') +
+                '<i class="bulb"></i>' +
+                '<span class="cid">' + String(c.ch).padStart(2, "0") + '</span>' +
+                '</button>';
+      }
+      html += "</div></div>";
+    }
+    host.innerHTML = html;
+
+    var nodes = host.querySelectorAll(".cell");
+    for (var n = 0; n < nodes.length; n++) {
+      var el = nodes[n];
+      cellEls[el.getAttribute("data-ch")] = {
+        root: el,
+        bulb: el.querySelector(".bulb"),
+        lampno: el.querySelector(".lampno")
+      };
+      el.addEventListener("click", onCellClick);
+    }
+  }
+
+  function paintCell(c) {
+    var e = cellEls[c.ch];
+    if (!e) return;
+    var L = Math.max(0, Math.min(1, c.level));
+    var rgb = hexToRgb(c.color);
+    var lit = "rgb(" + Math.round(rgb.r * L) + "," + Math.round(rgb.g * L) + "," + Math.round(rgb.b * L) + ")";
+    e.bulb.style.background = lit;
+    e.bulb.style.boxShadow = L > 0.03
+      ? "0 0 " + (5 + L * 15).toFixed(1) + "px " + (L * 2.5).toFixed(1) + "px rgba(" +
+        rgb.r + "," + rgb.g + "," + rgb.b + "," + (L * 0.55).toFixed(3) + ")"
+      : "none";
+    var wantSticky = c.sticky ? "true" : "false";
+    if (e.root.getAttribute("data-sticky") !== wantSticky) e.root.setAttribute("data-sticky", wantSticky);
+  }
+
+  function hexToRgb(h) {
+    var n = parseInt(h.slice(1), 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
+  function onCellClick(ev) {
+    var ch = parseInt(ev.currentTarget.getAttribute("data-ch"), 10);
+    var c = channels[ch];
+
+    if (learning && c.lamp === null) {
+      var want = parseInt(document.getElementById("fire-lamp").value, 10);
+      if (isNaN(want) || want < 1 || want > LAMP_COUNT) { toast("Enter a lamp number first", "Between 1 and " + LAMP_COUNT + ".", "warn"); return; }
+      if (channels.some(function (x) { return x.lamp === want; })) {
+        toast("Lamp " + want + " is already bound", "Unbind it first, or fire a different lamp.", "warn"); return;
+      }
+      c.lamp = want;
+      c.name = NAMES[want - 1] || ("Lamp " + want);
+      c.led = ch;
+      c.color = PRESETS[(want * 3) % PRESETS.length].hex;
+      c.cls = want > 44 ? "AC_STEADY" : "STEADY";
+      cellEls = {};
+      buildGrid();
+      selectChannel(ch);
+      renderLamps();
+      toast("Bound lamp " + want + " to channel " + ch, c.name + " → LED " + ch, "ok");
+      var next = channels.find(function (x) { return x.lamp === null && !x.unused; });
+      document.getElementById("fire-lamp").value = next ? trueLamp(next.ch) : want;
+      return;
+    }
+    selectChannel(ch);
+  }
+
+  function selectChannel(ch) {
+    selected = ch;
+    for (var key in cellEls) {
+      cellEls[key].root.setAttribute("data-sel", String(key) === String(ch) ? "true" : "false");
+    }
+    renderInspector();
+  }
+
+  /* --------------------------------------------------------- inspector -- */
+
+  function renderInspector() {
+    var c = channels[selected];
+    var host = document.getElementById("inspector");
+
+    if (!c || c.unused) {
+      host.innerHTML = '<div class="insp-empty">This channel is past the machine’s lamp count.<br>Nothing is wired to it.</div>';
+      return;
+    }
+
+    var swatches = PRESETS.map(function (p) {
+      return '<button class="sw" data-hex="' + p.hex + '" title="' + p.name + '" style="background:' + p.hex + '" ' +
+             'aria-pressed="' + (p.hex === c.color ? "true" : "false") + '"></button>';
+    }).join("");
+
+    var classes = CLASS_ORDER.map(function (k) {
+      return '<button class="classopt" data-cls="' + k + '" aria-pressed="' + (k === c.cls ? "true" : "false") + '">' +
+             waveGlyph(CLASSES[k].glyph) + '<span>' + k + '</span>' +
+             '<span class="cls-tag">' + CLASSES[k].tag + '</span></button>';
+    }).join("");
+
+    host.innerHTML =
+      '<div class="insp-head">' +
+        '<i class="bulb" id="insp-bulb"></i>' +
+        '<div class="who">' +
+          '<b>' + (c.name || "Unbound channel") + '</b>' +
+          '<span>ch ' + String(c.ch).padStart(2, "0") + ' · module ' + (c.module + 1) +
+            (c.lamp !== null ? ' · lamp ' + c.lamp : '') + '</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="insp-body">' +
+
+        (c.lamp === null
+          ? '<div class="field"><div class="flabel">Not bound</div>' +
+            '<p style="margin:0; color:var(--dim); font-family:var(--font-ui); font-size:12.5px; line-height:1.65;">' +
+            'Turn on <b style="color:var(--dim-2)">Learn wiring</b>, fire this lamp from the test card, and click the channel that lights.</p></div>'
+          : '<div class="field"><label for="f-name">Name</label>' +
+            '<input class="input" id="f-name" type="text" value="' + escapeAttr(c.name) + '"></div>') +
+
+        '<div class="field"><div class="flabel">Colour</div><div class="swatches">' + swatches + '</div></div>' +
+
+        '<div class="field"><div class="flabel">Drive class</div><div class="classrow">' + classes + '</div>' +
+          '<div class="lockrow" data-locked="' + (c.locked ? "true" : "false") + '">' +
+            '<input type="checkbox" class="switch" id="f-lock"' + (c.locked ? " checked" : "") + '>' +
+            '<span>' + (c.locked ? "Locked — the profiler will not change this" : "Auto — the profiler may reclassify") + '</span>' +
+          '</div>' +
+        '</div>' +
+
+        '<div class="field"><div class="flabel">Fade</div>' +
+          '<div class="slabel"><span>Attack</span><b>' + c.attack + ' ms</b></div>' +
+          '<input class="slider" id="f-attack" type="range" min="5" max="120" value="' + c.attack + '">' +
+          '<div class="slabel" style="margin-top:12px;"><span>Decay</span><b>' + c.decay + ' ms</b></div>' +
+          '<input class="slider" id="f-decay" type="range" min="5" max="120" value="' + c.decay + '">' +
+        '</div>' +
+
+        '<div class="field"><div class="flabel">Live</div>' +
+          '<dl class="readout"><dt>Reconstructed</dt><dd id="ro-level">—</dd></dl>' +
+          '<dl class="readout"><dt>Duty sensed</dt><dd>' + Math.round(CLASSES[c.cls].duty * 100) + ' %</dd></dl>' +
+          '<dl class="readout"><dt>LED index</dt><dd>' + (c.led === null ? "—" : c.led) + '</dd></dl>' +
+        '</div>' +
+
+      '</div>';
+
+    var nameEl = document.getElementById("f-name");
+    if (nameEl) nameEl.addEventListener("input", function () {
+      c.name = nameEl.value; renderLamps();
+      host.querySelector(".who b").textContent = c.name || "Unbound channel";
+    });
+
+    host.querySelectorAll(".sw").forEach(function (b) {
+      b.addEventListener("click", function () {
+        c.color = b.getAttribute("data-hex");
+        renderInspector(); renderLamps();
+      });
+    });
+
+    host.querySelectorAll(".classopt").forEach(function (b) {
+      b.addEventListener("click", function () {
+        c.cls = b.getAttribute("data-cls");
+        if (!c.locked) { c.locked = true; toast("Locked ch " + c.ch + " to " + c.cls, "Set by hand, so the profiler will leave it alone.", "ok"); }
+        renderInspector(); renderLamps();
+      });
+    });
+
+    var lock = document.getElementById("f-lock");
+    if (lock) lock.addEventListener("change", function () { c.locked = lock.checked; renderInspector(); });
+
+    var a = document.getElementById("f-attack");
+    if (a) a.addEventListener("input", function () { c.attack = +a.value; renderInspector(); renderLamps(); });
+    var d = document.getElementById("f-decay");
+    if (d) d.addEventListener("input", function () { c.decay = +d.value; renderInspector(); renderLamps(); });
+  }
+
+  function paintInspectorLive() {
+    var c = channels[selected];
+    if (!c) return;
+    var ro = document.getElementById("ro-level");
+    var bulb = document.getElementById("insp-bulb");
+    if (ro) ro.textContent = Math.round(c.level * 255) + " / 255";
+    if (bulb) {
+      var rgb = hexToRgb(c.color), L = Math.max(0, Math.min(1, c.level));
+      bulb.style.background = "rgb(" + Math.round(rgb.r * L) + "," + Math.round(rgb.g * L) + "," + Math.round(rgb.b * L) + ")";
+      bulb.style.boxShadow = L > 0.03 ? "0 0 " + (6 + L * 16).toFixed(1) + "px rgba(" + rgb.r + "," + rgb.g + "," + rgb.b + "," + (L * 0.6).toFixed(3) + ")" : "none";
+    }
+  }
+
+  function escapeAttr(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  }
+
+  /* ------------------------------------------------------------- lamps -- */
+
+  function renderLamps() {
+    var rows = channels
+      .filter(function (c) { return c.lamp !== null; })
+      .sort(function (a, b) { return a.lamp - b.lamp; })
+      .map(function (c) {
+        return "<tr>" +
+          '<td class="num">' + c.lamp + "</td>" +
+          '<td class="name">' + escapeAttr(c.name) + "</td>" +
+          '<td class="num">' + String(c.ch).padStart(2, "0") + "</td>" +
+          '<td class="num">' + c.led + "</td>" +
+          "<td><i class=\"dotswatch\" style=\"background:" + c.color + "\"></i>" + c.color + "</td>" +
+          '<td style="color:var(--dim-2)">' + waveGlyph(CLASSES[c.cls].glyph) +
+            ' <span style="vertical-align:2px; margin-left:6px;">' + c.cls + (c.locked ? " ·lock" : "") + "</span></td>" +
+          '<td class="num">' + c.attack + " ms</td>" +
+          '<td class="num">' + c.decay + " ms</td>" +
+        "</tr>";
+      }).join("");
+    document.getElementById("lamps-body").innerHTML = rows;
+  }
+
+  /* ---------------------------------------------------------- versions -- */
+
+  var versions = [
+    { id: "01J8QK", label: "warm GI, dimmer inserts", when: "2026-08-08 19:04", parent: "01J8QA", where: "live", cold: false },
+    { id: "01J8QA", label: "cooler inserts, GI at 70%", when: "2026-08-07 22:41", parent: "01J8P2", where: "cloud", cold: false },
+    { id: "01J8P2", label: "after rewiring module 3", when: "2026-08-06 14:12", parent: null, where: "cloud", cold: true }
+  ];
+
+  function renderVersions() {
+    document.getElementById("vlist").innerHTML = versions.map(function (v) {
+      var live = v.where === "live";
+      return '<div class="vrow" data-active="' + live + '">' +
+        '<div class="vmain">' +
+          '<div class="vlabel">' + v.label +
+            (live ? ' <span class="tag live">on the board</span>' : ' <span class="tag cloud">library</span>') + '</div>' +
+          '<div class="vmeta">' + v.id + ' · ' + v.when +
+            (v.parent ? ' · <span class="lineage">from ' + v.parent + '</span>' : ' · <span class="lineage">root</span>') +
+          '</div>' +
+        '</div>' +
+        '<div class="btn-row">' +
+          (live ? '' : '<button class="btn sm primary" data-apply="' + v.id + '">Apply</button>') +
+          '<button class="btn sm ghost" data-export="' + v.id + '">Export</button>' +
+        '</div>' +
+      '</div>';
+    }).join("");
+
+    document.querySelectorAll("[data-apply]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var id = b.getAttribute("data-apply");
+        var v = versions.find(function (x) { return x.id === id; });
+        versions.forEach(function (x) { x.where = x.id === id ? "live" : "cloud"; });
+        renderVersions();
+        toast("Applied “" + v.label + "”",
+              v.cold ? "Geometry changed — the board re-initialised. Scanning resumed in 1.2 s."
+                     : "No re-initialisation needed.", "ok");
+      });
+    });
+    document.querySelectorAll("[data-export]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var v = versions.find(function (x) { return x.id === b.getAttribute("data-export"); });
+        toast("Exported " + v.id + ".json", "Install config and machine profile, paired.", "ok");
+      });
+    });
+  }
+
+  /* ---------------------------------------------------------- firmware -- */
+
+  var armTimer = null, armLeft = 0;
+
+  document.getElementById("sim-press").addEventListener("click", function () {
+    var box = document.getElementById("armbox");
+    box.setAttribute("data-armed", "true");
+    document.getElementById("send-fw").disabled = false;
+    armLeft = 60;
+    setStep(1, true);
+    clearInterval(armTimer);
+    armTimer = setInterval(function () {
+      armLeft--;
+      document.getElementById("armtext").textContent = "Armed — " + armLeft + " s remaining";
+      if (armLeft <= 0) {
+        clearInterval(armTimer);
+        box.setAttribute("data-armed", "false");
+        document.getElementById("armtext").textContent = "Not armed";
+        document.getElementById("send-fw").disabled = true;
+        setStep(1, false);
+        toast("Arming expired", "Press the button again when you are ready.", "warn");
+      }
+    }, 1000);
+    document.getElementById("armtext").textContent = "Armed — 60 s remaining";
+    toast("Board armed", "It will accept a firmware image for 60 seconds.", "ok");
+  });
+
+  function setStep(idx, done) {
+    var lis = document.querySelectorAll("#fw-steps li");
+    lis.forEach(function (li, i) {
+      li.removeAttribute("data-current");
+      if (i < idx || (i === idx && done)) li.setAttribute("data-done", "true");
+      else li.removeAttribute("data-done");
+    });
+    var nxt = lis[done ? idx + 1 : idx];
+    if (nxt) nxt.setAttribute("data-current", "true");
+  }
+
+  document.getElementById("send-fw").addEventListener("click", function () {
+    var btn = this;
+    btn.disabled = true;
+    clearInterval(armTimer);
+    var bar = document.getElementById("fwbar");
+    bar.style.display = "block";
+    var fill = bar.querySelector("i");
+    var p = 0;
+    setStep(2, false);
+    var iv = setInterval(function () {
+      p += 4 + Math.random() * 7;
+      fill.style.width = Math.min(100, p) + "%";
+      if (p >= 100) {
+        clearInterval(iv);
+        setStep(3, true);
+        document.getElementById("armbox").setAttribute("data-armed", "false");
+        document.getElementById("armtext").textContent = "Sent";
+        toast("0.3.1 installed", "Booted from ota_1. The previous build is still in ota_0.", "ok");
+      }
+    }, 240);
+  });
+
+  /* ------------------------------------------------------------ toasts -- */
+
+  function toast(title, sub, kind) {
+    var el = document.createElement("div");
+    el.className = "toast";
+    el.setAttribute("data-kind", kind || "");
+    el.innerHTML = "<div>" + title + "</div>" + (sub ? "<small>" + sub + "</small>" : "");
+    document.getElementById("toasts").appendChild(el);
+    setTimeout(function () {
+      el.style.transition = "opacity 300ms ease";
+      el.style.opacity = "0";
+      setTimeout(function () { el.remove(); }, 320);
+    }, 4200);
+  }
+
+  document.querySelectorAll("[data-toast]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var parts = b.getAttribute("data-toast").split("|");
+      toast(parts[0], parts[1] || "", "ok");
+    });
+  });
+
+  /* --------------------------------------------------------------- nav -- */
+
+  function go(name) {
+    document.querySelectorAll(".navitem").forEach(function (b) {
+      b.setAttribute("aria-current", b.getAttribute("data-nav") === name ? "true" : "false");
+    });
+    document.querySelectorAll(".panel").forEach(function (p) {
+      p.setAttribute("data-active", p.getAttribute("data-panel") === name ? "true" : "false");
+    });
+  }
+  document.querySelectorAll(".navitem").forEach(function (b) {
+    b.addEventListener("click", function () { go(b.getAttribute("data-nav")); });
+  });
+  var ORDER = ["map", "lamps", "install", "versions", "firmware"];
+  document.addEventListener("keydown", function (e) {
+    if (e.target.matches("input, textarea")) return;
+    var n = parseInt(e.key, 10);
+    if (n >= 1 && n <= ORDER.length) go(ORDER[n - 1]);
+  });
+
+  /* ------------------------------------------------------------- learn -- */
+
+  var learnToggle = document.getElementById("learn-toggle");
+  learnToggle.addEventListener("change", function () {
+    learning = learnToggle.checked;
+    document.querySelector(".learnbar").setAttribute("data-on", learning ? "true" : "false");
+    document.getElementById("learn-controls").style.display = learning ? "flex" : "none";
+    var unbound = channels.filter(function (c) { return c.lamp === null && !c.unused; }).length;
+    document.getElementById("learn-hint").textContent = learning
+      ? unbound + " channels still unbound — fire a lamp, then click the channel that lit."
+      : "Off — turn on to bind channels by firing lamps at the playfield.";
+    if (learning) {
+      var next = channels.find(function (c) { return c.lamp === null && !c.unused; });
+      if (next) document.getElementById("fire-lamp").value = trueLamp(next.ch);
+    }
+  });
+
+  document.getElementById("fire-btn").addEventListener("click", function () {
+    var want = parseInt(document.getElementById("fire-lamp").value, 10);
+    if (isNaN(want) || want < 1 || want > LAMP_COUNT) { toast("Enter a lamp number", "Between 1 and " + LAMP_COUNT + ".", "warn"); return; }
+    var target = channels.find(function (c) { return trueLamp(c.ch) === want; });
+    if (!target) { toast("No channel carries lamp " + want, "", "warn"); return; }
+    firedChannel = target.ch;
+    firedUntil = performance.now() + 2600;
+    toast("Firing lamp " + want, "Watch the grid, then click the channel that lit.", "");
+  });
+
+  /* -------------------------------------------------------------- boot -- */
+
+  buildGrid();
+  selectChannel(4);
+  renderLamps();
+  renderVersions();
+  requestAnimationFrame(tick);
+})();
+</script>
+
+</body>
+</html>

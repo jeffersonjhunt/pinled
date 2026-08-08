@@ -10,6 +10,19 @@ touching devices in the field, and to be convenient. It must never be
 *required*. Every function of the product is reachable with no internet
 connection at all.
 
+> **`ui-mockup.html`** in this directory is a working design reference for what
+> follows — open it in a browser, no build step or network needed. The device
+> behind it is simulated and none of it is production code, but the channel grid
+> runs the same leaky integrator the firmware does, so the reconstruction
+> behaves rather than being faked. It exists to make the decisions here
+> arguable before they are built, particularly the learn-wiring flow (§4), the
+> document split (§3) and OTA arming (§5).
+>
+> Two things in it are placeholder rather than designed: the install screen is
+> read-only, because editing pins and geometry from a web page needs a guard
+> rail nobody has specified yet; and lamp numbering is faked as a clean 1–60,
+> which open question 1 in §8 may invalidate.
+
 ## 1. Where the code lives
 
 Three pieces, and the split is deliberate:
