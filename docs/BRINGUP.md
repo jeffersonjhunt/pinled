@@ -224,16 +224,33 @@ straight to ground. Every button registered on its expected channel.
 > **Partly confirmed against silicon, 2026-08-06/07.** Working end to end on a
 > 4× 74HC165 rig proves pins 1 (`/PL`), 2 (`CLK`), 8 (`GND`), 9 (`QH`),
 > 10 (`SER`), 15 (`CLK INH`) and 16 (`VCC`). Pin 14 (`D`) was confirmed by
-> button press on all four chips, and pins 11/12 (`A`/`B`) by their
-> floating-input signature landing on local channels 7/6 as this table
-> predicts, before they were tied off.
+> button press on all four chips, and **pin 6 (`H`, channel 0) by a button
+> moved onto it** — `raw [10000000 …]`, `tog [T------- …]`, exactly one
+> channel and no neighbours. Pins 11/12 (`A`/`B`) are confirmed only by their
+> floating-input signature landing on local channels 7/6 before they were tied
+> off, which is weaker evidence than a press.
 >
-> **Pins 3, 4, 5, 6 and 13 (`E`, `F`, `G`, `H`, `C`) remain unexercised, and
-> the rig as wired cannot exercise them** — they are hard-grounded, so they
-> read 0 permanently and produce no evidence either way. Confirming them needs
-> a button moved or a ground lifted. Pin 6 (`H`, channel 0) is the one worth
-> doing: it is the only channel whose capture timing differs from the rest,
-> being the bit `/PL` presents before any clock arrives.
+> Pin 6 was worth the trouble specifically because channel 0 is the only
+> channel whose capture timing differs — it is the bit `/PL` presents before
+> any clock arrives. Reading it correctly is direct evidence that CPHA=0
+> catches the pre-clock bit; every other channel can only establish that by
+> inference from frame alignment.
+>
+> **Pins 3, 4, 5 and 13 (`E`, `F`, `G`, `C`) remain unexercised, and the rig
+> as wired cannot exercise them** — they are hard-grounded, so they read 0
+> permanently and produce no evidence either way. Confirming them needs a
+> button moved or a ground lifted.
+
+> **Do not trust flags set while wiring is being handled live.** A first
+> attempt at the pin-6 test appeared to flag channels 0–3 together. Those are
+> pins 6, 5, 4 and 3 — four *physically adjacent* pins on the DIP — which is
+> the signature of a lead brushing neighbours, not of three inputs
+> independently losing ground. Re-run after a reset with hands clear, it was a
+> single clean channel. `tog` is sticky, so one transient during handling is
+> indistinguishable from a real press forever after.
+>
+> Note also that **attaching the logger resets the board** and wipes the
+> flags. Start the logger *first*, then press.
 
 ### Firmware settings
 
@@ -381,8 +398,9 @@ diagnostic polish or needs a longer chain than four chips:
 1. **`/PL` held low** makes `DATA` track channel 0 live (FR-DIAG-3) — needs a
    `PINLED_SCAN_HOLD_CH=0` build (§5 check 4). Diagnostic convenience only;
    nothing depends on it.
-2. **Pins 3, 4, 5, 6 and 13** of the '165 have not been individually
-   exercised; pin 6 (`H`, channel 0) is the one worth pressing first.
+2. **Pins 3, 4, 5 and 13** (`E`, `F`, `G`, `C`) of the '165 have not been
+   individually exercised, and are hard-grounded on the rig so it cannot
+   exercise them. Channel 0 (pin 6) is done.
 3. Everything in `TIMING.md` §7 items 2–4: `/PL` edge quality at 800 mm,
    clock-skew direction, and multi-drop `CLK` integrity. All three need chain
    lengths the bench rig does not have, and all three are about *scaling* a
