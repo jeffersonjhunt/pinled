@@ -234,11 +234,14 @@ the middle of that window with roughly half a clock period of margin on both
 sides. No inverter is needed anywhere in the clock path — unlike the rev C bench
 rig, which needed a 74HC14 to escape an edge race.
 
-> **Reasoned, not yet measured.** Rev C's mode 0 was confirmed on hardware
-> (`BRINGUP.md` §7). Mode 2 here follows the same argument applied to the '165's
-> rising-edge shift, but has not been on a scope. It is the first thing to verify
-> on the bench, and `PINLED_SPI_MODE` accepts 0–3 so the alternative is a config
-> change rather than a rework.
+> **Measured 2026-08-06/07** on a 4× 74HC165 rig (2 modules, 32 ch) at 4 MHz.
+> `U1.D` read as channel 4 and `U2.D` as channel 12, exactly — a mode-3 sample
+> on the shift edge would have slid the whole frame by one, so exact alignment
+> settles CPHA as well as CPOL. Channel 0 was then read directly through input
+> `H` (pin 6), which is the only channel whose capture timing differs: it is
+> the bit `/PL` presents *before any clock arrives*, so reading it correctly is
+> direct evidence that CPHA=0 catches the pre-clock bit rather than inference
+> from frame alignment. See `BRINGUP.md` §7.
 
 Bits always fill whole bytes, and with MSB-first ordering the unpack is:
 
@@ -344,11 +347,19 @@ At the **master**, once per chain: `R3` (33–100 Ω series on `CLK`) and a 10 k
 pull-down on `MISO` (HW-2, HW-11).
 
 > **Family:** LVC is preferred (HW-3) for edge rate and drive into a multi-drop
-> clock bus. `74LV165A` is an acceptable substitute. `74HC165` works at 3.3 V but
-> should be held to ≤ 2 MHz; it is the right choice for a **DIP breadboard bench
-> build**, where LVC is not available in a through-hole package. Confirm the
-> exact part's pinout against its datasheet before layout — the pin numbers in
-> this document have not been checked against a physical part.
+> clock bus. `74LV165A` is an acceptable substitute. `74HC165` is the right
+> choice for a **DIP breadboard bench build**, where LVC is not made in a
+> through-hole package.
+>
+> The ≤ 2 MHz figure for HC was conservative. **4 MHz ran clean on a 4-chip
+> breadboard rig** (2 modules, 32 ch) at 3.3 V for millions of frames with zero
+> read errors, 2026-08-06/07. That does not license 4 MHz at eight modules —
+> what fails first is multi-drop `CLK` integrity across 800 mm (§4.3), which is
+> a harness-length problem rather than a part-speed one, and is untested.
+>
+> Pin numbers: most are now confirmed against silicon (see `HARDWARE.md`), but
+> pins 3, 4, 5 and 13 are not. Confirm the exact part's pinout against its
+> datasheet before layout.
 
 ## Net list
 

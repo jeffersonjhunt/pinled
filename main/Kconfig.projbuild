@@ -86,7 +86,10 @@ menu "pinled configuration"
                 to try if far modules read wrong while near ones are fine, since
                 multi-drop CLK integrity is the rev D binding constraint
                 (docs/TIMING.md section 4.3). On breadboarded 74HC165 parts at
-                3.3 V, start at 2 MHz.
+                3.3 V, 4 MHz was measured clean on a 4-chip breadboard rig for
+                millions of frames (2026-08-06/07). HW-3's conservative ≤ 2 MHz
+                still applies to long chains, where multi-drop CLK integrity
+                across 800 mm fails before the part does.
 
         config PINLED_SPI_MODE
             int "SPI mode (0..3)"

@@ -169,7 +169,7 @@ is the chain handoff and the terminator, not the register. Build two modules.
 
 | Qty | Part | Notes |
 |---:|---|---|
-| 6 | **74HC165N**, DIP-16 | 4 needed, 2 spare. HC not LVC: LVC is not made in through-hole. Run at **3.3 V** and hold the clock to ≤ 2 MHz (HW-3). |
+| 6 | **74HC165N**, DIP-16 | 4 needed, 2 spare. HC not LVC: LVC is not made in through-hole. Run at **3.3 V**. HW-3 says ≤ 2 MHz, but **4 MHz measured clean** on this rig for millions of frames — see `CHAINING.md`. |
 | 4 | 10 kΩ resistor | chain terminators — one per `SER` input that faces a connector, plus one at the MCU |
 | 4 | 33 Ω resistor | series with each `QH` |
 | 1 | 100 Ω resistor | series with `CLK` at the MCU |

@@ -357,7 +357,7 @@ sees only 0.33 mA — so HC is no longer marginal on drive:
 | Output drive | ±2–4 mA (derated) | ±24 mA |
 | t_pd CLK → `QH` | ~30–45 ns | ~7–12 ns |
 | Practical `fmax` | ~20–25 MHz | > 50 MHz |
-| Verdict | fine at ≤ 2 MHz; the right part for a **DIP bench build** | preferred for production |
+| Verdict | **measured clean at 4 MHz** on a 4-chip breadboard rig; the right part for a **DIP bench build** | preferred for production |
 
 **What binds instead: the multi-drop clock.** This is a genuine regression from
 rev C and should be stated plainly. Rev C's `CLK` was point-to-point and
