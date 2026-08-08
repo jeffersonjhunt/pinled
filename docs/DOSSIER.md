@@ -282,6 +282,30 @@ Stated so the first cut can proceed; flag any to change:
    is a documented alternative.
 4. **Sensing point:** at/near each **socket** (one tap = one lamp = one LED),
    so no matrix row/column decoding is required.
+
+   > **Open, and load-bearing: does the original bulb stay in the socket?**
+   > Nothing in these docs has ever said. On a transistor-driven machine it is
+   > merely a power question. On **SCR-latched Bally/Stern — the first target
+   > (item 5) — it is a functional one**, because an SCR conducts only while its
+   > load draws at least its holding current. Pull a ~250 mA incandescent and
+   > replace it with a high-impedance sense tap and the SCR may stop latching,
+   > so the lamp we are trying to sense never turns on properly.
+   >
+   > Corroboration: NVRAM's replacement lamp driver board ships with the note
+   > that Stern MPU-200 games "may experience a few flickering lamps" and that
+   > "a 470 ohm resistor soldered across the offending lamp sockets will fix
+   > it." At ~6.3 VAC that resistor is ~13 mA — a bleeder whose only plausible
+   > job is holding an SCR latched. It is the classic Bally/Stern LED-conversion
+   > failure, sold as a fix.
+   >
+   > **This puts a floor under the front end that `TIMING.md` §5.1 does not
+   > model.** That section carries 3 mA/channel as a *power* placeholder; if the
+   > bulb is removed, the front end (or a deliberate bleeder beside it) must
+   > instead supply SCR holding current, and 3 mA is likely under it. Three ways
+   > out, and they are not equivalent: leave the incandescent in and accept its
+   > power and heat; fit a per-channel bleeder and pay ~13 mA × 128 channels;
+   > or sense upstream of the socket where the SCR's load is unchanged. Settle
+   > this before the front end is laid out — see item 5's scope list.
 5. **First target: Bally/Stern solid-state, 1977–1985** *(fixed 2026-08-07)*.
    The bench target is an **Alltek Ultimate MPU** — a universal replacement for
    Bally `AS2518-17/-35/-133`, `AS-2517-35` and Stern `MPU-100`/`MPU-200` — with

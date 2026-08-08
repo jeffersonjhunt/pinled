@@ -434,6 +434,14 @@ Using a placeholder of **3 mA/channel** for the FET front end — *replace with
 the measured value, it drives this whole section* — a 16-channel module is
 ~50 mA @ 3.3 V ≈ 175 mW, so eight modules ≈ **400 mA / 1.4 W**.
 
+> **This placeholder may have a floor set by the machine, not by us.** On
+> SCR-latched Bally/Stern lamp drivers — the first target — an SCR conducts only
+> while its load draws its holding current, which a removed incandescent used to
+> supply. The known field fix is a 470 Ω bleeder across the socket, ~13 mA at
+> 6.3 VAC. If the bulb comes out, 3 mA/channel is very likely below what keeps
+> the lamp latched, and the number driving this section is a *functional*
+> requirement rather than a power estimate. See `DOSSIER.md` §7 item 4.
+
 An LDO passes load current through, so raising the distribution voltage does not
 reduce harness current; only a switching regulator does:
 
