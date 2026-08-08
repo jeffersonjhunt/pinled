@@ -12,3 +12,6 @@ compile_commands.json
 
 # local env
 .env
+
+# OS junk
+.DS_Store

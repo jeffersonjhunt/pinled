@@ -149,14 +149,30 @@ mandatory dead gap, and gave the chain a few-microsecond stall cliff. **Rev C**
 fixed all of that with a fifth conductor and a `STARTED` flip-flop — but still
 spent six ICs per module maintaining a distributed state machine.
 
-A fifth was evaluated and rejected: **8× MCP23S17 SPI I/O expanders** on a shared
-bus (`esp32-mcp23s17-128ch-input-design.md`). One IC per 16 channels is fewer
-parts still, but the MCP requires `CS` to toggle between devices, so 128 channels
-costs **eight** SPI transactions against the measured ~17 µs of fixed
-per-transaction overhead — 162 µs a frame, missing the 10 kHz target by 2.7×. It
-also bussed four fast signals down the harness instead of one, and its
-power-on default (`HAEN=0`, address pins ignored) means one browned-out module
-corrupts all 128 channels rather than its own 16.
+A fifth was evaluated and rejected (2026-08-04): **8× MCP23S17 SPI I/O
+expanders** on a shared bus. One IC per 16 channels is fewer parts still, and
+its wire-time arithmetic was sound, but four things decided against it:
+
+1. **Eight transactions per frame.** The MCP requires `CS` to toggle between
+   devices, so 128 channels cannot be one transaction. Against the measured
+   ~17 µs of fixed per-transaction overhead that is 8 × (17 + 3.2) ≈ **162 µs**
+   a frame — a 6.2 kHz free-run the boot check clamps to ~3.7 kHz, missing the
+   10 kHz target by 2.7×. A '165 chain does 128 channels in one 49 µs
+   transaction.
+2. **The harness grows.** The MCP needs `MOSI` too, so the inter-module
+   connector goes from 5 conductors to 6 or 7, bussing *four* fast signals with
+   eight stubs where rev D busses one.
+3. **`HAEN=0` is the power-on default**, and a device in that state ignores its
+   address pins and drives `SO` on every read — so one browned-out or
+   hot-plugged module corrupts **all 128 channels**, not just its own 16.
+4. **Sample skew.** Read serially, channel 0 and channel 127 land ~160 µs
+   apart. Rev C's spread was 35 µs; rev D captures every channel on one edge.
+
+> **One thing could still revive it.** Queueing all eight reads with
+> `spi_device_queue_trans()` so the driver's ISR chains them back-to-back may
+> amortise most of the ~17 µs. That has never been measured. If it works, one
+> IC per 16 channels deserves a second look — reason 1 is the only one of the
+> four that this would answer, but it is the one that decided the question.
 
 The trade rev D keeps: a module that is missing or unpowered blanks everything
 downstream of it, where the star topology would have lost only that module's

@@ -91,10 +91,13 @@ needs no software, and cannot be forgotten.
 
 **The single-transaction property is load-bearing.** §2.4 measures ~17 µs of
 fixed driver overhead per SPI transaction. A frame that costs one transaction
-pays that once; a design needing one transaction per module — the MCP23S17
-option evaluated in `esp32-mcp23s17-128ch-input-design.md` — pays it eight times
-and misses the 10 kHz target by 2.7×. This is the main reason rev D chains shift
-registers rather than reading addressed expanders.
+pays that once; a design needing one transaction per module pays it eight times.
+That was the deciding number against the **8× MCP23S17** expander option, which
+requires `CS` to toggle between devices: 8 × (17 + 3.2) ≈ **162 µs** a frame, a
+6.2 kHz free-run against a 10 kHz requirement — missing it by 2.7×, where a '165
+chain does all 128 channels in one 49 µs transaction. This is the main reason
+rev D chains shift registers rather than reading addressed expanders. Full
+rejection rationale in `DOSSIER.md` §3.
 
 **Gotcha:** the filament math below assumes the LX7 runs at **240 MHz**, and
 ESP-IDF's default for `esp32s3` is **160 MHz**, which inflates per-channel
