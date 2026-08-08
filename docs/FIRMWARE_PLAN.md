@@ -270,9 +270,13 @@ instead of quietly corrupting every time constant:
 5. **M1c — two modules, then eight.** Two modules is the important step: it
    proves the chain handoff, the 10 kΩ terminator, and that unplugging the last
    module blanks its channels to a stable zero rather than noise (HW-11).
-   *(**Chain handoff passed 2026-08-06** on the 4× '165 rig — channels 16–31
-   appear in order with no gap. The terminator and live-unplug half is still
-   open and is now the highest-value remaining check.)* Then
+   *(**Two-module half complete, 2026-08-06/07** on the 4× '165 rig. Chain
+   handoff: channels 16–31 appear in order with no gap. Terminator and live
+   unplug: chips 3–4 pulled mid-run held a hard zero across ~4.9 M frames,
+   including while the surviving module was actively switching, with `U1.D`
+   and `U2.D` still reading channels 4 and 12 as the positive control. HW-11
+   confirmed — `num_modules` is a performance setting, not a correctness one.)*
+   Then
    scale to 8 / 128 channels, where the remaining risks live: multi-drop `CLK`
    integrity at the far end (`TIMING.md` §4.3 — the new binding constraint),
    clock-skew *direction* (module 8 must be clocked after module 1, HW-14), and

@@ -543,9 +543,10 @@ wrong brightness:
 4. **Multi-drop clock integrity.** The new binding constraint (§4.3). Scope
    `CLK` at the far end for ringing and double-clocking with and without the
    series resistor at the master.
-5. **Terminator behaviour.** Unplug the last module mid-run and confirm its
-   channels go to a hard, stable 0 rather than noise — the self-termination
-   claim (HW-11) in one test.
+5. ~~**Terminator behaviour.**~~ **Settled 2026-08-07.** Last module pulled
+   live on the 4× '165 rig: its channels held a hard zero across ~4.9 M frames,
+   including while the surviving module was actively switching. The 10 kΩ
+   terminator holds against crosstalk, not just quiescence — HW-11 confirmed.
 6. **Front-end current per channel.** The 3 mA placeholder in §5.1 sets the
    entire power topology.
 7. **CLK→DATA crosstalk** at full harness length, with and without series

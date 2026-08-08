@@ -251,10 +251,16 @@ deleted respectively when the firmware moved to rev D framing.
    across a module boundary as well as within one.
 4. **`/PL` held low.** `DATA` should track channel 0 live on a meter. *Still
    open* — needs a `PINLED_SCAN_HOLD_CH=0` build, which the bench has not run.
-5. **Unplug the second module** while running. Channels 16–31 must go to a
-   stable, hard zero — not noise. That is HW-11 in one test, and it is the claim
-   that makes `num_modules` a performance setting rather than a correctness one.
-   *Still open, and now the highest-value remaining check.*
+5. ~~**Unplug the second module** while running.~~ **PASSED 2026-08-07.**
+   Chips 3–4 pulled live; channels 16–31 held a hard zero across **~4.9 M
+   frames** with not one toggle flag set. The positive control matters as much
+   as the silence: with the module out, `U1.D` still read channel 4 and `U2.D`
+   channel 12, proving the frame was still 32 bits and those trailing bits were
+   genuinely being clocked from a pulled-down `SER` rather than from a dead
+   chain. Groups 3–4 also stayed clean *during* those presses, so the 10 kΩ
+   terminator holds against crosstalk on the shared `CLK`//`PL` bus, not merely
+   against quiescence. HW-11 confirmed: `num_modules` is a performance setting,
+   not a correctness one.
 
 ### What does *not* transfer from the rev C rig
 
@@ -351,16 +357,20 @@ Settled on that rig:
 - **`QH`→`SER` handoff** — within a module *and* across a module boundary.
 - **`/PL` from `CS`** — positive-polarity `CS` loads between frames.
 - **Frame timing** — 26.8 µs for 32 ch → 37274 Hz free-run, 27% duty at 10 kHz.
+- **Self-termination (HW-11)** — last module pulled live; its channels held a
+  hard zero across ~4.9 M frames, including while the surviving module was
+  actively switching. `num_modules` is a performance setting, not a correctness
+  one.
 
-Still outstanding:
+**Every rev D correctness claim is now measured.** What remains is either
+diagnostic polish or needs a longer chain than four chips:
 
 1. **`/PL` held low** makes `DATA` track channel 0 live (FR-DIAG-3) — needs a
-   `PINLED_SCAN_HOLD_CH=0` build (§5 check 4).
-2. **Terminator under live unplug** (HW-11) — the highest-value remaining
-   check, and the one that makes `num_modules` a performance rather than a
-   correctness setting (§5 check 5).
-3. **Pins 3, 4, 5, 6 and 13** of the '165 have not been individually
+   `PINLED_SCAN_HOLD_CH=0` build (§5 check 4). Diagnostic convenience only;
+   nothing depends on it.
+2. **Pins 3, 4, 5, 6 and 13** of the '165 have not been individually
    exercised; pin 6 (`H`, channel 0) is the one worth pressing first.
-4. Everything in `TIMING.md` §7 items 2–4: `/PL` edge quality at 800 mm,
+3. Everything in `TIMING.md` §7 items 2–4: `/PL` edge quality at 800 mm,
    clock-skew direction, and multi-drop `CLK` integrity. All three need chain
-   lengths the bench rig does not have.
+   lengths the bench rig does not have, and all three are about *scaling* a
+   design whose correctness is now established at 2 modules.
