@@ -209,18 +209,31 @@ Test inputs, module-local channel order:
 | '165 input | `H` | `G` | `F` | `E` | `D` | `C` | `B` | `A` |
 | Pin | 6 | 5 | 4 | 3 | 14 | 13 | 12 | 11 |
 
-Each input gets a switch to 3V3 and a 10 kΩ pull-down. Nothing floats.
+Every input needs a defined level — nothing may float. Two ways, and the
+2026-08 rig used both:
+
+- **Switched:** a button to 3V3 plus a 10 kΩ pull-down. Needed only on inputs
+  you intend to exercise.
+- **Tied off:** a direct wire to `GND` for the rest. Cheaper than a resistor
+  per channel and a harder zero, but that channel can then never be tested.
+
+The 2026-08 rig had **four buttons total** — the `D` input (pin 14) on each of
+the four chips, i.e. channels 4, 12, 20 and 28 — with all 28 other inputs wired
+straight to ground. Every button registered on its expected channel.
 
 > **Partly confirmed against silicon, 2026-08-06/07.** Working end to end on a
 > 4× 74HC165 rig proves pins 1 (`/PL`), 2 (`CLK`), 8 (`GND`), 9 (`QH`),
 > 10 (`SER`), 15 (`CLK INH`) and 16 (`VCC`). Pin 14 (`D`) was confirmed by
-> button press on two separate chips, and pins 11/12 (`A`/`B`) by their
+> button press on all four chips, and pins 11/12 (`A`/`B`) by their
 > floating-input signature landing on local channels 7/6 as this table
-> predicts. **Pins 3, 4, 5, 6 and 13 (`E`, `F`, `G`, `H`, `C`) have not been
-> individually exercised** — the order is right, but check them against the
-> datasheet before layout. Pin 6 (`H`, channel 0) is the one worth pressing
-> first: it is the only channel whose timing differs from the rest, being the
-> bit `/PL` presents before any clock.
+> predicts, before they were tied off.
+>
+> **Pins 3, 4, 5, 6 and 13 (`E`, `F`, `G`, `H`, `C`) remain unexercised, and
+> the rig as wired cannot exercise them** — they are hard-grounded, so they
+> read 0 permanently and produce no evidence either way. Confirming them needs
+> a button moved or a ground lifted. Pin 6 (`H`, channel 0) is the one worth
+> doing: it is the only channel whose capture timing differs from the rest,
+> being the bit `/PL` presents before any clock arrives.
 
 ### Firmware settings
 
