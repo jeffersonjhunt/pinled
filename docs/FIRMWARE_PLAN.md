@@ -302,17 +302,13 @@ instead of quietly corrupting every time constant:
    classification seeds integrator params; verify a matrixed lamp reads as
    steady-on and a dimmed GI tracks brightness. BOOT button re-arms.
 7. **M3 — profiles and the config API.** The headless half of `WEBUI.md`, and
-   the part everything else depends on: the two-document JSON schema
-   (FR-CFG-5/6), a LittleFS store replacing the NVS-blob plan (FR-CFG-7), a
-   per-channel record carrying name / LED index / colour / class lock / tau
-   overrides (FR-CFG-8), then `esp_http_server` with the `/api/v1` surface,
-   SoftAP + captive-portal provisioning (FR-UI-6/7), and the live WebSocket
-   (FR-UI-5). Per-channel tint and profiler locks, power cap, and the first
-   named-machine calibration profile land here. Testable entirely with `curl`,
-   before any UI exists.
-   *Partition table and `CONFIG_ESPTOOLPY_FLASHSIZE` change at the start of
-   this milestone — they cannot until the 8 MB board is in hand (`WEBUI.md`
-   §7).*
+   the part everything else depends on. Ordered so that the parts with no
+   hardware dependency come first and the risky part comes before the visible
+   one — see §5.1 below.
+
+   **M3 does not need the 8 MB board.** OTA is what needs two 3 MB slots; M3
+   needs one app partition and one filesystem, and both fit in 4 MB with room
+   to spare (§5.1 step 0). Only M4 waits on new hardware.
 8. **M4 — UI and updates.** SPA shell served from the device, bundle in S3
    (FR-UI-1/2), API versioning (FR-UI-4), standalone offline bundle (FR-UI-8),
    browser-mediated OTA with button arming (FR-OTA-1/2/3), device identity and
@@ -320,11 +316,86 @@ instead of quietly corrupting every time constant:
    fire a lamp from the test card and bind it by clicking.
 9. **M5 — polish.** Gamma/dither tuning, docs, release BOM.
 
+### 5.1 M3, in order
+
+Sequenced on two principles: the host-testable schema work lands before
+anything that needs a board, and the per-channel record — which ripples through
+three existing components — lands before the HTTP server, which does not touch
+them at all. The visible milestone is last because it is the least risky part.
+
+**Step 0 — partitions, on 4 MB.** The current table stops at `0x110000`, so
+~2.9 MB of the bench part is unused. M3 needs no OTA slots:
+
+```
+nvs,      data, nvs,     0x9000,   0x6000
+phy_init, data, phy,     0xf000,   0x1000
+factory,  app,  factory, 0x10000,  2M
+storage,  data, spiffs,  0x210000, 1536K     → ends 0x390000, inside 4 MB
+```
+
+`CONFIG_ESPTOOLPY_FLASHSIZE_4MB` stays as it is. The 8 MB table in `WEBUI.md`
+§7 replaces this at M4. Reflashing the table erases NVS, which currently holds
+nothing.
+
+**Step 1 — the `.proto` and the host test rig.** No target, no board, no IDF.
+`filament` and the whole schema layer are pure logic, so they build with plain
+CMake + CTest and run in CI. Write the schema, generate both sides, and get
+round-trip tests passing (document → protobuf → document, and the proto3 JSON
+mapping in both directions) before any of it touches firmware. This is also
+where the `protoc --encode` / `--decode` wrappers live, since they are what
+replaces `curl` for the rest of the milestone (`WEBUI.md` §2a).
+
+**Step 2 — the two models (FR-CFG-14).** The document type, the flat runtime
+record, and the projection between them. Host-testable.
+
+**Step 3 — per-channel state through the pipeline (FR-CFG-8).** The one that
+ripples: `filament`, `lamp_map` and `profiler` all take *global* attack, decay
+and gamma today and must take them per channel. Largest diff in the milestone
+and the one most likely to disturb behaviour already proven on the bench — so
+it lands while the rig is still set up to notice.
+
+**Step 4 — LittleFS store (FR-CFG-7/15).** Replace the `machine_config` stub
+(`save()` currently returns `ESP_ERR_NOT_SUPPORTED`). Two documents, CRC per
+document, boot to Kconfig defaults when absent (FR-CFG-4).
+
+**Step 5 — `esp_http_server` and `/api/v1`.** Config and profile read/write,
+`info` reporting the API version (FR-UI-4). Exercised through the step-1
+wrappers.
+
+**Step 6 — the live WebSocket (FR-UI-5/9).** Needs `CONFIG_HTTPD_WS_SUPPORT`.
+The push task reads the sticky flags `scan_task` already maintains per frame;
+define that hand-off explicitly rather than relying on `uint8_t` writes being
+atomic. Low priority, off core 1, drops under load.
+
+**Step 7 — provisioning (FR-UI-6/7).** Take ESP-IDF's `wifi_provisioning`
+component rather than writing credential exchange by hand; it assumes a
+companion app, so pair it with the DNS-hijack captive portal from IDF's own
+`protocols/http_server` example. Button-held rescue back to SoftAP.
+
+Two things to measure rather than assume along the way: **heap** — Wi-Fi, lwIP
+and httpd together are on the order of 50–80 KB and nothing has checked that
+against current usage (the FH4R2's 2 MB PSRAM is *not* a safety net, since the
+shipping board is specified without it, NFR-8) — and **image size**, which is
+what decides whether the 2 MB app partition above is generous or merely
+adequate.
+
+**Do this on the ESP32-S3-DevKitC-1, not the bench QT Py.** `NFR-1` already
+supports it and the GPIO numbers are identical, so the Bally/Stern rig keeps a
+known-good diagnostic build while this work proceeds. If that DevKit is an
+`N8` part it also has 8 MB flash, which would let M4's real partition table be
+validated before the new QT Py arrives.
+
 ## 6. Test strategy
 
-- **Host unit tests** for `filament` (step response → verify tau) and the
-  profiler classifier (synthetic waveforms → expected class). Pure fixed-point
-  math, no hardware needed.
+**None of this exists yet** — there is not a single test file in the repo. It
+is the first thing M3 builds (§5.1 step 1), because the schema layer is pure
+logic and there is no excuse for it to be verified by hand on a board.
+
+- **Host unit tests** for `filament` (step response → verify tau), the profiler
+  classifier (synthetic waveforms → expected class), and schema round-trips
+  (document → protobuf → document, and proto3 JSON both ways). Pure logic with
+  no IDF dependency, so plain CMake + CTest, runnable in CI without a target.
+  Unity ships with IDF for the on-target cases that genuinely need hardware.
 - **On-target** smoke tests: scan a known pattern injected on the mux inputs;
   confirm channel→LED mapping; scope the LED refresh vs. sample rate for
   aliasing.

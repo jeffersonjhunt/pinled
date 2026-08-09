@@ -99,6 +99,51 @@ Without this, the first breaking API change strands every un-updated device —
 and the update path runs *through* the SPA, so the failure is self-locking:
 the tool you would use to fix it is the tool that broke.
 
+## 2a. Wire format: protobuf out, JSON where people read it
+
+A single `.proto` is the **schema authority**. Everything else is generated from
+it.
+
+| Where | Format | Why |
+|---|---|---|
+| Device ⇄ browser | **protobuf** (nanopb) | firmware carries no JSON parser; static structs, no malloc |
+| Files, registry, diffs, anything a person reads | **JSON** | human-readable is a product feature for shared profiles (`FR-CFG-3`) |
+| The transform | **the browser** | `protobuf.js` `toObject`/`fromObject` |
+
+The JSON form is not a second, hand-maintained schema that can drift from the
+first — it is **proto3's canonical JSON mapping**, generated from the same
+`.proto` and lossless in both directions. One definition, two encodings.
+
+This is also what makes the API version window (§2) rigorous rather than
+hopeful. Field numbers and unknown-field preservation are precisely the
+mechanism a cloud-updated bundle needs to talk to firmware from two years ago;
+an additive-only JSON convention is a weaker version of the same idea.
+
+On the device this means **nanopb only** — no cJSON, no DOM parse of a 16 KB
+document, no string handling on the hot side of a 512 KB SRAM part. A decode
+lands directly in the runtime record.
+
+> **The cost, stated plainly:** `curl` stops being a debugging tool, and M3 is
+> specifically meant to be exercisable before any UI exists. `protoc --encode`
+> and `protoc --decode` in a shell pipeline cover it, and the M3 test harness
+> should ship those wrappers rather than leaving each person to work it out.
+
+### Two models, not one
+
+The document model (nested, optional fields, names) and the runtime model
+(flat POD array, sized once at init) are **different types**, with `load()`
+projecting one into the other. `NFR-4` forbids dynamic allocation in the
+per-frame path, and `render_task` touches the per-channel record every frame —
+conflating the two is how a `std::string` lamp name ends up dereferenced in the
+render loop.
+
+### Integrity is the document's job, not the filesystem's
+
+Every stored document carries a **CRC over its payload**. LittleFS guarantees
+filesystem consistency; it does not guarantee that the last write reached
+flash. Those are different promises, and the cheap half of the difference is a
+checksum field.
+
 ### OTA is the one endpoint that needs a gate
 
 Open CORS means any page the user happens to have open can issue requests to
@@ -202,8 +247,16 @@ records lineage, so an A/B pair reads as two branches from a common point rather
 than two unrelated blobs.
 
 Flipping between versions is `PUT config` + `PUT profile` — no special API, no
-device-side history. It need not be instantaneous; applying a configuration may
-require re-initialisation, and the device reports whether it did.
+device-side history.
+
+**Applying a configuration is write-the-file-then-restart.** Nothing in `Main`
+is built to be re-initialised in place; it constructs the scan device, the
+integrators and the renderer once at boot. Rebuilding that live, while
+`scan_task` runs at 10 kHz on core 1, would be real work to solve a problem
+nobody has: this is a commissioning-time operation, the lamps flicker for a
+second, and the alternative is a teardown path that exists solely to avoid that
+second. The UI's obligation is to reconnect its WebSocket cleanly and say what
+is happening, rather than appearing to have crashed.
 
 **Fallback is inherent.** The SPA is what applied the change, so it still holds
 the outgoing version — going back is one action. No device-side rollback slot is
@@ -237,14 +290,17 @@ holds ~15 flat scalars and no per-channel array at all, and `LampMapEntry` is
 
 ### Storage
 
-Both documents are JSON files in a LittleFS partition, not NVS blobs. A
-128-channel profile with names is roughly 16 KB of JSON; the NVS partition is
-24 KB *total*. File storage also delivers `FR-CFG-3` import/export for free —
-export is serving the file — and keeps the offline path (§6) working with
-ordinary file downloads.
+Both documents are protobuf files in a LittleFS partition, not NVS blobs. A
+128-channel profile with names is roughly 16 KB as JSON; the NVS partition is
+24 KB *total*, so the lamp table does not belong there even encoded. NVS keeps
+what it is actually good at — the handful of small key-value settings needed at
+boot, with its own wear levelling: Wi-Fi credentials and the author handle.
 
-One of each, not a library (§3a). NVS keeps only what must survive a filesystem
-wipe: Wi-Fi credentials and the author handle.
+One of each, not a library (§3a).
+
+There is no append-only log and no telemetry, so the storage shape is two
+whole-file rewrites at commissioning time. A raw circular partition would be
+the better answer for streaming records — it is not the shape of this problem.
 
 ## 4. The live view is what makes mapping tractable
 
@@ -262,7 +318,21 @@ lost regardless of push rate. This mechanism already exists — it is
 `FR-DIAG-1`'s sticky `seen_high_` flag, which updates per frame inside
 `scan_task`. Reuse it rather than sampling `level[]`.
 
-Payload is 128 channels × (level byte + flags) at 30 Hz — under 10 KB/s.
+Payload is 128 channels × (level byte + flags) at 30 Hz — under 10 KB/s. The
+frame is a protobuf envelope wrapping a **packed `bytes` field**, not a
+`repeated` scalar: the envelope stays versionable like everything else, while
+the per-channel data costs two bytes a channel and decodes as a typed array in
+the browser.
+
+The push task runs at low priority on core 0; `scan_task` stays pinned to core
+1. Backpressure **drops pushes and never stalls the scan** — which the sticky
+flag makes harmless, since a dropped push cannot lose activity, only delay it.
+
+There is no broker anywhere in this. MQTT was considered and ruled out by the
+architecture's own constraint: a cloud broker means the device dials out
+(violating FR-UI-2 and the offline path), and an on-device broker still needs
+MQTT-over-WebSocket in the browser — a protocol layer on top of the transport
+it was meant to replace.
 
 The same channel also carries live profiler classification, so the user sees
 what each channel was classified as and can lock or override it in place.

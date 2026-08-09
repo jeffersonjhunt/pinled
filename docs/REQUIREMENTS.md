@@ -60,16 +60,20 @@ desired, "MAY" = optional.
 |---|---|---|
 | FR-CFG-1 | Machine profiles (per-lamp name, color, integrator params, profiler locks) SHALL persist across reboots. | v1 |
 | FR-CFG-2 | Build-time defaults SHALL be settable via Kconfig (`idf.py menuconfig`). | MVP |
-| FR-CFG-3 | Profiles SHALL be loadable/exportable as human-readable JSON. | v1 |
+| FR-CFG-3 | Profiles SHALL be loadable/exportable as human-readable JSON — specifically proto3's canonical JSON mapping of the schema in FR-CFG-13, so the readable form is generated rather than separately maintained. | v1 |
 | FR-CFG-4 | The system SHALL boot to sane defaults with no stored profile. | MVP |
 | FR-CFG-5 | Configuration SHALL be split into two documents: a **machine profile**, keyed by the lamp's number in the machine's own lamp matrix and containing nothing install-specific, and an **install config** holding geometry, pins and wiring. Both SHALL be exportable and importable; only the machine profile SHALL be publishable to the shared registry. | v1 |
 | FR-CFG-6 | The install config SHALL carry the channel → lamp-number → LED-index binding that joins the two documents. Importing a machine profile SHALL NOT modify geometry, pins or wiring. | v1 |
-| FR-CFG-7 | Both documents SHALL be stored as JSON files in a filesystem partition, not as NVS blobs (a 128-channel profile is ~16 KB; the NVS partition is 24 KB total). NVS SHALL retain only Wi-Fi credentials, author handle and the active-profile pointer. | v1 |
+| FR-CFG-7 | Both documents SHALL be stored as protobuf files in a filesystem partition, not as NVS blobs (a 128-channel profile is ~16 KB as JSON; the NVS partition is 24 KB total). NVS SHALL retain only what it is good at — the small key-value settings needed at boot: Wi-Fi credentials and author handle. | v1 |
 | FR-CFG-8 | Per-channel state SHALL include name, LED index, base color, profiler class lock, and attack/decay overrides — one record written by both the profiler and the UI, with the class lock deciding precedence. | v1 |
 | FR-CFG-9 | A **version** SHALL be the install config and machine profile captured together with a label, timestamp and parent lineage, so a user can back up, keep alternative setups, compare them and revert. Versions SHALL be managed by the UI and stored in the user's private cloud area or as local files. | v1 |
 | FR-CFG-10 | The device SHALL store exactly **one active configuration** and no version history — only one can be in effect, so on-device copies would be dead weight and a second thing to keep consistent. Switching versions is an ordinary config write; it need not be instantaneous, but the device SHALL report whether applying one required re-initialisation. | v1 |
 | FR-CFG-11 | The UI SHALL retain the outgoing configuration when applying a new one, so fallback is a single action. No device-side rollback slot is required: no install-config value can lock the user out (pins, geometry and rates affect only scan and render, never the HTTP server), and Wi-Fi credentials are covered by FR-UI-7. | v1 |
 | FR-CFG-12 | Wi-Fi credentials SHALL live in NVS only and SHALL NOT appear in any exported document, at any privacy level. Restoring a backup therefore requires re-provisioning. | v1 |
+| FR-CFG-13 | A single `.proto` SHALL be the schema authority. Device ⇄ browser traffic and on-device storage SHALL be **protobuf** (nanopb); the firmware SHALL contain no JSON parser. The browser converts to and from JSON for files, sharing and diffing. Field numbering and unknown-field preservation are what make the FR-UI-4 version window work. | v1 |
+| FR-CFG-14 | The document model (nested, named, optional) and the runtime model (flat POD array sized at init) SHALL be distinct types, with load projecting one onto the other — `NFR-4` forbids allocation in the per-frame path that reads the per-channel record. | v1 |
+| FR-CFG-15 | Every stored document SHALL carry a CRC over its payload. Filesystem consistency is not write durability; they are different promises. | v1 |
+| FR-CFG-16 | Applying a configuration SHALL be write-file-then-restart. In-place re-initialisation of the scan device, integrators and renderer is not required: this is a commissioning-time operation. | v1 |
 
 ## 5a. Configuration UI
 
@@ -83,7 +87,8 @@ product SHALL be reachable with no internet connection.
 | FR-UI-2 | The device SHALL NOT make outbound requests to any web service. The browser is the only participant that communicates with both the device and the cloud. | v1 |
 | FR-UI-3 | The device API SHALL be unauthenticated and SHALL send `Access-Control-Allow-Origin: *`, so that a standalone copy of the SPA run from `file://` (origin `null`) can reach it. | v1 |
 | FR-UI-4 | `GET /api/v1/info` SHALL report an **API version** distinct from the firmware version, so a cloud-updated bundle can support field devices running older firmware. | v1 |
-| FR-UI-5 | The device SHALL push live per-channel state and profiler classification over a WebSocket at ~30 Hz, carrying a **sticky "active since last push"** bit per channel (cleared on send) so activity between pushes is not lost. This reuses the FR-DIAG-1 mechanism. | v1 |
+| FR-UI-5 | The device SHALL push live per-channel state and profiler classification over a WebSocket at ~30 Hz, carrying a **sticky "active since last push"** bit per channel (cleared on send) so activity between pushes is not lost. This reuses the FR-DIAG-1 mechanism. The frame is a protobuf envelope wrapping a packed `bytes` payload. | v1 |
+| FR-UI-9 | The push task SHALL run at low priority off the scan core, and SHALL **drop pushes rather than stall `scan_task`** under load. The sticky bit makes a dropped push lossless. No message broker SHALL be introduced: a cloud broker violates FR-UI-2, and an on-device broker still needs the WebSocket underneath it. | v1 |
 | FR-UI-6 | Unprovisioned, the device SHALL raise a SoftAP with a captive portal whose provisioning page is **self-contained on the device**, with no cloud dependency. After joining, it SHALL report both its mDNS name and its numeric IP. | v1 |
 | FR-UI-7 | A button-held rescue path SHALL return a provisioned device to SoftAP mode. | v1 |
 | FR-UI-8 | The SPA SHALL be downloadable as a standalone bundle that runs locally against the device API with no cloud access. | v1 |
