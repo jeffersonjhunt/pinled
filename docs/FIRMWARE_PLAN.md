@@ -379,11 +379,12 @@ shipping board is specified without it, NFR-8) — and **image size**, which is
 what decides whether the 2 MB app partition above is generous or merely
 adequate.
 
-**Do this on the ESP32-S3-DevKitC-1, not the bench QT Py.** `NFR-1` already
-supports it and the GPIO numbers are identical, so the Bally/Stern rig keeps a
-known-good diagnostic build while this work proceeds. If that DevKit is an
-`N8` part it also has 8 MB flash, which would let M4's real partition table be
-validated before the new QT Py arrives.
+**This runs on the bench QT Py, on a branch.** The rig is wired and working and
+is not being rebuilt to suit a milestone. `main` stays flashable as the
+known-good diagnostic build, and the step-0 table is deliberately compatible
+with it — the 2 MB `factory` partition holds the current app with room to
+spare, so the table is flashed once and thereafter switching between the two
+builds is an ordinary app flash.
 
 ## 6. Test strategy
 
