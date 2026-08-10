@@ -337,13 +337,24 @@ storage,  data, spiffs,  0x210000, 1536K     → ends 0x390000, inside 4 MB
 §7 replaces this at M4. Reflashing the table erases NVS, which currently holds
 nothing.
 
-**Step 1 — the `.proto` and the host test rig.** No target, no board, no IDF.
-`filament` and the whole schema layer are pure logic, so they build with plain
-CMake + CTest and run in CI. Write the schema, generate both sides, and get
-round-trip tests passing (document → protobuf → document, and the proto3 JSON
-mapping in both directions) before any of it touches firmware. This is also
-where the `protoc --encode` / `--decode` wrappers live, since they are what
-replaces `curl` for the rest of the milestone (`WEBUI.md` §2a).
+**Step 1 — the `.proto` and the host test rig. *(Partly done, 2026-08-10.)***
+No target, no board, no IDF. `filament` and the whole schema layer are pure
+logic, so they build with plain CMake + CTest and run in CI.
+
+*Done:* `proto/pinled.proto` and `proto/pinled.options` (the schema authority,
+with the compatibility rules that make FR-UI-4's version window work);
+`components/pinled_schema` carrying CRC-32 and the 16-byte stored-document
+frame (FR-CFG-15), deliberately free of any IDF dependency so it builds on
+both host and target; `test/host` with a 60-line harness, ASan/UBSan and
+`-Werror` on by default — **25 cases green**, 8 for the CRC and 17 for the
+frame, most of the latter being rejection paths. `tools/pbtool.py` is the
+`curl` replacement (JSON in and out, protobuf on the wire).
+
+*Remaining:* generating the nanopb and protobuf.js sides, and the round-trip
+tests through them. Both need `protoc` plus the nanopb generator, and the
+round-trip has nothing to round-trip *between* until step 2 defines the
+document and runtime models — so the CMake detects nanopb and skips those
+tests when it is absent, keeping the rest green on a machine without `protoc`.
 
 **Step 2 — the two models (FR-CFG-14).** The document type, the flat runtime
 record, and the projection between them. Host-testable.
