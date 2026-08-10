@@ -442,12 +442,19 @@ Also moved `FilamentParams` out of `filament.h` into `pinled_schema`, mirroring
 `DriveClass` in step 2 — the rule deserves ordinary tests, so the type it
 operates on has to be reachable off-target.
 
-**86 cases green** (8 crc, 17 frame, 16 apply, 13 schema, 32 resolve). Firmware
-builds and the image grew 960 bytes, which is the new path actually linked
-rather than dead code. Boot is behaviour-preserving by construction:
-`default_channels()` reproduces exactly what `set_default_mapping()` and
-`set_params_all()` produced, and a test asserts it — **not verified on hardware,
-since the bench rig is mid-rewire for the Bally chain.**
+Reading the rig's boot log before flashing found a real bug that
+"behaviour-preserving by construction" had missed: `set_default_mapping()`
+carried its own copy of the default tint as three literals, and
+`ResolveDefaults` had drifted to a different warm white. Routing boot through
+the config path would have silently restyled every unconfigured lamp. Fixed at
+the cause — one definition, read by both — with a test pinning them together.
+
+**87 cases green** (8 crc, 17 frame, 17 apply, 13 schema, 32 resolve), and
+**verified on hardware**: flashed to the bench QT Py, the boot log diffed
+against the pre-step-3 boot is exactly two lines — the intended locked-count
+message, and 37334 → 37345 Hz free-run, which is 0.03% measurement jitter with
+frame time, Fs and duty unchanged. Two minutes uptime, zero errors, warnings,
+panics or overruns.
 
 **Step 4 — LittleFS store (FR-CFG-7/15).** Replace the `machine_config` stub
 (`save()` currently returns `ESP_ERR_NOT_SUPPORTED`). Two documents, CRC per
