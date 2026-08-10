@@ -23,6 +23,7 @@ Run a single suite directly to see per-case output:
 |---|---|
 | `test_crc32` | CRC-32/ISO-HDLC conformance, incremental use, single-bit-flip detection |
 | `test_doc_frame` | stored-document framing: round trip, and every rejection path |
+| `test_schema_roundtrip` | protobuf schema through nanopb, against golden bytes from Google's implementation *(needs nanopb — see below)* |
 
 `test_crc32` asserts the canonical check value `0xCBF43926` for `"123456789"`.
 That assertion is doing real work: a reflected/non-reflected mix-up yields a
@@ -65,27 +66,72 @@ schema change breaks thirty round-trips and you want the shape of the breakage
 rather than the first instance of it. Add the suite to
 `test/host/CMakeLists.txt` with `pinled_add_test(name)`.
 
-## Not yet wired: schema round-trips
+## Schema round-trips, and why the fixtures are committed
 
-Tests for document → protobuf → document need nanopb-generated sources, which
-need `protoc` plus the nanopb generator. The CMake detects nanopb and skips
-those tests when it is absent, so a machine without `protoc` still gets a green
-run for everything above.
+`test_schema_roundtrip` needs nanopb, and is skipped with a message when it is
+absent — so a machine without `protoc` still gets a green run for everything
+else.
 
 ```sh
 cmake -S test/host -B build-host -DPINLED_NANOPB_DIR=/path/to/nanopb
 ```
 
-They are enabled in step 2, when the document and runtime models exist to
-round-trip between (`FR-CFG-14`).
+The `.pb` files under `fixtures/` are encoded by **Google's** protobuf
+implementation and decoded here by **nanopb**. That asymmetry is the value:
+nanopb agreeing with itself proves very little, whereas nanopb agreeing with the
+reference implementation is evidence that `proto/pinled.proto` is unambiguous —
+which matters because protobuf.js in the browser has to agree with both
+(`FR-CFG-13`).
+
+`nanopb_reencode_matches_googles_bytes` is the strongest assertion here: decode
+Google's bytes with nanopb, re-encode, require byte identity. The spec does not
+*mandate* that, but both implementations emit in field-number order and omit
+proto3 defaults, so a divergence means one of them has changed its mind about
+the schema.
+
+The fixtures are committed because they **pin the wire format**. Renumbering a
+field or changing a type — the things `proto/pinled.proto`'s header comment
+forbids — breaks these tests loudly instead of silently orphaning every document
+an older build ever wrote. Verified: renumbering `LampEntry.name` from 2 to 8
+fails three cases.
+
+Regenerating a fixture is therefore a decision, not a chore. If one changes and
+you did not intend to change the wire format, that is the bug.
+
+```sh
+protoc -I proto --python_out=/tmp/pygen proto/pinled.proto
+python3 test/host/fixtures/regenerate.py --bindings /tmp/pygen --check   # verify
+python3 test/host/fixtures/regenerate.py --bindings /tmp/pygen           # rewrite
+```
+
+## Toolchain
+
+Nothing below is needed for `test_crc32` or `test_doc_frame`.
+
+| Need | For |
+|---|---|
+| `protoc` | generating bindings (`apt install protobuf-compiler`) |
+| `pip install protobuf` | fixture regeneration, `pbtool.py` |
+| `pip install nanopb` | the generator |
+| a nanopb checkout | the C runtime — the pip package ships the generator only |
+
+On the build host (`intel-nuc.tworivers`) this is already set up: `protoc`
+3.21.12 system-wide, a venv at `~/.venvs/pinled-tools` with `protobuf` and
+`nanopb`, and the runtime cloned at `~/.local/src/nanopb` pinned to 0.4.9.
+CMake finds the generator in that venv automatically, so only the runtime path
+needs passing:
+
+```sh
+cmake -S test/host -B build-host -DPINLED_NANOPB_DIR=$HOME/.local/src/nanopb
+```
 
 ## Related: talking to a real board
 
 `tools/pbtool.py` is the `curl` replacement — JSON in and out, protobuf on the
-wire. It needs `protoc` and `pip install protobuf`, neither of which is needed
-for the tests here.
+wire.
 
 ```sh
 protoc -I proto --python_out=tools/_gen proto/pinled.proto
 tools/pbtool.py get http://pinled.local/api/v1/config
+tools/pbtool.py encode MachineProfile < profile.json > profile.pb
 ```

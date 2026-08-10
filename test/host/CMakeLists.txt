@@ -12,7 +12,8 @@
 # green run for everything that does not need it (FIRMWARE_PLAN.md §5.1 step 1).
 
 cmake_minimum_required(VERSION 3.16)
-project(pinled_host_tests CXX)
+# C as well as C++: nanopb's runtime and its generated sources are C.
+project(pinled_host_tests C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,10 +63,42 @@ pinled_add_test(test_doc_frame)
 # nanopb checkout to enable them; see test/host/README.md.
 
 set(PINLED_NANOPB_DIR "" CACHE PATH "Path to a nanopb checkout (enables schema round-trip tests)")
+find_program(PINLED_NANOPB_GENERATOR nanopb_generator
+        HINTS "$ENV{HOME}/.venvs/pinled-tools/bin" "${PINLED_NANOPB_DIR}/generator")
 
-if(PINLED_NANOPB_DIR AND EXISTS "${PINLED_NANOPB_DIR}/pb.h")
-    message(STATUS "pinled: nanopb found at ${PINLED_NANOPB_DIR} — schema tests enabled")
-    # Wired up in step 2, when the document/runtime models exist to round-trip.
+if(PINLED_NANOPB_DIR AND EXISTS "${PINLED_NANOPB_DIR}/pb.h" AND PINLED_NANOPB_GENERATOR)
+    message(STATUS "pinled: nanopb at ${PINLED_NANOPB_DIR} — schema round-trip tests enabled")
+
+    set(PROTO_DIR "${PINLED_ROOT}/proto")
+    set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
+    file(MAKE_DIRECTORY "${GEN_DIR}")
+
+    # Regenerates whenever the schema OR its nanopb bounds change. Both are
+    # inputs: pinled.options decides the static footprint, so a change there is
+    # every bit as much a schema change as editing the .proto.
+    add_custom_command(
+            OUTPUT "${GEN_DIR}/pinled.pb.c" "${GEN_DIR}/pinled.pb.h"
+            COMMAND "${PINLED_NANOPB_GENERATOR}"
+                    -I "${PROTO_DIR}" -D "${GEN_DIR}" "${PROTO_DIR}/pinled.proto"
+            DEPENDS "${PROTO_DIR}/pinled.proto" "${PROTO_DIR}/pinled.options"
+            COMMENT "nanopb: generating pinled.pb.c/h"
+            VERBATIM)
+
+    # nanopb's runtime and the generated sources are third-party output, so
+    # they are compiled without our warning set. -Werror on code we do not
+    # own would make an upstream bump a build break rather than a decision.
+    add_library(pinled_pb STATIC
+            "${GEN_DIR}/pinled.pb.c"
+            "${PINLED_NANOPB_DIR}/pb_encode.c"
+            "${PINLED_NANOPB_DIR}/pb_decode.c"
+            "${PINLED_NANOPB_DIR}/pb_common.c")
+    target_include_directories(pinled_pb SYSTEM PUBLIC "${PINLED_NANOPB_DIR}" "${GEN_DIR}")
+    target_compile_options(pinled_pb PRIVATE -w)
+
+    pinled_add_test(test_schema_roundtrip)
+    target_link_libraries(test_schema_roundtrip PRIVATE pinled_pb)
+    target_compile_definitions(test_schema_roundtrip PRIVATE
+            PINLED_FIXTURE_DIR="${CMAKE_CURRENT_LIST_DIR}/fixtures")
 else()
     message(STATUS "pinled: nanopb not configured — schema round-trip tests skipped "
                    "(set -DPINLED_NANOPB_DIR=/path/to/nanopb)")

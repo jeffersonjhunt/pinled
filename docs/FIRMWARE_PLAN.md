@@ -337,24 +337,38 @@ storage,  data, spiffs,  0x210000, 1536K     → ends 0x390000, inside 4 MB
 §7 replaces this at M4. Reflashing the table erases NVS, which currently holds
 nothing.
 
-**Step 1 — the `.proto` and the host test rig. *(Partly done, 2026-08-10.)***
-No target, no board, no IDF. `filament` and the whole schema layer are pure
-logic, so they build with plain CMake + CTest and run in CI.
+**Step 1 — the `.proto` and the host test rig. *(Done, 2026-08-10.)*** No
+target, no board, no IDF.
 
-*Done:* `proto/pinled.proto` and `proto/pinled.options` (the schema authority,
-with the compatibility rules that make FR-UI-4's version window work);
-`components/pinled_schema` carrying CRC-32 and the 16-byte stored-document
-frame (FR-CFG-15), deliberately free of any IDF dependency so it builds on
-both host and target; `test/host` with a 60-line harness, ASan/UBSan and
-`-Werror` on by default — **25 cases green**, 8 for the CRC and 17 for the
-frame, most of the latter being rejection paths. `tools/pbtool.py` is the
-`curl` replacement (JSON in and out, protobuf on the wire).
+- `proto/pinled.proto` and `proto/pinled.options` — the schema authority, with
+  the compatibility rules that make FR-UI-4's version window work.
+- `components/pinled_schema` — CRC-32 and the 16-byte stored-document frame
+  (FR-CFG-15), deliberately free of any IDF dependency so the same sources
+  build on host and target.
+- `test/host` — a 60-line harness rather than a vendored framework; ASan,
+  UBSan and `-Werror` (`-Wconversion`, `-Wshadow`) on by default.
+- `tools/pbtool.py` — the `curl` replacement that protobuf on the wire costs
+  us, verified to produce byte-identical output to the committed fixtures.
 
-*Remaining:* generating the nanopb and protobuf.js sides, and the round-trip
-tests through them. Both need `protoc` plus the nanopb generator, and the
-round-trip has nothing to round-trip *between* until step 2 defines the
-document and runtime models — so the CMake detects nanopb and skips those
-tests when it is absent, keeping the rest green on a machine without `protoc`.
+**38 cases green** on the build host: 8 CRC, 17 frame, 13 schema. The schema
+suite decodes golden bytes produced by *Google's* protobuf implementation using
+*nanopb*, which is what makes it a cross-implementation check rather than
+nanopb agreeing with itself — protobuf.js in the browser is the third
+implementation that must agree. The committed fixtures pin the wire format:
+renumbering `LampEntry.name` fails three cases, which is precisely the
+protection the `.proto`'s compatibility rules need in order to be more than a
+comment.
+
+Both the harness and the fixtures were verified to *fail* when deliberately
+broken. A suite that is green by construction is worth nothing.
+
+Toolchain now on `intel-nuc.tworivers`: `protoc` 3.21.12, a venv at
+`~/.venvs/pinled-tools` (`protobuf`, `nanopb`), and the nanopb C runtime at
+`~/.local/src/nanopb` pinned to 0.4.9. Where nanopb is absent — the dev
+container — CMake skips that one suite and the rest still run.
+
+*Deferred to step 2:* the document ⇄ runtime projection tests (FR-CFG-14),
+which need the two models to exist before there is anything to project.
 
 **Step 2 — the two models (FR-CFG-14).** The document type, the flat runtime
 record, and the projection between them. Host-testable.

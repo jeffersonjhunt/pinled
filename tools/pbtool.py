@@ -84,12 +84,22 @@ def _message(type_name: str):
 def _to_json(msg) -> str:
     from google.protobuf import json_format
 
-    # including_default_value_fields keeps the output stable and diffable:
-    # without it a field that happens to be zero simply vanishes, and two
-    # profiles that differ only in a default look identical.
-    return json_format.MessageToJson(
-        msg, including_default_value_fields=True, preserving_proto_field_name=True
-    )
+    # Printing defaults keeps the output stable and diffable: without it a
+    # field that happens to be zero simply vanishes, and two profiles that
+    # differ only in a default look identical.
+    #
+    # protobuf 5.26 renamed this argument (including_default_value_fields ->
+    # always_print_fields_with_no_presence) and 7.x removed the old spelling.
+    # Try the new name first and fall back, rather than pinning an old runtime
+    # — this script has to keep working on whatever the build host has.
+    for kw in ("always_print_fields_with_no_presence", "including_default_value_fields"):
+        try:
+            return json_format.MessageToJson(
+                msg, **{kw: True}, preserving_proto_field_name=True
+            )
+        except TypeError:
+            continue
+    return json_format.MessageToJson(msg, preserving_proto_field_name=True)
 
 
 def _from_json(msg, text: str):
