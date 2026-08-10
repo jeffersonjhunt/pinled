@@ -41,7 +41,8 @@ set(SCHEMA_DIR "${PINLED_ROOT}/components/pinled_schema")
 
 add_library(pinled_schema STATIC
         "${SCHEMA_DIR}/src/pinled_crc32.cpp"
-        "${SCHEMA_DIR}/src/pinled_doc_frame.cpp")
+        "${SCHEMA_DIR}/src/pinled_doc_frame.cpp"
+        "${SCHEMA_DIR}/src/pinled_drive_class.cpp")
 target_include_directories(pinled_schema PUBLIC "${SCHEMA_DIR}/include")
 
 enable_testing()
@@ -95,10 +96,17 @@ if(PINLED_NANOPB_DIR AND EXISTS "${PINLED_NANOPB_DIR}/pb.h" AND PINLED_NANOPB_GE
     target_include_directories(pinled_pb SYSTEM PUBLIC "${PINLED_NANOPB_DIR}" "${GEN_DIR}")
     target_compile_options(pinled_pb PRIVATE -w)
 
-    pinled_add_test(test_schema_roundtrip)
-    target_link_libraries(test_schema_roundtrip PRIVATE pinled_pb)
-    target_compile_definitions(test_schema_roundtrip PRIVATE
-            PINLED_FIXTURE_DIR="${CMAKE_CURRENT_LIST_DIR}/fixtures")
+    # The projection needs the generated document model, so it lives here
+    # rather than in the dependency-free part of pinled_schema.
+    add_library(pinled_config STATIC "${SCHEMA_DIR}/src/pinled_channel_config.cpp")
+    target_link_libraries(pinled_config PUBLIC pinled_schema pinled_pb)
+
+    foreach(t test_schema_roundtrip test_resolve)
+        pinled_add_test(${t})
+        target_link_libraries(${t} PRIVATE pinled_config)
+        target_compile_definitions(${t} PRIVATE
+                PINLED_FIXTURE_DIR="${CMAKE_CURRENT_LIST_DIR}/fixtures")
+    endforeach()
 else()
     message(STATUS "pinled: nanopb not configured — schema round-trip tests skipped "
                    "(set -DPINLED_NANOPB_DIR=/path/to/nanopb)")

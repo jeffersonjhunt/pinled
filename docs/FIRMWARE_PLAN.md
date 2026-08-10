@@ -370,8 +370,40 @@ container — CMake skips that one suite and the rest still run.
 *Deferred to step 2:* the document ⇄ runtime projection tests (FR-CFG-14),
 which need the two models to exist before there is anything to project.
 
-**Step 2 — the two models (FR-CFG-14).** The document type, the flat runtime
-record, and the projection between them. Host-testable.
+**Step 2 — the two models (FR-CFG-14). *(Done, 2026-08-10.)***
+
+The **document model is the generated nanopb struct** — there is deliberately
+no hand-written parallel class tree, because a second definition of the same
+schema is a second thing to keep in step, which is what one schema authority
+(FR-CFG-13) exists to prevent.
+
+The **runtime model** is `ChannelConfig`: 14 bytes, POD, no pointers, no
+strings, `static_assert`ed on its size since the render path reads it every
+frame. **No lamp names** — nothing in scan or render has ever needed one, and
+leaving them out means `GET /profile` can verify the stored CRC and stream the
+payload back *without decoding it*, so names never exist as a resident
+structure on the device.
+
+`resolve()` joins channel → lamp → profile entry through `install.wiring[]` and
+settles every inherit-marker, so nothing downstream learns the convention
+exists. Lenient where a half-finished install is normal (unwired channels,
+unstyled lamps, profile entries for lamps this install lacks), strict where a
+value is ambiguous or impossible (duplicate channels, out-of-range geometry,
+unrepresentable colours and time constants).
+
+Also moved `DriveClass` out of `profiler.h` into `pinled_drive_class.h`:
+`profiler.h` pulls in `filament.h` and therefore `esp_err.h`, which made the
+enum unreachable from anything host-buildable. `static_assert`s now pin it to
+the wire enum value-for-value.
+
+**68 cases green** (8 CRC, 17 frame, 13 schema, 30 resolve), and the firmware
+still builds for `esp32s3` with the moved enum. Three deliberate breakages
+confirmed the new tests fail when they should. Adding `FilamentDefaults` as
+field 7 left both golden fixtures byte-identical — checked, not assumed.
+
+*Not in the IDF build yet:* `pinled_channel_config.cpp` needs the generated
+nanopb header, and nanopb joins the firmware build at step 4 with the store.
+The rest of `pinled_schema` compiles for target today.
 
 **Step 3 — per-channel state through the pipeline (FR-CFG-8).** The one that
 ripples: `filament`, `lamp_map` and `profiler` all take *global* attack, decay

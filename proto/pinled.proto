@@ -135,6 +135,20 @@ message RenderConfig {
   uint32 brightness_cap = 3;   // 0..255
 }
 
+// What a per-lamp zero inherits from. LampEntry.attack_ms / decay_ms /
+// gain_permille use 0 to mean "inherit", and this is the thing inherited —
+// so the resolver can produce fully-settled per-channel values and nothing
+// downstream ever has to know the convention exists (FR-CFG-14).
+//
+// Belongs to the install rather than the profile because it is a property of
+// how this machine was measured, not of how the lamps should look, and a
+// shared profile must not be able to retune someone else's whole playfield.
+message FilamentDefaults {
+  uint32 attack_ms     = 1;
+  uint32 decay_ms      = 2;
+  uint32 gain_permille = 3;
+}
+
 // The join between the two documents: channel -> lamp number -> profile entry.
 // led_index lives here and not in the profile because the physical order of
 // the LED string is a property of how THIS install was built (FR-CFG-6).
@@ -153,6 +167,10 @@ message InstallConfig {
   RenderConfig render   = 5;
 
   repeated WiringEntry wiring = 6;
+
+  // Added 2026-08-10. Additive, so documents written before it decode
+  // unchanged and re-encode byte-identically — which the fixtures assert.
+  FilamentDefaults filament = 7;
 }
 
 // --------------------------------------------------------------- version --

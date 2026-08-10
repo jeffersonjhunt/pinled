@@ -1,0 +1,235 @@
+/**
+ * @file pinled_channel_config.cpp
+ * @brief Projection of the two configuration documents onto per-channel state.
+ * @copyright Copyright (c) 2024-2026 Jefferson J. Hunt (MIT)
+ */
+
+#include "pinled_channel_config.h"
+
+namespace ooe::pinled
+{
+    namespace
+    {
+        /// FR-SCAN-3: 8 modules x 16 channels. Also `pinled.options`' max_count.
+        constexpr size_t kMaxChannels = 128;
+
+        constexpr uint32_t kMaxByte = 255;
+        constexpr uint32_t kMaxU16 = 65535;
+        constexpr int32_t kMaxI16 = 32767;
+
+        // The record is read every frame by the render path, so its size is a
+        // design constraint rather than an accident. 14 bytes packs with no
+        // padding; a field added carelessly would silently cost 128 x 2.
+        static_assert(sizeof(ChannelConfig) == 14, "ChannelConfig grew — check the layout");
+
+        // The runtime enum and the wire enum are two lists that must agree.
+        // Asserting each pairing means a value added to one and not the other
+        // fails to compile, rather than silently classifying a lamp wrongly.
+        static_assert(static_cast<int>(DriveClass::UNKNOWN) ==
+                          pinled_v1_DriveClass_DRIVE_CLASS_UNSPECIFIED, "");
+        static_assert(static_cast<int>(DriveClass::OFF) ==
+                          pinled_v1_DriveClass_DRIVE_CLASS_OFF, "");
+        static_assert(static_cast<int>(DriveClass::STEADY) ==
+                          pinled_v1_DriveClass_DRIVE_CLASS_STEADY, "");
+        static_assert(static_cast<int>(DriveClass::MATRIX) ==
+                          pinled_v1_DriveClass_DRIVE_CLASS_MATRIX, "");
+        static_assert(static_cast<int>(DriveClass::AC_STEADY) ==
+                          pinled_v1_DriveClass_DRIVE_CLASS_AC_STEADY, "");
+        static_assert(static_cast<int>(DriveClass::AC_DIMMED) ==
+                          pinled_v1_DriveClass_DRIVE_CLASS_AC_DIMMED, "");
+
+        /// Locate a lamp's profile entry, or null. Linear by design — see the
+        /// complexity note in the header.
+        const pinled_v1_LampEntry *find_lamp(const pinled_v1_MachineProfile &p, uint16_t lamp)
+        {
+            for (pb_size_t i = 0; i < p.lamps_count; ++i)
+                if (p.lamps[i].lamp == lamp)
+                    return &p.lamps[i];
+            return nullptr;
+        }
+
+        /// A per-lamp zero inherits; anything else wins.
+        uint16_t inherit(uint32_t entry, uint16_t fallback)
+        {
+            return entry != 0 ? static_cast<uint16_t>(entry) : fallback;
+        }
+    } // namespace
+
+    DriveClass drive_class_from_proto(pinled_v1_DriveClass c)
+    {
+        switch (c)
+        {
+        case pinled_v1_DriveClass_DRIVE_CLASS_OFF:       return DriveClass::OFF;
+        case pinled_v1_DriveClass_DRIVE_CLASS_STEADY:    return DriveClass::STEADY;
+        case pinled_v1_DriveClass_DRIVE_CLASS_MATRIX:    return DriveClass::MATRIX;
+        case pinled_v1_DriveClass_DRIVE_CLASS_AC_STEADY: return DriveClass::AC_STEADY;
+        case pinled_v1_DriveClass_DRIVE_CLASS_AC_DIMMED: return DriveClass::AC_DIMMED;
+        case pinled_v1_DriveClass_DRIVE_CLASS_UNSPECIFIED:
+        default:
+            // A value from a newer schema than this build understands must mean
+            // "leave it to the profiler", not "guess". Unknown enum values are
+            // preserved on the wire but cannot be honoured here.
+            return DriveClass::UNKNOWN;
+        }
+    }
+
+    pinled_v1_DriveClass drive_class_to_proto(DriveClass c)
+    {
+        switch (c)
+        {
+        case DriveClass::OFF:       return pinled_v1_DriveClass_DRIVE_CLASS_OFF;
+        case DriveClass::STEADY:    return pinled_v1_DriveClass_DRIVE_CLASS_STEADY;
+        case DriveClass::MATRIX:    return pinled_v1_DriveClass_DRIVE_CLASS_MATRIX;
+        case DriveClass::AC_STEADY: return pinled_v1_DriveClass_DRIVE_CLASS_AC_STEADY;
+        case DriveClass::AC_DIMMED: return pinled_v1_DriveClass_DRIVE_CLASS_AC_DIMMED;
+        case DriveClass::UNKNOWN:   break;
+        }
+        return pinled_v1_DriveClass_DRIVE_CLASS_UNSPECIFIED;
+    }
+
+    const char *resolve_status_str(ResolveStatus s)
+    {
+        switch (s)
+        {
+        case ResolveStatus::Ok:                return "ok";
+        case ResolveStatus::NullOutput:        return "null output";
+        case ResolveStatus::GeometryTooLarge:  return "geometry too large";
+        case ResolveStatus::ChannelOutOfRange: return "channel out of range";
+        case ResolveStatus::DuplicateChannel:  return "duplicate channel";
+        case ResolveStatus::LedOutOfRange:     return "led index out of range";
+        case ResolveStatus::ValueOutOfRange:   return "value out of range";
+        }
+        return "unknown";
+    }
+
+    ResolveStatus resolve(const pinled_v1_MachineProfile &profile,
+                          const pinled_v1_InstallConfig &install,
+                          ChannelConfig *out, size_t out_cap,
+                          size_t *channels_out,
+                          const ResolveDefaults &fallback)
+    {
+        if (channels_out != nullptr)
+            *channels_out = 0;
+
+        const size_t total =
+            install.has_geometry
+                ? static_cast<size_t>(install.geometry.num_modules) *
+                      static_cast<size_t>(install.geometry.channels_per_module)
+                : 0;
+
+        if (total > kMaxChannels)
+            return ResolveStatus::GeometryTooLarge;
+        if (total > out_cap)
+            return ResolveStatus::GeometryTooLarge;
+        if (out == nullptr && total > 0)
+            return ResolveStatus::NullOutput;
+
+        // Defaults the per-lamp zeros inherit from. A zero in the install
+        // config inherits in turn, from the compiled-in fallback — so "unset"
+        // is expressible at every level without a sentinel.
+        if (install.has_filament &&
+            (install.filament.attack_ms > kMaxU16 ||
+             install.filament.decay_ms > kMaxU16 ||
+             install.filament.gain_permille > kMaxU16))
+            return ResolveStatus::ValueOutOfRange;
+
+        const uint16_t d_attack =
+            install.has_filament ? inherit(install.filament.attack_ms, fallback.attack_ms)
+                                 : fallback.attack_ms;
+        const uint16_t d_decay =
+            install.has_filament ? inherit(install.filament.decay_ms, fallback.decay_ms)
+                                 : fallback.decay_ms;
+        const uint16_t d_gain =
+            install.has_filament ? inherit(install.filament.gain_permille, fallback.gain_permille)
+                                 : fallback.gain_permille;
+
+        // Every slot is written, including unbound ones, so a caller reusing a
+        // buffer across a reconfigure never reads a stale entry. Unbound
+        // channels still carry resolved defaults: binding one later must not
+        // change how it behaves beyond gaining a lamp.
+        for (size_t i = 0; i < total; ++i)
+        {
+            out[i] = ChannelConfig{};
+            out[i].r = fallback.r;
+            out[i].g = fallback.g;
+            out[i].b = fallback.b;
+            out[i].attack_ms = d_attack;
+            out[i].decay_ms = d_decay;
+            out[i].gain_permille = d_gain;
+        }
+
+        // --- the join: channel -> lamp, from the install ---
+
+        const uint32_t led_count =
+            install.has_geometry ? install.geometry.led_count : 0;
+
+        // An explicit claimed-set rather than inferring from the record. A
+        // wiring entry may legitimately carry lamp 0 and led_index -1 (a
+        // placeholder for a channel someone has started on), and inferring
+        // "claimed" from those fields would silently accept a duplicate pair of
+        // them — the one duplicate the check would miss.
+        uint8_t claimed[kMaxChannels / 8] = {};
+
+        for (pb_size_t i = 0; i < install.wiring_count; ++i)
+        {
+            const pinled_v1_WiringEntry &w = install.wiring[i];
+
+            if (w.channel >= total)
+                return ResolveStatus::ChannelOutOfRange;
+            if (w.lamp > kMaxU16)
+                return ResolveStatus::ValueOutOfRange;
+            if (w.led_index < -1 || w.led_index > kMaxI16)
+                return ResolveStatus::LedOutOfRange;
+            if (w.led_index >= 0 && static_cast<uint32_t>(w.led_index) >= led_count)
+                return ResolveStatus::LedOutOfRange;
+
+            const size_t byte = w.channel / 8;
+            const uint8_t bit = static_cast<uint8_t>(1u << (w.channel % 8));
+            if (claimed[byte] & bit)
+                return ResolveStatus::DuplicateChannel;
+            claimed[byte] = static_cast<uint8_t>(claimed[byte] | bit);
+
+            ChannelConfig &c = out[w.channel];
+            c.lamp = static_cast<uint16_t>(w.lamp);
+            c.led_index = static_cast<int16_t>(w.led_index);
+        }
+
+        // --- styling: lamp -> profile entry ---
+
+        for (size_t i = 0; i < total; ++i)
+        {
+            ChannelConfig &c = out[i];
+            if (c.lamp == 0)
+                continue; // wired but unassigned, or not wired at all
+
+            const pinled_v1_LampEntry *e = find_lamp(profile, c.lamp);
+            if (e == nullptr)
+                continue; // bound but unstyled — legitimate, keeps the defaults
+
+            // Validate everything before writing anything, so a rejected
+            // document leaves out[] in one state rather than half-updated.
+            if (e->has_color &&
+                (e->color.r > kMaxByte || e->color.g > kMaxByte || e->color.b > kMaxByte))
+                return ResolveStatus::ValueOutOfRange;
+            if (e->attack_ms > kMaxU16 || e->decay_ms > kMaxU16 ||
+                e->gain_permille > kMaxU16)
+                return ResolveStatus::ValueOutOfRange;
+
+            if (e->has_color)
+            {
+                c.r = static_cast<uint8_t>(e->color.r);
+                c.g = static_cast<uint8_t>(e->color.g);
+                c.b = static_cast<uint8_t>(e->color.b);
+            }
+
+            c.class_lock = drive_class_from_proto(e->class_lock);
+            c.attack_ms = inherit(e->attack_ms, d_attack);
+            c.decay_ms = inherit(e->decay_ms, d_decay);
+            c.gain_permille = inherit(e->gain_permille, d_gain);
+        }
+
+        if (channels_out != nullptr)
+            *channels_out = total;
+        return ResolveStatus::Ok;
+    }
+} // namespace ooe::pinled

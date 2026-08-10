@@ -30,3 +30,6 @@ compile_commands.json
 
 # OS junk
 .DS_Store
+
+# sdlc
+.sdlc-state.json

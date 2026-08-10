@@ -24,20 +24,12 @@
 
 #include "esp_err.h"
 
-#include "filament.h" // FilamentParams
+#include "filament.h"          // FilamentParams
+#include "pinled_drive_class.h" // DriveClass — moved out so the config layer,
+                                // which must build off-target, can reach it
 
 namespace ooe::pinled
 {
-    enum class DriveClass : uint8_t
-    {
-        UNKNOWN = 0,
-        OFF,       ///< no activity
-        STEADY,    ///< ~100% duty, no edges (EM DC / always-on GI)
-        MATRIX,    ///< periodic low-duty bursts, ~200 Hz..2 kHz (strobed matrix)
-        AC_STEADY, ///< 100/120 Hz envelope, ~50% raw duty (on/off GI)
-        AC_DIMMED, ///< 100/120 Hz, variable conduction angle (triac-dimmed GI)
-    };
-
     struct ChannelProfile
     {
         DriveClass klass{DriveClass::UNKNOWN};
