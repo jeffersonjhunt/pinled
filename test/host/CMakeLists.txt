@@ -42,7 +42,8 @@ set(SCHEMA_DIR "${PINLED_ROOT}/components/pinled_schema")
 add_library(pinled_schema STATIC
         "${SCHEMA_DIR}/src/pinled_crc32.cpp"
         "${SCHEMA_DIR}/src/pinled_doc_frame.cpp"
-        "${SCHEMA_DIR}/src/pinled_drive_class.cpp")
+        "${SCHEMA_DIR}/src/pinled_drive_class.cpp"
+        "${SCHEMA_DIR}/src/pinled_apply.cpp")
 target_include_directories(pinled_schema PUBLIC "${SCHEMA_DIR}/include")
 
 enable_testing()
@@ -56,6 +57,7 @@ endfunction()
 
 pinled_add_test(test_crc32)
 pinled_add_test(test_doc_frame)
+pinled_add_test(test_apply)
 
 # --- nanopb-dependent tests --------------------------------------------------
 #
@@ -98,7 +100,7 @@ if(PINLED_NANOPB_DIR AND EXISTS "${PINLED_NANOPB_DIR}/pb.h" AND PINLED_NANOPB_GE
 
     # The projection needs the generated document model, so it lives here
     # rather than in the dependency-free part of pinled_schema.
-    add_library(pinled_config STATIC "${SCHEMA_DIR}/src/pinled_channel_config.cpp")
+    add_library(pinled_config STATIC "${SCHEMA_DIR}/src/pinled_resolve.cpp")
     target_link_libraries(pinled_config PUBLIC pinled_schema pinled_pb)
 
     foreach(t test_schema_roundtrip test_resolve)

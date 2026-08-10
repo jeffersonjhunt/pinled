@@ -29,6 +29,9 @@
 #include "lamp_map.h"
 #include "machine_config.h"
 
+#include "pinled_apply.h"
+#include "pinled_channel_config.h"
+
 #include "version.h"
 
 namespace ooe::pinled
@@ -91,12 +94,22 @@ namespace ooe::pinled
         uint8_t seen_low_[LampScan::MAX_CHANNELS]{};     ///< channel ever read 0
 #endif
 
+        /// Push `channels_` into the filament bank and the LED map. The single
+        /// place a configuration becomes running behaviour (FR-CFG-8).
+        void apply_channel_config();
+
         MachineConfig cfg_{};
         MachineConfigStore store_{};
         LampScan scan_{};
         Filament filament_{};
         Profiler profiler_{};
         LampMap map_{};
+
+        /// Resolved per-channel configuration. Built from Kconfig defaults
+        /// today; step 4 loads it from storage instead. 2 KB at 128 channels,
+        /// which is why it is a member and not a stack array — the boot path
+        /// already overflows the main task stack with less than this.
+        ChannelConfig channels_[LampScan::MAX_CHANNELS]{};
 
         // Shared brightness buffer: scan_task writes, render_task reads.
         uint8_t levels_[LampScan::MAX_CHANNELS]{};

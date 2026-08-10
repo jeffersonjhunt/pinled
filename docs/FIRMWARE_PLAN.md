@@ -405,11 +405,49 @@ field 7 left both golden fixtures byte-identical — checked, not assumed.
 nanopb header, and nanopb joins the firmware build at step 4 with the store.
 The rest of `pinled_schema` compiles for target today.
 
-**Step 3 — per-channel state through the pipeline (FR-CFG-8).** The one that
-ripples: `filament`, `lamp_map` and `profiler` all take *global* attack, decay
-and gamma today and must take them per channel. Largest diff in the milestone
-and the one most likely to disturb behaviour already proven on the bench — so
-it lands while the rig is still set up to notice.
+**Step 3 — per-channel state through the pipeline (FR-CFG-8). *(Done,
+2026-08-10.)***
+
+*This was scoped wrongly in the original plan.* `Filament::set_params(ch, …)`
+and `LampMap::set_entry(ch, …)` already existed, and `profile_boot()` already
+called the former per channel — so it was never an API change across three
+components. The gaps were narrower and more specific:
+
+- **`set_entry` was never called by anything.** `LampMap::init()` calls
+  `set_default_mapping()` and that was the end of it, so per-lamp colour had
+  nowhere to enter the system.
+- **`class_lock` was not honoured.** `profile_boot()` overwrote every channel
+  with the classifier's output, locked or not.
+- **No path existed** from a resolved `ChannelConfig[]` into the components.
+
+What landed: `pinled_apply` holding the precedence rule as ordinary testable
+logic, `Main::apply_channel_config()` as the single place a configuration
+becomes running behaviour, and `profile_boot()` now treating the classifier's
+answer as a suggestion.
+
+The precedence rule has two halves, and the second is the one that matters: a
+locked class means the profiler leaves the channel alone, **and an explicitly
+chosen value wins regardless of the lock**. Without that second half a lamp
+given a deliberately soft fade would have it silently replaced at the next
+boot-time profiling pass — per-lamp presentation would appear to work and then
+stop, which is the bug that gets reported as "it forgets".
+
+That also corrected a step 2 mistake: settling the inherit-markers destroyed
+the difference between "30 ms because someone asked" and "30 ms because that is
+the default", which is exactly what the profiler needs in order to know what it
+may overwrite. `ChannelConfig` now carries `ChannelFlags` recording it, at the
+cost of two bytes (14 → 16).
+
+Also moved `FilamentParams` out of `filament.h` into `pinled_schema`, mirroring
+`DriveClass` in step 2 — the rule deserves ordinary tests, so the type it
+operates on has to be reachable off-target.
+
+**86 cases green** (8 crc, 17 frame, 16 apply, 13 schema, 32 resolve). Firmware
+builds and the image grew 960 bytes, which is the new path actually linked
+rather than dead code. Boot is behaviour-preserving by construction:
+`default_channels()` reproduces exactly what `set_default_mapping()` and
+`set_params_all()` produced, and a test asserts it — **not verified on hardware,
+since the bench rig is mid-rewire for the Bally chain.**
 
 **Step 4 — LittleFS store (FR-CFG-7/15).** Replace the `machine_config` stub
 (`save()` currently returns `ESP_ERR_NOT_SUPPORTED`). Two documents, CRC per

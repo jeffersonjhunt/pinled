@@ -69,10 +69,16 @@ namespace ooe::pinled
         // 4. Filament bank, seeded with the MEASURED rate, not the configured one.
         ESP_ERROR_CHECK(filament_.init(num_channels_, fs_actual_));
         filament_.set_gamma(cfg_.gamma);
-        FilamentParams fp{};
-        fp.attack_ms = cfg_.attack_ms;
-        fp.decay_ms = cfg_.decay_ms;
-        ESP_ERROR_CHECK(filament_.set_params_all(fp));
+
+        // Per-channel configuration. Until the store lands (step 4) this is
+        // built from the Kconfig defaults, and is deliberately identical to
+        // what set_params_all() and set_default_mapping() used to produce — so
+        // routing boot through the config path changes nothing observable, and
+        // a bench rig that behaved a certain way yesterday still does.
+        ResolveDefaults d{};
+        d.attack_ms = static_cast<uint16_t>(cfg_.attack_ms);
+        d.decay_ms = static_cast<uint16_t>(cfg_.decay_ms);
+        default_channels(channels_, num_channels_, cfg_.led_count, d);
 
         // 5. Profiler (used at boot, then idle).
         ESP_ERROR_CHECK(profiler_.init(num_channels_, fs_actual_));
@@ -85,7 +91,11 @@ namespace ooe::pinled
         ESP_ERROR_CHECK(map_.init(mc));
         clamp_refresh(); // FR-LED-8
 
-        // 7. Boot-time auto-profiling pass.
+        // 7. Configuration becomes running behaviour. Must follow both
+        //    filament_.init() and map_.init(), since it writes into each.
+        apply_channel_config();
+
+        // 8. Boot-time auto-profiling pass.
         profile_boot();
 
         ESP_ERROR_CHECK(start_tasks());
@@ -94,6 +104,23 @@ namespace ooe::pinled
                  (unsigned)num_channels_, (unsigned)cfg_.led_count,
                  fs_actual_, (unsigned)cfg_.refresh_hz);
         return ESP_OK;
+    }
+
+    void Main::apply_channel_config()
+    {
+        for (size_t ch = 0; ch < num_channels_; ++ch)
+        {
+            const ChannelConfig &c = channels_[ch];
+
+            filament_.set_params(ch, params_from_config(c));
+
+            LampMapEntry e{};
+            e.led_index = c.led_index;
+            e.r = c.r;
+            e.g = c.g;
+            e.b = c.b;
+            map_.set_entry(ch, e);
+        }
     }
 
     void Main::profile_boot()
@@ -120,9 +147,25 @@ namespace ooe::pinled
         }
         if (profiler_.classify(profiles.get(), params.get(), num_channels_) == ESP_OK)
         {
+            // The classifier's answer is a suggestion, not a verdict. A channel
+            // whose class a person locked keeps its own tuning, and explicit
+            // per-lamp values survive regardless of the lock (FR-CFG-8,
+            // FR-PROF-4) — otherwise a hand-set fade would be silently replaced
+            // on every boot and per-lamp presentation would not work.
+            size_t locked = 0;
             for (size_t ch = 0; ch < num_channels_; ++ch)
-                filament_.set_params(ch, params[ch]);
-            ESP_LOGI(TAG, "auto-profiling applied");
+            {
+                const ChannelConfig &c = channels_[ch];
+                if (!profiler_may_classify(c))
+                {
+                    ++locked;
+                    profiles[ch].locked = true;
+                    profiles[ch].klass = c.class_lock;
+                }
+                filament_.set_params(ch, effective_params(c, params[ch]));
+            }
+            ESP_LOGI(TAG, "auto-profiling applied (%u of %u channels locked)",
+                     (unsigned)locked, (unsigned)num_channels_);
         }
     }
 

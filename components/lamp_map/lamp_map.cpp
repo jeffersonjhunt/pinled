@@ -9,6 +9,8 @@
 
 #include "lamp_map.h"
 
+#include "pinled_channel_config.h" // ResolveDefaults — the one definition of the default tint
+
 #include <new>
 
 #include "esp_log.h"
@@ -81,10 +83,16 @@ namespace ooe::pinled
         for (size_t ch = 0; ch < cfg_.channel_count; ++ch)
         {
             LampMapEntry &e = map_[ch];
+            // One definition of the default tint, shared with the config layer
+            // (ResolveDefaults). This used to be three literals here, and they
+            // had drifted from the config layer's copy — which would have
+            // restyled every unconfigured lamp the moment boot started routing
+            // through apply_channel_config().
+            static constexpr ResolveDefaults kDefaults{};
             e.led_index = (ch < cfg_.led_count) ? static_cast<int16_t>(ch) : -1;
-            e.r = 255; // warm-white-ish base; real tints come from config
-            e.g = 200;
-            e.b = 140;
+            e.r = kDefaults.r;
+            e.g = kDefaults.g;
+            e.b = kDefaults.b;
         }
     }
 

@@ -1,10 +1,10 @@
 /**
- * @file pinled_channel_config.cpp
+ * @file pinled_resolve.cpp
  * @brief Projection of the two configuration documents onto per-channel state.
  * @copyright Copyright (c) 2024-2026 Jefferson J. Hunt (MIT)
  */
 
-#include "pinled_channel_config.h"
+#include "pinled_resolve.h"
 
 namespace ooe::pinled
 {
@@ -20,7 +20,7 @@ namespace ooe::pinled
         // The record is read every frame by the render path, so its size is a
         // design constraint rather than an accident. 14 bytes packs with no
         // padding; a field added carelessly would silently cost 128 x 2.
-        static_assert(sizeof(ChannelConfig) == 14, "ChannelConfig grew — check the layout");
+        static_assert(sizeof(ChannelConfig) == 16, "ChannelConfig grew — check the layout");
 
         // The runtime enum and the wire enum are two lists that must agree.
         // Asserting each pairing means a value added to one and not the other
@@ -220,12 +220,25 @@ namespace ooe::pinled
                 c.r = static_cast<uint8_t>(e->color.r);
                 c.g = static_cast<uint8_t>(e->color.g);
                 c.b = static_cast<uint8_t>(e->color.b);
+                c.flags = static_cast<uint8_t>(c.flags | CH_COLOR_SET);
             }
 
             c.class_lock = drive_class_from_proto(e->class_lock);
             c.attack_ms = inherit(e->attack_ms, d_attack);
             c.decay_ms = inherit(e->decay_ms, d_decay);
             c.gain_permille = inherit(e->gain_permille, d_gain);
+
+            // Record what a person actually chose. Settling the inherit-markers
+            // above is what lets everything downstream stay ignorant of the
+            // convention — but it also erases the difference between "30 ms
+            // because someone asked for it" and "30 ms because that is the
+            // default", and the profiler must not overwrite the former.
+            if (e->attack_ms != 0)
+                c.flags = static_cast<uint8_t>(c.flags | CH_ATTACK_SET);
+            if (e->decay_ms != 0)
+                c.flags = static_cast<uint8_t>(c.flags | CH_DECAY_SET);
+            if (e->gain_permille != 0)
+                c.flags = static_cast<uint8_t>(c.flags | CH_GAIN_SET);
         }
 
         if (channels_out != nullptr)

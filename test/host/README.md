@@ -24,6 +24,7 @@ Run a single suite directly to see per-case output:
 | `test_crc32` | CRC-32/ISO-HDLC conformance, incremental use, single-bit-flip detection |
 | `test_doc_frame` | stored-document framing: round trip, and every rejection path |
 | `test_schema_roundtrip` | protobuf schema through nanopb, against golden bytes from Google's implementation *(needs nanopb — see below)* |
+| `test_apply` | precedence between stored configuration and the profiler (FR-CFG-8) |
 | `test_resolve` | the projection: profile + install → per-channel records, and every case it refuses *(needs nanopb)* |
 
 `test_crc32` asserts the canonical check value `0xCBF43926` for `"123456789"`.

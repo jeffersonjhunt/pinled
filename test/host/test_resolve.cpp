@@ -12,7 +12,7 @@
 
 #include "harness.h"
 
-#include "pinled_channel_config.h"
+#include "pinled_resolve.h"
 #include "pinled_doc_frame.h"
 
 #include <pb_decode.h>
@@ -310,6 +310,48 @@ TEST(no_resolved_value_is_ever_left_as_inherit)
         if (out[i].attack_ms == 0 || out[i].decay_ms == 0 || out[i].gain_permille == 0)
             ++zeros;
     CHECK_EQ(zeros, 0);
+}
+
+TEST(flags_record_what_was_chosen_rather_than_inherited)
+{
+    // Settling the inherit-markers erases the difference between "30 ms because
+    // someone asked" and "30 ms because that is the default". The profiler needs
+    // that difference, so resolve() records it (see pinled_apply.h).
+    auto install = bare_install();
+    wire(install, 0, 5, 0);
+    wire(install, 1, 6, 1);
+
+    pinled_v1_MachineProfile profile = pinled_v1_MachineProfile_init_zero;
+    style(profile, 5, 1, 2, 3, pinled_v1_DriveClass_DRIVE_CLASS_UNSPECIFIED, 0, 120, 0);
+    style(profile, 6, 0, 0, 0, pinled_v1_DriveClass_DRIVE_CLASS_UNSPECIFIED, 0, 0, 0);
+
+    static ChannelConfig out[kCap];
+    size_t n = 0;
+    CHECK_EQ(resolve(profile, install, out, kCap, &n), ResolveStatus::Ok);
+
+    // lamp 5: decay chosen, attack and gain inherited
+    CHECK(out[0].has(CH_DECAY_SET));
+    CHECK(!out[0].has(CH_ATTACK_SET));
+    CHECK(!out[0].has(CH_GAIN_SET));
+    CHECK(out[0].has(CH_COLOR_SET));
+    CHECK_EQ(out[0].decay_ms, static_cast<uint16_t>(120));
+
+    // lamp 6: nothing tuned, but a colour was set (even an explicit black one)
+    CHECK(!out[1].has(CH_DECAY_SET));
+    CHECK(out[1].has(CH_COLOR_SET));
+}
+
+TEST(an_unstyled_channel_has_no_flags_so_the_profiler_owns_it)
+{
+    auto install = bare_install();
+    wire(install, 0, 5, 0);
+    pinled_v1_MachineProfile profile = pinled_v1_MachineProfile_init_zero;
+
+    static ChannelConfig out[kCap];
+    size_t n = 0;
+    CHECK_EQ(resolve(profile, install, out, kCap, &n), ResolveStatus::Ok);
+    CHECK_EQ(out[0].flags, static_cast<uint8_t>(CH_NONE));
+    CHECK(out[0].auto_class());
 }
 
 // ------------------------------------------------------ the golden fixtures --
