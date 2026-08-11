@@ -456,9 +456,118 @@ message, and 37334 → 37345 Hz free-run, which is 0.03% measurement jitter with
 frame time, Fs and duty unchanged. Two minutes uptime, zero errors, warnings,
 panics or overruns.
 
-**Step 4 — LittleFS store (FR-CFG-7/15).** Replace the `machine_config` stub
-(`save()` currently returns `ESP_ERR_NOT_SUPPORTED`). Two documents, CRC per
-document, boot to Kconfig defaults when absent (FR-CFG-4).
+**Step 4 — LittleFS store (FR-CFG-7/15). *(Done, 2026-08-10.)*** Step 0's
+partition table came with it.
+
+The store is written against `<cstdio>`, not an ESP-IDF file API. LittleFS is
+reached through VFS, so `fopen("/cfg/install.pb")` is the real interface on the
+target — which means the whole of `pinled_doc_file` is host-testable against a
+temporary directory, with genuinely truncated and genuinely corrupt files
+rather than simulated ones. Only the *mount* is target-specific, and it is
+about fifteen lines.
+
+Durability is write-to-`.tmp`, fsync, `rename`. FR-CFG-15 exists because
+filesystem consistency and write durability are different promises and LittleFS
+only makes the first; the rename is what turns "the write failed" into "the
+previous configuration is still there".
+
+**Boot never fails because of storage.** A missing document is the normal state
+of a device nobody has configured, and a corrupt one is a fault the user needs
+to hear about but not be stranded by; either way boot continues on Kconfig
+defaults (FR-CFG-4). Rejected files are logged and **kept** — deleting them
+destroys the only evidence, and they are never read again.
+
+`save_document()` takes encoded bytes rather than a `MachineConfig`, because
+the device is not the author of its own configuration. Re-encoding from the
+runtime record would silently drop every field this firmware does not
+understand, which is exactly what the schema's unknown-field preservation
+exists to prevent (FR-UI-4).
+
+nanopb joins the IDF build by pointing at the same checkout `test/host` uses,
+with the generator run at build time and nothing generated committed. Vendoring
+the runtime while still generating would have bought nothing — the generator
+stays machine-local either way — so **the firmware now builds only where the
+nanopb toolchain is installed**, which is the same requirement the tests have
+had since step 1. The day a second machine needs to build it, the fix is to
+vendor the runtime *and* commit the generated sources together, with a
+regeneration check like `test/host/fixtures/regenerate.py` has.
+
+`pinled_resolve` moved to its own component, `pinled_config`. `pinled_schema`
+is reachable from `filament.h` and `profiler.h` and so must link without
+nanopb; that constraint used to live in a comment, and a comment is not a build
+failure. `MachineConfig` moved into `pinled_schema` as an IDF-free POD for the
+same reason `DriveClass` moved in step 2 and `FilamentParams` in step 3.
+
+`install_to_machine()` has one real question in it, asked field by field: what
+does a zero mean? proto3 gives scalars no presence, so **submessage presence is
+the granularity of "specified"**, and within a present submessage a zero
+inherits only where zero cannot be a real value. SPI mode 0 is a real mode;
+GPIO 0 is a real pin. An all-zero `Pins` message is the one special case and it
+is not arbitrary — four signals cannot share a pin, but a writer that emitted
+`Pins` without filling it in is entirely plausible, and honouring it literally
+would drive a strapping pin at boot.
+
+**128 cases green** (8 crc, 17 frame, 17 apply, 20 file, 13 schema, 32 resolve,
+21 install). Four deliberate breakages confirmed the new suites fail when they
+should: no atomic rename (1), absence folded into an error (1), an all-zero
+`Pins` honoured literally (4), `spi_mode` 0 made unreachable (1).
+
+**The adversarial pass found the two worst bugs in the step**, neither of them
+in the new code's own logic:
+
+- **A rejected profile still styled lamps.** nanopb leaves whatever it managed
+  to decode behind on failure, and `resolve()` was handed the profile whenever
+  the *install* was present — rejected or not. The reachable case is exactly
+  the one FR-CFG-5 is about: a shared profile from a bigger machine, where
+  nanopb fills 128 lamps, hits `max_count` and fails, leaving 128 real entries
+  to be applied to this playfield. Confirmed on hardware A/B with a 129-lamp
+  document: **2 of 32 channels locked** without the fix, **0** with it, same
+  fixture, same boot.
+- **Moving the channel count into the store defeated main's own guard.** It
+  could only ever see a count that had already been clamped to fit, while the
+  oversized geometry went on to `scan_.init()` and `filament_.init()`
+  unchecked. Refused now, not truncated.
+
+Also fixed: `mount()` used `format_if_mount_failed` under a comment claiming
+that could not destroy a configuration — true only of a filesystem that
+mounts. It still formats, because an unmountable config partition must not
+leave the device unable to boot the UI that would replace it, but the log now
+says the configuration is gone.
+
+**Verified on hardware**, in several flashes, because the fallback path and the
+feature are different claims:
+
+| What was flashed | What it proved |
+|---|---|
+| no documents | mounts, formats, falls back to Kconfig defaults; boot otherwise unchanged |
+| `fs_seed` documents | `(stored)`, 12 LEDs from the document, exactly 1 locked channel |
+| a byte flipped in `install.pb` | `rejected: bad document (bad crc) — KEPT`, defaults restored, profile warning fired |
+| a 129-lamp profile, with and without the fix | 2 locked vs 0 locked — the partial-decode bug, and its repair |
+| app only, seed off | documents survive an app flash — `/cfg` is not touched |
+
+One thing worth writing down about method: an early run of that A/B showed
+"0 locked" for *both* arms, which looked like the bug not existing. It was a
+backgrounded flash racing the logger, so the second arm was still running the
+first arm's binary. The ELF SHA in the boot log is what settled it, and is the
+cheapest way to know which firmware actually answered.
+
+The store selftest (`CONFIG_PINLED_STORE_SELFTEST`) covers the one thing host
+tests cannot: that LittleFS's `rename` on real flash behaves like POSIX's. It
+passed.
+
+Two bugs came out of hardware rather than tests. `partitions.csv` was the first
+flash to change the table, and the config summary said `(stored)` above a
+configuration that was entirely defaults — `defaulted()` means *neither*
+document is present, which is right for the API and wrong for a line describing
+numbers that all come from the install. Found only by corrupting a document on
+purpose.
+
+**Heap, measured rather than assumed:** the decode buffers peak at **21,388
+bytes transient**, all freed before boot completes, leaving **353,404 bytes
+free** after init. Two independent measurements agree (368,712 − 21,388 =
+347,324, the since-boot minimum). A header comment claiming "roughly 45 KB" was
+wrong and is gone. **Image: 0x4e4f0 (317 KB) in a 2 MB partition**, so M4's
+Wi-Fi, lwIP and httpd have room in both.
 
 **Step 5 — `esp_http_server` and `/api/v1`.** Config and profile read/write,
 `info` reporting the API version (FR-UI-4). Exercised through the step-1

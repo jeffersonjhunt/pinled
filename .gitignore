@@ -8,6 +8,9 @@ dependencies.lock
 # host tests
 build-host/
 
+# Working directory of the file-touching host tests, wherever they are run from
+scratch/
+
 # generated protobuf bindings — regenerate with protoc, never commit
 # (proto/pinled.proto is the schema authority, FR-CFG-13)
 tools/_gen/

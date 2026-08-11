@@ -25,7 +25,9 @@ Run a single suite directly to see per-case output:
 | `test_doc_frame` | stored-document framing: round trip, and every rejection path |
 | `test_schema_roundtrip` | protobuf schema through nanopb, against golden bytes from Google's implementation *(needs nanopb — see below)* |
 | `test_apply` | precedence between stored configuration and the profiler (FR-CFG-8) |
+| `test_doc_file` | documents as real files: round trip, corruption, bounds, atomic replace |
 | `test_resolve` | the projection: profile + install → per-channel records, and every case it refuses *(needs nanopb)* |
+| `test_install` | the install document → the device-wide record; what a zero means, field by field *(needs nanopb)* |
 
 `test_crc32` asserts the canonical check value `0xCBF43926` for `"123456789"`.
 That assertion is doing real work: a reflected/non-reflected mix-up yields a
@@ -37,6 +39,17 @@ mistake only becomes visible when something outside this codebase has to agree.
 LittleFS guarantees filesystem consistency and *not* that the last write landed
 (`FR-CFG-15`), so the interesting behaviour is what it refuses: truncation, an
 over-long declared length, a flipped payload bit, a corrupt CRC field.
+
+`test_doc_file` writes to an actual filesystem, in a `scratch/` directory
+relative to the working directory. That is not incidental: `kMaxDocPath` is 96
+bytes, and the first version of the suite used an absolute path from CMake and
+failed *every* write because a nested build directory exceeds that on its own.
+The cap is correct — device paths are `/cfg/install.pb` — so the tests bend, not
+the code. Anything new that touches files should do the same.
+
+The one thing it cannot cover is that LittleFS's `rename` on real flash behaves
+like POSIX's. That is a property of the medium, and it is checked on the device
+by `CONFIG_PINLED_STORE_SELFTEST`.
 
 ## Sanitizers are on by default
 

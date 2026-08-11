@@ -32,13 +32,10 @@ namespace ooe::pinled
         }
     } // namespace
 
-    DocStatus doc_frame_write(uint8_t *out, size_t out_cap,
-                              DocKind kind,
-                              const uint8_t *payload, size_t len,
-                              size_t *written)
+    DocStatus doc_header_write(uint8_t *out, DocKind kind,
+                               const uint8_t *payload, size_t len)
     {
-        const size_t total = doc_frame_size(len);
-        if (out == nullptr || out_cap < total)
+        if (out == nullptr)
             return DocStatus::ShortBuffer;
         if (payload == nullptr && len != 0)
             return DocStatus::ShortBuffer;
@@ -53,6 +50,21 @@ namespace ooe::pinled
         out[7] = 0;
         put_u32le(out + 8, static_cast<uint32_t>(len));
         put_u32le(out + 12, crc32(payload, len));
+        return DocStatus::Ok;
+    }
+
+    DocStatus doc_frame_write(uint8_t *out, size_t out_cap,
+                              DocKind kind,
+                              const uint8_t *payload, size_t len,
+                              size_t *written)
+    {
+        const size_t total = doc_frame_size(len);
+        if (out == nullptr || out_cap < total)
+            return DocStatus::ShortBuffer;
+
+        const DocStatus s = doc_header_write(out, kind, payload, len);
+        if (s != DocStatus::Ok)
+            return s;
 
         for (size_t i = 0; i < len; ++i)
             out[kDocHeaderSize + i] = payload[i];

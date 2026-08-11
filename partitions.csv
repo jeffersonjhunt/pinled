@@ -1,4 +1,26 @@
-# Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 1M,
+# pinled partition table — 4 MB, no OTA slots yet.
+#
+# M3 needs a filesystem for the two configuration documents (FR-CFG-7) and
+# nothing else, so there is no otadata and no second app slot; those arrive
+# with M4 on the 8 MB board (docs/WEBUI.md §7).
+#
+# The `factory` partition is 2M rather than the 1M it was, which is deliberately
+# more than the app needs today: the point of the extra room is that this table
+# is flashed ONCE. Thereafter the known-good diagnostic build on `main` and any
+# M3 branch build are both ordinary app flashes into the same slot, and the
+# bench rig never has to have its partition table rewritten to switch between
+# them.
+#
+# `spiffs` is the subtype LittleFS uses as well — there is no separate one.
+#
+#   0x10000  + 2M      = 0x210000   end of factory
+#   0x210000 + 1536K   = 0x390000   end of storage, inside the 4 MB part
+#
+# Reflashing this table erases NVS. Today NVS holds nothing; once it holds Wi-Fi
+# credentials (FR-CFG-12) that stops being free.
+#
+# Name,   Type, SubType,  Offset,   Size,   Flags
+nvs,      data, nvs,      0x9000,   0x6000,
+phy_init, data, phy,      0xf000,   0x1000,
+factory,  app,  factory,  0x10000,  2M,
+storage,  data, spiffs,   0x210000, 1536K,

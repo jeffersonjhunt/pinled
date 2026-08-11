@@ -17,6 +17,19 @@ namespace ooe::pinled
         constexpr uint32_t kMaxU16 = 65535;
         constexpr int32_t kMaxI16 = 32767;
 
+        // Bounds for install_to_machine. Not tuning knobs — each one is the
+        // point past which a value cannot be a real setting, so the only thing
+        // it can be is a corrupt document. Fs is clamped to what the hardware
+        // measurably sustains at boot anyway (FR-SCAN-9), so this only has to
+        // catch nonsense.
+        constexpr int32_t kMaxPinNumber = 63;   ///< widest GPIO numbering any ESP32 variant uses
+        constexpr uint32_t kMaxSampleRateHz = 100000;
+        constexpr uint32_t kMinSpiHz = 100000;
+        constexpr uint32_t kMaxSpiHz = 80000000;
+        constexpr uint32_t kMaxRefreshHz = 1000;
+        constexpr uint32_t kMinGammaX100 = 10;  ///< 0.10
+        constexpr uint32_t kMaxGammaX100 = 1000; ///< 10.0
+
         // The record is read every frame by the render path, so its size is a
         // design constraint rather than an accident. 14 bytes packs with no
         // padding; a field added carelessly would silently cost 128 x 2.
@@ -85,6 +98,131 @@ namespace ooe::pinled
         case DriveClass::UNKNOWN:   break;
         }
         return pinled_v1_DriveClass_DRIVE_CLASS_UNSPECIFIED;
+    }
+
+    const char *install_status_str(InstallStatus s)
+    {
+        switch (s)
+        {
+        case InstallStatus::Ok:               return "ok";
+        case InstallStatus::GeometryTooLarge: return "geometry too large";
+        case InstallStatus::PinOutOfRange:    return "pin out of range";
+        case InstallStatus::ValueOutOfRange:  return "value out of range";
+        }
+        return "unknown";
+    }
+
+    InstallStatus install_to_machine(const pinled_v1_InstallConfig &install,
+                                     MachineConfig &out,
+                                     const MachineConfig &fallback)
+    {
+        // Everything is validated against locals first; `out` is written once
+        // at the end. A document rejected halfway must not leave the caller
+        // running a mixture of its defaults and a corrupt file.
+        MachineConfig m = fallback;
+
+        // --- geometry ---
+        if (install.has_geometry)
+        {
+            const pinled_v1_Geometry &g = install.geometry;
+            if (g.num_modules != 0)
+                m.num_modules = g.num_modules;
+            if (g.channels_per_module != 0)
+                m.channels_per_module = g.channels_per_module;
+            if (g.led_count != 0)
+            {
+                if (g.led_count > kMaxLedCount)
+                    return InstallStatus::GeometryTooLarge;
+                m.led_count = g.led_count;
+            }
+            if (m.num_modules * m.channels_per_module > kMaxChannels)
+                return InstallStatus::GeometryTooLarge;
+        }
+
+        // --- pins ---
+        if (install.has_pins)
+        {
+            const pinled_v1_Pins &p = install.pins;
+            const bool all_zero = (p.clk == 0 && p.pl == 0 && p.data == 0 && p.led == 0);
+            if (!all_zero) // see the header: four signals cannot share GPIO 0
+            {
+                const int32_t pins[] = {p.clk, p.pl, p.data, p.led};
+                for (int32_t v : pins)
+                    if (v < kPinNotFitted || v > kMaxPinNumber)
+                        return InstallStatus::PinOutOfRange;
+                m.clk_pin = p.clk;
+                m.pl_pin = p.pl;
+                m.data_pin = p.data;
+                m.led_pin = p.led;
+            }
+        }
+
+        // --- scan ---
+        if (install.has_scan)
+        {
+            const pinled_v1_ScanConfig &s = install.scan;
+            if (s.sample_rate_hz != 0)
+            {
+                if (s.sample_rate_hz > kMaxSampleRateHz)
+                    return InstallStatus::ValueOutOfRange;
+                m.sample_rate_hz = static_cast<float>(s.sample_rate_hz);
+            }
+            if (s.spi_hz != 0)
+            {
+                if (s.spi_hz < kMinSpiHz || s.spi_hz > kMaxSpiHz)
+                    return InstallStatus::ValueOutOfRange;
+                m.spi_hz = static_cast<int32_t>(s.spi_hz);
+            }
+            // 0 is a real SPI mode, so this is taken literally rather than
+            // inherited — which makes the range check the only guard there is.
+            if (s.spi_mode > 3)
+                return InstallStatus::ValueOutOfRange;
+            m.spi_mode = static_cast<uint8_t>(s.spi_mode);
+
+            // Booleans have no presence either. A present ScanConfig states
+            // both of these; that is what "present" means for a flag.
+            m.active_low = s.active_low;
+            m.pl_from_cs = s.pl_from_cs;
+        }
+
+        // --- render ---
+        if (install.has_render)
+        {
+            const pinled_v1_RenderConfig &r = install.render;
+            if (r.refresh_hz != 0)
+            {
+                if (r.refresh_hz > kMaxRefreshHz)
+                    return InstallStatus::ValueOutOfRange;
+                m.refresh_hz = r.refresh_hz;
+            }
+            if (r.gamma_x100 != 0)
+            {
+                if (r.gamma_x100 < kMinGammaX100 || r.gamma_x100 > kMaxGammaX100)
+                    return InstallStatus::ValueOutOfRange;
+                m.gamma = static_cast<float>(r.gamma_x100) / 100.0f;
+            }
+            // brightness_cap is carried in the schema but the render path has
+            // no PSU budget yet (lamp_map.cpp TODO), so it is deliberately not
+            // projected. Reading it into a field nothing honours would look
+            // like a feature.
+        }
+
+        // --- filament defaults ---
+        if (install.has_filament)
+        {
+            const pinled_v1_FilamentDefaults &f = install.filament;
+            if (f.attack_ms > kMaxU16 || f.decay_ms > kMaxU16)
+                return InstallStatus::ValueOutOfRange;
+            if (f.attack_ms != 0)
+                m.attack_ms = static_cast<float>(f.attack_ms);
+            if (f.decay_ms != 0)
+                m.decay_ms = static_cast<float>(f.decay_ms);
+            // gain_permille is per-channel and reaches ChannelConfig through
+            // resolve(); MachineConfig has no device-wide gain to put it in.
+        }
+
+        out = m;
+        return InstallStatus::Ok;
     }
 
     const char *resolve_status_str(ResolveStatus s)

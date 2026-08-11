@@ -38,26 +38,33 @@ endif()
 
 set(PINLED_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 set(SCHEMA_DIR "${PINLED_ROOT}/components/pinled_schema")
+set(CONFIG_DIR "${PINLED_ROOT}/components/pinled_config")
 
 add_library(pinled_schema STATIC
         "${SCHEMA_DIR}/src/pinled_crc32.cpp"
         "${SCHEMA_DIR}/src/pinled_doc_frame.cpp"
+        "${SCHEMA_DIR}/src/pinled_doc_file.cpp"
         "${SCHEMA_DIR}/src/pinled_drive_class.cpp"
         "${SCHEMA_DIR}/src/pinled_apply.cpp")
 target_include_directories(pinled_schema PUBLIC "${SCHEMA_DIR}/include")
 
 enable_testing()
 
+# Tests that touch real files use a RELATIVE scratch directory and create it
+# themselves, so the working directory is all they need. An absolute path from
+# here was the first attempt and it failed everything: kMaxDocPath is 96 bytes
+# and a build directory nested a few levels deep exceeds that unaided.
 function(pinled_add_test name)
     add_executable(${name} "${name}.cpp")
     target_link_libraries(${name} PRIVATE pinled_schema)
     target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
-    add_test(NAME ${name} COMMAND ${name})
+    add_test(NAME ${name} COMMAND ${name} WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 endfunction()
 
 pinled_add_test(test_crc32)
 pinled_add_test(test_doc_frame)
 pinled_add_test(test_apply)
+pinled_add_test(test_doc_file)
 
 # --- nanopb-dependent tests --------------------------------------------------
 #
@@ -98,12 +105,14 @@ if(PINLED_NANOPB_DIR AND EXISTS "${PINLED_NANOPB_DIR}/pb.h" AND PINLED_NANOPB_GE
     target_include_directories(pinled_pb SYSTEM PUBLIC "${PINLED_NANOPB_DIR}" "${GEN_DIR}")
     target_compile_options(pinled_pb PRIVATE -w)
 
-    # The projection needs the generated document model, so it lives here
-    # rather than in the dependency-free part of pinled_schema.
-    add_library(pinled_config STATIC "${SCHEMA_DIR}/src/pinled_resolve.cpp")
+    # The projections need the generated document model, so they live in their
+    # own component rather than in the dependency-free part of pinled_schema —
+    # a split the firmware build now mirrors exactly (components/pinled_config).
+    add_library(pinled_config STATIC "${CONFIG_DIR}/src/pinled_resolve.cpp")
+    target_include_directories(pinled_config PUBLIC "${CONFIG_DIR}/include")
     target_link_libraries(pinled_config PUBLIC pinled_schema pinled_pb)
 
-    foreach(t test_schema_roundtrip test_resolve)
+    foreach(t test_schema_roundtrip test_resolve test_install)
         pinled_add_test(${t})
         target_link_libraries(${t} PRIVATE pinled_config)
         target_compile_definitions(${t} PRIVATE

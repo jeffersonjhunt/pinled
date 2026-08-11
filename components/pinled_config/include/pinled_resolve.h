@@ -25,11 +25,71 @@
 #include <cstdint>
 
 #include "pinled_channel_config.h"
+#include "pinled_machine_config.h"
 
 #include "pinled.pb.h"
 
 namespace ooe::pinled
 {
+    /**
+     * @brief How much of a channel's LED string this build will accept.
+     *
+     * `led_count` decides an allocation in `LampMap::init()`, so an absurd
+     * value in a corrupt document is a boot-time out-of-memory rather than a
+     * rejected document. 1024 is far past any real playfield — at 30 mA a LED
+     * that is 30 A of string — and exists only to bound the arithmetic.
+     */
+    inline constexpr uint32_t kMaxLedCount = 1024;
+
+    enum class InstallStatus
+    {
+        Ok = 0,
+        GeometryTooLarge, ///< more than 128 channels, or led_count past kMaxLedCount
+        PinOutOfRange,    ///< a pin number no GPIO could have
+        ValueOutOfRange,  ///< a rate, mode or gamma that cannot be honoured
+    };
+
+    /**
+     * @brief Project an install document onto the device-wide runtime record.
+     *
+     * @par What "unset" means, once, for all of it
+     * proto3 gives scalars no presence: a field left out and a field set to
+     * zero are the same bytes. So the granularity of "specified" is the
+     * *submessage* — `has_geometry`, `has_pins`, `has_scan`, `has_render`,
+     * `has_filament`. An absent submessage inherits from @p fallback entirely.
+     *
+     * Within a submessage that IS present, the rule splits on whether zero is a
+     * legal value for that particular field:
+     *
+     * | Field kind | Zero means | Examples |
+     * |---|---|---|
+     * | counts, rates, gamma | inherit — zero is impossible as a real value | `num_modules`, `sample_rate_hz`, `refresh_hz`, `gamma_x100` |
+     * | modes, flags, pins | itself — zero is a legal setting | `spi_mode` (0 is a real SPI mode), `active_low`, GPIO 0 |
+     *
+     * @par The one special case, and why it is not arbitrary
+     * A `Pins` message whose four pins are ALL zero is treated as unspecified
+     * rather than "put everything on GPIO 0". Four signals cannot share one
+     * pin, so that document cannot be legitimate — whereas a writer that
+     * emitted `Pins` without filling it in is entirely plausible. Honouring it
+     * literally would drive a strapping pin at boot, which is the one failure
+     * here with a hardware consequence.
+     *
+     * @param install   decoded install document
+     * @param out       receives the projection
+     * @param fallback  used for everything the document does not specify;
+     *                  normally the Kconfig build defaults (FR-CFG-4)
+     *
+     * @note Nothing is written to @p out until every field has been validated,
+     *       so a rejected document leaves the caller's defaults intact rather
+     *       than a half-applied mixture.
+     */
+    InstallStatus install_to_machine(const pinled_v1_InstallConfig &install,
+                                     MachineConfig &out,
+                                     const MachineConfig &fallback = MachineConfig{});
+
+    /// Human-readable status, for logs and test failure messages.
+    const char *install_status_str(InstallStatus s);
+
     enum class ResolveStatus
     {
         Ok = 0,

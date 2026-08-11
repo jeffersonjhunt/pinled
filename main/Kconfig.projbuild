@@ -163,6 +163,48 @@ menu "pinled configuration"
             default 16
     endmenu
 
+    menu "Configuration store"
+        config PINLED_STORE_SELFTEST
+            bool "Exercise the document store at boot (bring-up aid)"
+            default n
+            help
+                Writes a small document to the filesystem, reads it back, and
+                reports whether the bytes and the CRC survived -- then removes
+                it. Runs before any configuration is loaded, so it cannot
+                disturb a real one.
+
+                This exists because the atomic-write path is the one part of
+                the store that host tests can only approximate. On the host
+                rename() is POSIX; on the device it is LittleFS's, on real
+                flash, through the VFS layer. Those are the bytes that have to
+                survive a power cut, so they get exercised on the actual
+                medium at least once.
+
+                Leave this off in normal operation. It is a diagnostic, not a
+                check the firmware needs at every boot.
+
+        config PINLED_SEED_FS
+            bool "Flash the fs_seed documents into the storage partition"
+            default n
+            help
+                Builds fs_seed/ into a LittleFS image and flashes it alongside
+                the app, so the board boots with an install config and a
+                machine profile already present.
+
+                This is how the READ path gets verified on hardware: the
+                documents are authored on the host with tools/pbtool.py,
+                exactly as the web UI will author them, and the device only
+                reads them. Host tests cannot cover that seam -- it is where
+                the C, nanopb and Google's protobuf have to agree about the
+                same bytes on the same flash.
+
+                DESTRUCTIVE while it is on: every `idf.py flash` overwrites
+                whatever configuration the device had. Turn it off again once
+                you have what you need. With it off, flashing the app leaves
+                the storage partition untouched, which is the normal and
+                intended behaviour.
+    endmenu
+
     menu "Diagnostics"
         config PINLED_SCAN_DEBUG
             bool "Log raw scan frames (bring-up aid)"

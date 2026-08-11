@@ -130,3 +130,18 @@ namespace ooe::test
         if ((a) == (b))                                                  \
             ::ooe::test::fail(__FILE__, __LINE__, #a " != " #b);         \
     } while (0)
+
+/// Like CHECK, but abandons the rest of THIS case (other cases still run).
+///
+/// Not aborting is the right default and stays the default — but it means a
+/// test that keeps going after a failed assertion may dereference the pointer
+/// the assertion was about. One clear failure beats a segfault that takes the
+/// remaining cases with it and reports nothing. Use it for the precondition an
+/// assertion below would crash on, not as a stricter CHECK.
+#define REQUIRE(expr)                                                    \
+    do {                                                                 \
+        if (!(expr)) {                                                   \
+            ::ooe::test::fail(__FILE__, __LINE__, "required: " #expr);   \
+            return;                                                      \
+        }                                                                \
+    } while (0)

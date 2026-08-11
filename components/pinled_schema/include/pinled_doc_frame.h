@@ -78,6 +78,25 @@ namespace ooe::pinled
     }
 
     /**
+     * @brief Build just the 16-byte header for a payload, without copying it.
+     *
+     * `doc_frame_write` is this plus a copy. The split exists because writing
+     * to a file wants the header and the payload as two separate `fwrite`s —
+     * copying a 9 KB profile into a second buffer purely to prepend sixteen
+     * bytes would be the largest allocation in the boot path, and for nothing.
+     *
+     * @param out      exactly `kDocHeaderSize` bytes
+     * @param kind     which document this is
+     * @param payload  the bytes the CRC is computed over; null only if @p len is 0
+     * @param len      payload length
+     *
+     * @return DocStatus::Ok, or ShortBuffer if @p out or @p payload is null
+     *         when it must not be.
+     */
+    DocStatus doc_header_write(uint8_t *out, DocKind kind,
+                               const uint8_t *payload, size_t len);
+
+    /**
      * @brief Write a framed document into @p out.
      *
      * @param out        destination buffer

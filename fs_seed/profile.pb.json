@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "profile_id": "bench-rig",
+  "revision": 1,
+
+  "machine": { "make": "Bally", "model": "bench rig", "year": 1980, "lamp_count": 8 },
+  "author": { "handle": "jhunt", "verified": false },
+
+  "lamps": [
+    { "lamp": 11, "name": "insert blue",  "color": { "r": 0,   "g": 80,  "b": 255 } },
+    { "lamp": 12, "name": "GI warm",      "color": { "r": 255, "g": 190, "b": 120 },
+      "class_lock": "DRIVE_CLASS_AC_STEADY" },
+    { "lamp": 13, "name": "slow fade",    "color": { "r": 255, "g": 40,  "b": 40 },
+      "decay_ms": 400 },
+    { "lamp": 21, "name": "matrix green", "color": { "r": 0,   "g": 255, "b": 60 },
+      "attack_ms": 12, "gain_permille": 1400 }
+  ]
+}

@@ -10,6 +10,7 @@
 #include <memory>
 #include <new>
 
+#include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 #include "esp_check.h"
 #include "esp_timer.h"
@@ -39,20 +40,27 @@ namespace ooe::pinled
         version();
         ESP_LOGI(TAG, "Initializing...");
 
-        // 1. Configuration (NVS profile or Kconfig defaults).
-        ESP_ERROR_CHECK(store_.load(cfg_));
-        num_channels_ = cfg_.total_channels();
-        if (num_channels_ > LampScan::MAX_CHANNELS)
+#ifdef CONFIG_PINLED_STORE_SELFTEST
+        // Before anything is loaded, so it cannot disturb a real configuration.
+        store_.selftest();
+#endif
+
+        // 1. Configuration: the stored documents, or Kconfig defaults for
+        //    whatever is absent or unusable (FR-CFG-4). This also resolves the
+        //    per-channel records, so there is one place a configuration is
+        //    decided and it is not here.
+        ESP_ERROR_CHECK(store_.load(cfg_, channels_, LampScan::MAX_CHANNELS, &num_channels_));
+        if (num_channels_ == 0 || num_channels_ > LampScan::MAX_CHANNELS)
         {
-            ESP_LOGE(TAG, "too many channels: %u", (unsigned)num_channels_);
+            ESP_LOGE(TAG, "bad channel count: %u", (unsigned)num_channels_);
             return ESP_ERR_INVALID_SIZE;
         }
 
         // 2. Scan driver.
         LampScanConfig sc{};
-        sc.clk_pin = cfg_.clk_pin;
-        sc.data_pin = cfg_.data_pin;
-        sc.pl_pin = cfg_.pl_pin;
+        sc.clk_pin = static_cast<gpio_num_t>(cfg_.clk_pin);
+        sc.data_pin = static_cast<gpio_num_t>(cfg_.data_pin);
+        sc.pl_pin = static_cast<gpio_num_t>(cfg_.pl_pin);
         sc.spi_hz = cfg_.spi_hz;
         sc.spi_mode = cfg_.spi_mode;
         sc.pl_from_cs = cfg_.pl_from_cs;
@@ -70,22 +78,12 @@ namespace ooe::pinled
         ESP_ERROR_CHECK(filament_.init(num_channels_, fs_actual_));
         filament_.set_gamma(cfg_.gamma);
 
-        // Per-channel configuration. Until the store lands (step 4) this is
-        // built from the Kconfig defaults, and is deliberately identical to
-        // what set_params_all() and set_default_mapping() used to produce — so
-        // routing boot through the config path changes nothing observable, and
-        // a bench rig that behaved a certain way yesterday still does.
-        ResolveDefaults d{};
-        d.attack_ms = static_cast<uint16_t>(cfg_.attack_ms);
-        d.decay_ms = static_cast<uint16_t>(cfg_.decay_ms);
-        default_channels(channels_, num_channels_, cfg_.led_count, d);
-
         // 5. Profiler (used at boot, then idle).
         ESP_ERROR_CHECK(profiler_.init(num_channels_, fs_actual_));
 
         // 6. LED map + string.
         LampMapConfig mc{};
-        mc.led_pin = cfg_.led_pin;
+        mc.led_pin = static_cast<gpio_num_t>(cfg_.led_pin);
         mc.led_count = cfg_.led_count;
         mc.channel_count = num_channels_;
         ESP_ERROR_CHECK(map_.init(mc));
@@ -103,6 +101,15 @@ namespace ooe::pinled
         ESP_LOGI(TAG, "Initializing complete. %u channels, %u LEDs, Fs %.0f Hz, %u Hz refresh.",
                  (unsigned)num_channels_, (unsigned)cfg_.led_count,
                  fs_actual_, (unsigned)cfg_.refresh_hz);
+
+        // M4 puts Wi-Fi, lwIP and httpd on top of whatever is left here, and
+        // nothing has ever measured it. The minimum is the useful half: the
+        // store decodes both documents into heap and frees them again, so the
+        // gap between the two numbers is that transient peak rather than a
+        // guess at it. The shipping board has no PSRAM to fall back on (NFR-8).
+        ESP_LOGI(TAG, "heap: %u bytes free, %u minimum since boot",
+                 (unsigned)esp_get_free_heap_size(),
+                 (unsigned)esp_get_minimum_free_heap_size());
         return ESP_OK;
     }
 

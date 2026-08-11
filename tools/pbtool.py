@@ -30,9 +30,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import struct
 import sys
 import urllib.error
 import urllib.request
+import zlib
 
 _GEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_gen")
 
@@ -170,15 +172,73 @@ def cmd_info(args) -> int:
     return 0
 
 
+# --- stored-document framing -------------------------------------------------
+#
+# The 16-byte header from components/pinled_schema/include/pinled_doc_frame.h,
+# reimplemented rather than shared because there is nothing to share: it is
+# four fields and a checksum. The value of a second implementation is the same
+# as everywhere else in this project — nanopb agreeing with Google's protobuf,
+# and now this agreeing with the C. If they disagree the format is ambiguous.
+#
+# zlib.crc32 is CRC-32/ISO-HDLC, the same one pinled_crc32.cpp computes.
+
+_MAGIC = b"PLD1"
+_FRAME_VERSION = 1
+_HEADER_SIZE = 16
+
+# Values are on-disk and permanent; they must match DocKind.
+_KINDS = {"InstallConfig": 1, "MachineProfile": 2, "Version": 3}
+
+
+def _frame(kind_name: str, payload: bytes) -> bytes:
+    kind = _KINDS.get(kind_name)
+    if kind is None:
+        _die(f"no document kind for {kind_name}",
+             "framing applies to InstallConfig, MachineProfile and Version")
+    return (
+        _MAGIC
+        + bytes([_FRAME_VERSION, kind, 0, 0])
+        + struct.pack("<I", len(payload))
+        + struct.pack("<I", zlib.crc32(payload) & 0xFFFFFFFF)
+        + payload
+    )
+
+
+def _unframe(blob: bytes, expect: str) -> bytes:
+    if len(blob) < _HEADER_SIZE:
+        _die("not a stored document: shorter than a header")
+    if blob[:4] != _MAGIC:
+        _die("not a stored document: bad magic")
+    if blob[4] != _FRAME_VERSION:
+        _die(f"framing version {blob[4]} is not understood")
+    declared = struct.unpack("<I", blob[8:12])[0]
+    if declared > len(blob) - _HEADER_SIZE:
+        _die("truncated: declared payload is longer than the file")
+    payload = blob[_HEADER_SIZE:_HEADER_SIZE + declared]
+    want = struct.unpack("<I", blob[12:16])[0]
+    if (zlib.crc32(payload) & 0xFFFFFFFF) != want:
+        _die("payload does not match its CRC")
+    kind = blob[5]
+    if _KINDS.get(expect) not in (None, kind):
+        print(f"note: document kind is {kind}, decoding as {expect}", file=sys.stderr)
+    return payload
+
+
 def cmd_encode(args) -> int:
     msg = _from_json(_message(args.type), sys.stdin.read())
-    sys.stdout.buffer.write(msg.SerializeToString())
+    out = msg.SerializeToString()
+    if args.framed:
+        out = _frame(args.type, out)
+    sys.stdout.buffer.write(out)
     return 0
 
 
 def cmd_decode(args) -> int:
+    blob = sys.stdin.buffer.read()
+    if args.framed:
+        blob = _unframe(blob, args.type)
     msg = _message(args.type)
-    msg.ParseFromString(sys.stdin.buffer.read())
+    msg.ParseFromString(blob)
     print(_to_json(msg))
     return 0
 
@@ -228,10 +288,14 @@ def main(argv: list[str] | None = None) -> int:
 
     e = sub.add_parser("encode", help="JSON on stdin -> protobuf on stdout")
     e.add_argument("type")
+    e.add_argument("--framed", action="store_true",
+                   help="wrap in the 16-byte stored-document header, as written to /cfg")
     e.set_defaults(func=cmd_encode)
 
     d = sub.add_parser("decode", help="protobuf on stdin -> JSON on stdout")
     d.add_argument("type")
+    d.add_argument("--framed", action="store_true",
+                   help="input is a stored document; verify and strip its header")
     d.set_defaults(func=cmd_decode)
 
     r = sub.add_parser("roundtrip", help="check a JSON document survives a round trip")

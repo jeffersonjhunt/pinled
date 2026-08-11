@@ -105,10 +105,10 @@ namespace ooe::pinled
         Profiler profiler_{};
         LampMap map_{};
 
-        /// Resolved per-channel configuration. Built from Kconfig defaults
-        /// today; step 4 loads it from storage instead. 2 KB at 128 channels,
-        /// which is why it is a member and not a stack array — the boot path
-        /// already overflows the main task stack with less than this.
+        /// Resolved per-channel configuration, filled by the store from the
+        /// two documents or from Kconfig defaults. 2 KB at 128 channels, which
+        /// is why it is a member and not a stack array — the boot path already
+        /// overflows the main task stack with less than this.
         ChannelConfig channels_[LampScan::MAX_CHANNELS]{};
 
         // Shared brightness buffer: scan_task writes, render_task reads.
