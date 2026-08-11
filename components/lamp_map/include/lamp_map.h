@@ -27,7 +27,10 @@
 #include <cstdint>
 
 #include "esp_err.h"
+
 #include "driver/gpio.h"
+
+#include "pinled_color_order.h"
 
 namespace ooe::pinled
 {
@@ -44,6 +47,9 @@ namespace ooe::pinled
         gpio_num_t led_pin{GPIO_NUM_NC};
         size_t led_count{0};
         size_t channel_count{0};
+        /// Byte order the strip expects (FR-CFG-6). Default GRB — standard
+        /// WS2812B, and what this driver emits natively.
+        ColorOrder color_order{ColorOrder::UNSPECIFIED};
     };
 
     class LampMap

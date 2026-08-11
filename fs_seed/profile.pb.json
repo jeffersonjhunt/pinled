@@ -1,18 +1,17 @@
 {
   "schema": 1,
   "profile_id": "bench-rig",
-  "revision": 1,
+  "revision": 2,
 
-  "machine": { "make": "Bally", "model": "bench rig", "year": 1980, "lamp_count": 8 },
+  "machine": { "make": "Bally", "model": "bench rig", "year": 1980, "lamp_count": 5 },
   "author": { "handle": "jhunt", "verified": false },
 
   "lamps": [
-    { "lamp": 11, "name": "insert blue",  "color": { "r": 0,   "g": 80,  "b": 255 } },
-    { "lamp": 12, "name": "GI warm",      "color": { "r": 255, "g": 190, "b": 120 },
+    { "lamp": 1, "name": "red",   "color": { "r": 255, "g": 0,   "b": 0 } },
+    { "lamp": 2, "name": "green", "color": { "r": 0,   "g": 255, "b": 0 } },
+    { "lamp": 3, "name": "blue",  "color": { "r": 0,   "g": 0,   "b": 255 } },
+    { "lamp": 4, "name": "white", "color": { "r": 255, "g": 255, "b": 255 },
       "class_lock": "DRIVE_CLASS_AC_STEADY" },
-    { "lamp": 13, "name": "slow fade",    "color": { "r": 255, "g": 40,  "b": 40 },
-      "decay_ms": 400 },
-    { "lamp": 21, "name": "matrix green", "color": { "r": 0,   "g": 255, "b": 60 },
-      "attack_ms": 12, "gain_permille": 1400 }
+    { "lamp": 5, "name": "amber", "color": { "r": 255, "g": 96,  "b": 0 } }
   ]
 }

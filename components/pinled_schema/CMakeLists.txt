@@ -19,6 +19,7 @@
 
 idf_component_register(
         SRCS "src/pinled_crc32.cpp"
+             "src/pinled_color_order.cpp"
              "src/pinled_doc_frame.cpp"
              "src/pinled_doc_file.cpp"
              "src/pinled_drive_class.cpp"

@@ -308,3 +308,22 @@ S3. Full derivation in `TIMING.md` §5.
   worst case white; ~6 A at 128 LEDs) — do not run the string off the logic
   regulator. Level-shift the LED data line or run the strip at reduced VDD
   (HW-9): WS2812B wants V_IH ≥ 0.7 × VDD = 3.5 V, above a 3.3 V S3 output.
+
+### Strip byte order — check this on every new strip
+
+WS2812B is **GRB** and the driver emits GRB. RGB-ordered clones are common,
+carry identical markings, and are sold as the same part. **The bench strip is
+one of them** (confirmed 2026-08-11), which is why `fs_seed/install.json`
+declares `COLOR_ORDER_RGB`.
+
+Getting it wrong is quiet, not loud, and that is the trap. A near-white tint
+through a swapped pair is still a near-white tint — pinled's default
+`{255, 200, 140}` looked correct for the entire life of the project. Only a
+saturated colour reveals it, and until M3 step 4 the firmware had never
+displayed one.
+
+**Test a new strip before trusting it:** drive one LED pure red. If it lights
+green, red and green are swapped; if blue, red and blue are. Then set
+`RenderConfig.color_order` in the install document — it is a property of the
+parts, so it belongs there and not in firmware, and a shared machine profile
+deliberately cannot carry it.

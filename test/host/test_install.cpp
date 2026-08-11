@@ -301,6 +301,45 @@ TEST(gamma_is_scaled_by_a_hundred)
     CHECK_EQ(out.refresh_hz, static_cast<uint32_t>(120));
 }
 
+TEST(the_strip_byte_order_reaches_the_device_record)
+{
+    pinled_v1_InstallConfig in = blank();
+    in.has_render = true;
+    in.render.color_order = pinled_v1_ColorOrder_COLOR_ORDER_RGB;
+
+    MachineConfig out{};
+    CHECK(install_to_machine(in, out, fallback()) == InstallStatus::Ok);
+    CHECK(out.color_order == ColorOrder::RGB);
+}
+
+TEST(an_absent_color_order_stays_grb)
+{
+    // The compatibility rule made concrete: every document written before the
+    // field existed must keep behaving exactly as it did.
+    pinled_v1_InstallConfig in = blank();
+    in.has_render = true;
+    in.render.refresh_hz = 120;
+
+    MachineConfig out{};
+    CHECK(install_to_machine(in, out, fallback()) == InstallStatus::Ok);
+    CHECK(out.color_order == ColorOrder::UNSPECIFIED);
+    CHECK_EQ(pack_for_order(out.color_order, 1, 2, 3),
+             pack_for_order(ColorOrder::GRB, 1, 2, 3));
+}
+
+TEST(a_color_order_from_a_newer_schema_falls_back_to_grb)
+{
+    // Unknown enum values survive on the wire but cannot be honoured. Guessing
+    // would mis-colour a whole playfield; GRB is the documented default.
+    pinled_v1_InstallConfig in = blank();
+    in.has_render = true;
+    in.render.color_order = static_cast<pinled_v1_ColorOrder>(7);
+
+    MachineConfig out{};
+    CHECK(install_to_machine(in, out, fallback()) == InstallStatus::Ok);
+    CHECK(out.color_order == ColorOrder::UNSPECIFIED);
+}
+
 TEST(an_unrepresentable_gamma_is_rejected)
 {
     MachineConfig out{};

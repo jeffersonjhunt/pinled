@@ -33,6 +33,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "pinled_color_order.h"
+
 namespace ooe::pinled
 {
     /// A pin that is not fitted. Numerically `GPIO_NUM_NC`.
@@ -63,6 +65,9 @@ namespace ooe::pinled
 
         // --- LED string ---
         size_t led_count{16};
+        /// Byte order the strip expects. Default GRB: standard WS2812B, and
+        /// what every install behaved as before the field existed.
+        ColorOrder color_order{ColorOrder::UNSPECIFIED};
 
         size_t total_channels() const { return num_modules * channels_per_module; }
     };

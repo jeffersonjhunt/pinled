@@ -10,6 +10,7 @@
 #include "lamp_map.h"
 
 #include "pinled_channel_config.h" // ResolveDefaults — the one definition of the default tint
+#include "pinled_color_order.h"
 
 #include <new>
 
@@ -59,8 +60,8 @@ namespace ooe::pinled
         initialized_ = true;
         ESP_LOGI(TAG, "init: %u LEDs on GPIO %d, %u channels, 1 transmit/frame",
                  (unsigned)cfg_.led_count, (int)cfg_.led_pin, (unsigned)cfg_.channel_count);
-        ESP_LOGI(TAG, "  strip supports up to %u Hz refresh",
-                 (unsigned)max_refresh_hz());
+        ESP_LOGI(TAG, "  strip supports up to %u Hz refresh, byte order %s",
+                 (unsigned)max_refresh_hz(), color_order_str(cfg_.color_order));
         return ESP_OK;
     }
 
@@ -135,7 +136,13 @@ namespace ooe::pinled
             if (e.led_index < 0 || static_cast<size_t>(e.led_index) >= cfg_.led_count)
                 continue;
             const uint8_t v = levels[ch];
-            frame[e.led_index].rgb = NP_RGB(scale8(e.r, v), scale8(e.g, v), scale8(e.b, v));
+            // NOT NP_RGB: that macro hard-codes the driver's native GRB
+            // transmission order, which is wrong on an RGB-ordered strip. The
+            // packing is the same 24-bit layout, chosen by the install's
+            // declared order — see pinled_color_order.h for why the byte sent
+            // first lives in the middle of the word.
+            frame[e.led_index].rgb =
+                pack_for_order(cfg_.color_order, scale8(e.r, v), scale8(e.g, v), scale8(e.b, v));
         }
 
         // ONE transmit per refresh (FR-LED-6). The driver drops SetPixel calls

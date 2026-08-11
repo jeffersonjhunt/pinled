@@ -86,6 +86,7 @@ namespace ooe::pinled
         mc.led_pin = static_cast<gpio_num_t>(cfg_.led_pin);
         mc.led_count = cfg_.led_count;
         mc.channel_count = num_channels_;
+        mc.color_order = cfg_.color_order;
         ESP_ERROR_CHECK(map_.init(mc));
         clamp_refresh(); // FR-LED-8
 

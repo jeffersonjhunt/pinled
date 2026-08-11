@@ -42,6 +42,7 @@ set(CONFIG_DIR "${PINLED_ROOT}/components/pinled_config")
 
 add_library(pinled_schema STATIC
         "${SCHEMA_DIR}/src/pinled_crc32.cpp"
+        "${SCHEMA_DIR}/src/pinled_color_order.cpp"
         "${SCHEMA_DIR}/src/pinled_doc_frame.cpp"
         "${SCHEMA_DIR}/src/pinled_doc_file.cpp"
         "${SCHEMA_DIR}/src/pinled_drive_class.cpp"
@@ -65,6 +66,7 @@ pinled_add_test(test_crc32)
 pinled_add_test(test_doc_frame)
 pinled_add_test(test_apply)
 pinled_add_test(test_doc_file)
+pinled_add_test(test_color_order)
 
 # --- nanopb-dependent tests --------------------------------------------------
 #

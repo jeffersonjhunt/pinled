@@ -507,8 +507,8 @@ is not arbitrary — four signals cannot share a pin, but a writer that emitted
 `Pins` without filling it in is entirely plausible, and honouring it literally
 would drive a strapping pin at boot.
 
-**128 cases green** (8 crc, 17 frame, 17 apply, 20 file, 13 schema, 32 resolve,
-21 install). Four deliberate breakages confirmed the new suites fail when they
+**136 cases green** (8 crc, 17 frame, 17 apply, 20 file, 8 colour order,
+13 schema, 32 resolve, 21 install). Four deliberate breakages confirmed the new suites fail when they
 should: no atomic rename (1), absence folded into an error (1), an all-zero
 `Pins` honoured literally (4), `spi_mode` 0 made unreachable (1).
 
@@ -543,6 +543,7 @@ feature are different claims:
 | `fs_seed` documents | `(stored)`, 12 LEDs from the document, exactly 1 locked channel |
 | a byte flipped in `install.pb` | `rejected: bad document (bad crc) — KEPT`, defaults restored, profile warning fired |
 | a 129-lamp profile, with and without the fix | 2 locked vs 0 locked — the partial-decode bug, and its repair |
+| primaries on the five wired inputs | the strip is RGB-ordered; then all five correct once declared |
 | app only, seed off | documents survive an app flash — `/cfg` is not touched |
 
 One thing worth writing down about method: an early run of that A/B showed
@@ -561,6 +562,17 @@ configuration that was entirely defaults — `defaulted()` means *neither*
 document is present, which is right for the API and wrong for a line describing
 numbers that all come from the install. Found only by corrupting a document on
 purpose.
+
+**And the fixture found a rendering bug older than this milestone.** The bench
+strip is RGB-ordered, not GRB, so the first saturated colour it was ever asked
+to display came out pink. Nothing before step 4 could have revealed it: pinled
+had only ever shown its near-white default tint, and grey is byte-identical
+through any permutation. Byte order is now `RenderConfig.color_order` in the
+install document — additive, `UNSPECIFIED` meaning GRB, so documents written
+before the field behave identically — and the packing lives in `pinled_schema`
+with its own suite, because `neopixel.c` transmits bits 15:8 *first*, then
+23:16, then 7:0, and the byte sent first sits in the middle of the word.
+Verified on the bench: five channels, five pure colours, all correct.
 
 **Heap, measured rather than assumed:** the decode buffers peak at **21,388
 bytes transient**, all freed before boot completes, leaving **353,404 bytes

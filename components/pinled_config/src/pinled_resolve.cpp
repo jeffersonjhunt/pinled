@@ -51,6 +51,22 @@ namespace ooe::pinled
         static_assert(static_cast<int>(DriveClass::AC_DIMMED) ==
                           pinled_v1_DriveClass_DRIVE_CLASS_AC_DIMMED, "");
 
+        // Same reasoning for the strip order: two lists that must agree.
+        static_assert(static_cast<int>(ColorOrder::UNSPECIFIED) ==
+                          pinled_v1_ColorOrder_COLOR_ORDER_UNSPECIFIED, "");
+        static_assert(static_cast<int>(ColorOrder::GRB) ==
+                          pinled_v1_ColorOrder_COLOR_ORDER_GRB, "");
+        static_assert(static_cast<int>(ColorOrder::RGB) ==
+                          pinled_v1_ColorOrder_COLOR_ORDER_RGB, "");
+        static_assert(static_cast<int>(ColorOrder::BGR) ==
+                          pinled_v1_ColorOrder_COLOR_ORDER_BGR, "");
+        static_assert(static_cast<int>(ColorOrder::BRG) ==
+                          pinled_v1_ColorOrder_COLOR_ORDER_BRG, "");
+        static_assert(static_cast<int>(ColorOrder::RBG) ==
+                          pinled_v1_ColorOrder_COLOR_ORDER_RBG, "");
+        static_assert(static_cast<int>(ColorOrder::GBR) ==
+                          pinled_v1_ColorOrder_COLOR_ORDER_GBR, "");
+
         /// Locate a lamp's profile entry, or null. Linear by design — see the
         /// complexity note in the header.
         const pinled_v1_LampEntry *find_lamp(const pinled_v1_MachineProfile &p, uint16_t lamp)
@@ -201,6 +217,24 @@ namespace ooe::pinled
                     return InstallStatus::ValueOutOfRange;
                 m.gamma = static_cast<float>(r.gamma_x100) / 100.0f;
             }
+            // Taken literally: UNSPECIFIED is GRB, which is what a document
+            // written before this field existed already meant, so there is no
+            // "inherit" case to distinguish. A value from a newer schema than
+            // this build knows falls back to GRB rather than guessing.
+            switch (r.color_order)
+            {
+            case pinled_v1_ColorOrder_COLOR_ORDER_GRB: m.color_order = ColorOrder::GRB; break;
+            case pinled_v1_ColorOrder_COLOR_ORDER_RGB: m.color_order = ColorOrder::RGB; break;
+            case pinled_v1_ColorOrder_COLOR_ORDER_BGR: m.color_order = ColorOrder::BGR; break;
+            case pinled_v1_ColorOrder_COLOR_ORDER_BRG: m.color_order = ColorOrder::BRG; break;
+            case pinled_v1_ColorOrder_COLOR_ORDER_RBG: m.color_order = ColorOrder::RBG; break;
+            case pinled_v1_ColorOrder_COLOR_ORDER_GBR: m.color_order = ColorOrder::GBR; break;
+            case pinled_v1_ColorOrder_COLOR_ORDER_UNSPECIFIED:
+            default:
+                m.color_order = ColorOrder::UNSPECIFIED;
+                break;
+            }
+
             // brightness_cap is carried in the schema but the render path has
             // no PSU budget yet (lamp_map.cpp TODO), so it is deliberately not
             // projected. Reading it into a field nothing honours would look
