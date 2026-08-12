@@ -163,6 +163,47 @@ menu "pinled configuration"
             default 16
     endmenu
 
+    menu "Networking"
+        config PINLED_WIFI_SSID
+            string "Wi-Fi SSID (bench bring-up only; empty = SoftAP)"
+            default ""
+            help
+                Leave EMPTY for normal behaviour: the device raises its own
+                SoftAP and you join that. Set it only to put a bench board on
+                an existing network so the API can be reached from another
+                machine.
+
+                THIS IS A BRING-UP STOPGAP AND IS COMPILED INTO THE IMAGE.
+                FR-CFG-12 says Wi-Fi credentials live in NVS and appear in no
+                export at any privacy level; a Kconfig string satisfies
+                neither. M3 step 7 replaces this with provisioning, and these
+                two options are deleted then.
+
+                `sdkconfig` is gitignored, so what you type here is not
+                committed -- but it IS readable in the built binary by anyone
+                holding the board. Do not use a network you care about, and do
+                not ship an image built with these set.
+
+        config PINLED_WIFI_PASSWORD
+            string "Wi-Fi password (bring-up only)"
+            default ""
+            help
+                See the warning on PINLED_WIFI_SSID. Empty means an open
+                network.
+
+        config PINLED_HOSTNAME
+            string "mDNS hostname"
+            default "pinled"
+            help
+                Advertised as <name>.local, which is what makes
+                `pbtool.py get http://pinled.local/api/v1/config` work without
+                hunting for a DHCP lease.
+
+                Two boards on one network with the same name will collide;
+                mDNS resolves that by renaming one, so check the boot log for
+                the name actually claimed.
+    endmenu
+
     menu "Configuration store"
         config PINLED_STORE_SELFTEST
             bool "Exercise the document store at boot (bring-up aid)"

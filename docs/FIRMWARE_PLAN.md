@@ -507,8 +507,8 @@ is not arbitrary — four signals cannot share a pin, but a writer that emitted
 `Pins` without filling it in is entirely plausible, and honouring it literally
 would drive a strapping pin at boot.
 
-**136 cases green** (8 crc, 17 frame, 17 apply, 20 file, 8 colour order,
-13 schema, 32 resolve, 21 install). Four deliberate breakages confirmed the new suites fail when they
+**138 cases green** (8 crc, 17 frame, 17 apply, 20 file, 7 colour order,
+13 schema, 32 resolve, 24 install). Four deliberate breakages confirmed the new suites fail when they
 should: no atomic rename (1), absence folded into an error (1), an all-zero
 `Pins` honoured literally (4), `spi_mode` 0 made unreachable (1).
 
@@ -581,9 +581,69 @@ free** after init. Two independent measurements agree (368,712 − 21,388 =
 wrong and is gone. **Image: 0x4e4f0 (317 KB) in a 2 MB partition**, so M4's
 Wi-Fi, lwIP and httpd have room in both.
 
-**Step 5 — `esp_http_server` and `/api/v1`.** Config and profile read/write,
-`info` reporting the API version (FR-UI-4). Exercised through the step-1
-wrappers.
+**Step 5 — `esp_http_server` and `/api/v1`. *(Done, 2026-08-11.)***
+
+`GET`/`PUT`/`DELETE` on `/config` and `/profile`, `GET /info`, plus the
+networking to reach them: station mode when Kconfig credentials are set,
+SoftAP otherwise, and mDNS so `pinled.local` resolves. Both modes now rather
+than SoftAP alone, because step 7 needs both anyway and a stopgap with no
+successor tends to become the design.
+
+**`GET` returns the stored bytes, unmodified.** The CRC is verified and the
+payload copied out without ever being decoded, which is what makes the FR-UI-4
+version window real rather than aspirational — a document written by a newer
+SPA carries fields this build has no struct for, and re-encoding would drop
+every one. It also means `GET /profile` never materialises lamp names on the
+device, which is what step 2's two-model split was for. Both behaviours were
+observed side by side on the bench: the stored document came back carrying
+only geometry, `color_order` and wiring, while the same endpoint on an erased
+device synthesised one carrying pins, rates and gamma.
+
+`PUT` decodes **only to validate** and throws the result away; the bytes
+stored are the bytes that arrived. An install config is additionally projected
+before being accepted, because one that cannot project would leave the device
+unbootable-as-configured after the restart — a 400 costs the caller a retry,
+accepting it costs a trip to the bench with a USB cable.
+
+CORS is wide open per FR-UI-3, **including on error responses**, and `OPTIONS`
+is handled: `application/x-protobuf` is not a CORS-safelisted content type, so
+every browser `PUT` preflights. Omit that and writes fail in browsers while
+working perfectly from `pbtool`.
+
+Networking never blocks boot. No credentials is the normal state of an
+unprovisioned device, not a fault; a join failure is logged and survived. The
+lamps are the product and they work with no network at all.
+
+**The bench found a bug that no test could have.** With ESP-IDF's default
+`WIFI_PS_MIN_MODEM`, the board answered roughly one packet in ten — mDNS
+resolved, the occasional request succeeded at 2 ms, and everything else timed
+out. It looked like an httpd fault and was not: ping showed 90% loss below the
+HTTP layer. `esp_wifi_set_ps(WIFI_PS_NONE)` took it to **15 of 15 at 2.9 ms
+average**, same board, same AP, one line of difference. Modem sleep is wrong
+for a mains-powered controller whose job while someone commissions it is to
+answer promptly, and the LED string dwarfs anything the radio saves.
+
+Reading the diff afterwards found a worse one: the body-receive loop
+`continue`d on timeout without bound, and httpd runs one handler at a time —
+so anyone who opened a `PUT`, declared a length and then said nothing would
+hang the entire API. Now bounded, verified by holding a connection open with
+the body withheld: **408 after 5 s, and `GET /info` still answered 200**.
+
+**Verified on hardware:** `GET /info` (API version 1, device_id from the eFuse
+MAC), `GET` on both documents, an `OPTIONS` preflight returning the right
+headers, a `PUT` that changed `led_count` and survived the restart, `DELETE`
+reverting to build defaults, and both rejection paths — random bytes and a
+valid protobuf with impossible geometry — returning **400 with the device
+neither restarting nor changing anything**.
+
+**Cost, measured:** image 317 KB → **929 KB** (Wi-Fi, lwIP, httpd and mDNS are
+~612 KB of flash), still 56% free in the 2 MB partition. Heap 353 KB → **230
+KB free**, so the stack costs ~123 KB of RAM — above the 50–80 KB the plan
+guessed, and worth knowing before the WebSocket lands.
+
+*Deferred deliberately:* OTA (`FR-OTA-*`). The endpoint needs button-arming
+(FR-OTA-2) and an unarmed bricking endpoint behind open CORS is exactly what
+that requirement exists to prevent.
 
 **Step 6 — the live WebSocket (FR-UI-5/9).** Needs `CONFIG_HTTPD_WS_SUPPORT`.
 The push task reads the sticky flags `scan_task` already maintains per frame;

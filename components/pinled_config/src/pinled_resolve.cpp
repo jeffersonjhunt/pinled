@@ -77,6 +77,24 @@ namespace ooe::pinled
             return nullptr;
         }
 
+        /// Runtime enum -> wire enum. The reverse of the switch in
+        /// install_to_machine; kept next to nothing else so the pairing is
+        /// obvious when one of them gains a value.
+        pinled_v1_ColorOrder drive_color_order_to_proto(ColorOrder o)
+        {
+            switch (o)
+            {
+            case ColorOrder::GRB: return pinled_v1_ColorOrder_COLOR_ORDER_GRB;
+            case ColorOrder::RGB: return pinled_v1_ColorOrder_COLOR_ORDER_RGB;
+            case ColorOrder::BGR: return pinled_v1_ColorOrder_COLOR_ORDER_BGR;
+            case ColorOrder::BRG: return pinled_v1_ColorOrder_COLOR_ORDER_BRG;
+            case ColorOrder::RBG: return pinled_v1_ColorOrder_COLOR_ORDER_RBG;
+            case ColorOrder::GBR: return pinled_v1_ColorOrder_COLOR_ORDER_GBR;
+            case ColorOrder::UNSPECIFIED: break;
+            }
+            return pinled_v1_ColorOrder_COLOR_ORDER_UNSPECIFIED;
+        }
+
         /// A per-lamp zero inherits; anything else wins.
         uint16_t inherit(uint32_t entry, uint16_t fallback)
         {
@@ -257,6 +275,62 @@ namespace ooe::pinled
 
         out = m;
         return InstallStatus::Ok;
+    }
+
+    void machine_to_install(const MachineConfig &m,
+                            const ChannelConfig *channels, size_t count,
+                            pinled_v1_InstallConfig &out)
+    {
+        out = pinled_v1_InstallConfig_init_zero;
+        out.schema = 1;
+
+        out.has_geometry = true;
+        out.geometry.num_modules = static_cast<uint32_t>(m.num_modules);
+        out.geometry.channels_per_module = static_cast<uint32_t>(m.channels_per_module);
+        out.geometry.led_count = static_cast<uint32_t>(m.led_count);
+
+        out.has_pins = true;
+        out.pins.clk = m.clk_pin;
+        out.pins.pl = m.pl_pin;
+        out.pins.data = m.data_pin;
+        out.pins.led = m.led_pin;
+
+        out.has_scan = true;
+        out.scan.sample_rate_hz = static_cast<uint32_t>(m.sample_rate_hz);
+        out.scan.spi_hz = static_cast<uint32_t>(m.spi_hz);
+        out.scan.spi_mode = m.spi_mode;
+        out.scan.active_low = m.active_low;
+        out.scan.pl_from_cs = m.pl_from_cs;
+
+        out.has_render = true;
+        out.render.refresh_hz = m.refresh_hz;
+        out.render.gamma_x100 = static_cast<uint32_t>(m.gamma * 100.0f + 0.5f);
+        out.render.brightness_cap = 0; // not honoured by the render path yet
+        out.render.color_order = drive_color_order_to_proto(m.color_order);
+
+        out.has_filament = true;
+        out.filament.attack_ms = static_cast<uint32_t>(m.attack_ms);
+        out.filament.decay_ms = static_cast<uint32_t>(m.decay_ms);
+        // No device-wide gain exists in the runtime record; per-channel gain
+        // lives in ChannelConfig and is not summarised here. Emitting 0 means
+        // "inherit", which is true and does not invent a number.
+        out.filament.gain_permille = 0;
+
+        if (channels == nullptr)
+            return;
+
+        const size_t limit = count < kMaxChannels ? count : kMaxChannels;
+        for (size_t i = 0; i < limit; ++i)
+        {
+            const ChannelConfig &c = channels[i];
+            if (!c.bound() && !c.mapped())
+                continue; // absent from the document is what resolve() defaults to
+
+            pinled_v1_WiringEntry &w = out.wiring[out.wiring_count++];
+            w.channel = static_cast<uint32_t>(i);
+            w.lamp = c.lamp;
+            w.led_index = c.led_index;
+        }
     }
 
     const char *resolve_status_str(ResolveStatus s)

@@ -103,6 +103,9 @@ namespace ooe::pinled
                  (unsigned)num_channels_, (unsigned)cfg_.led_count,
                  fs_actual_, (unsigned)cfg_.refresh_hz);
 
+        // 9. Network and API, last. Nothing above depends on it.
+        start_network();
+
         // M4 puts Wi-Fi, lwIP and httpd on top of whatever is left here, and
         // nothing has ever measured it. The minimum is the useful half: the
         // store decodes both documents into heap and frees them again, so the
@@ -112,6 +115,26 @@ namespace ooe::pinled
                  (unsigned)esp_get_free_heap_size(),
                  (unsigned)esp_get_minimum_free_heap_size());
         return ESP_OK;
+    }
+
+    void Main::start_network()
+    {
+        // Every failure here is logged and survived. A board that cannot join
+        // a network still senses lamps and still drives LEDs, and making boot
+        // conditional on Wi-Fi would turn a router reboot into a dark
+        // playfield.
+        if (net_.start() != ESP_OK)
+        {
+            ESP_LOGE(TAG, "network did not start; API unavailable");
+            return;
+        }
+        if (!net_.up())
+        {
+            ESP_LOGW(TAG, "no address; API unavailable this boot");
+            return;
+        }
+        if (api_.start(store_, cfg_, channels_, num_channels_, net_) != ESP_OK)
+            ESP_LOGE(TAG, "API did not start");
     }
 
     void Main::apply_channel_config()

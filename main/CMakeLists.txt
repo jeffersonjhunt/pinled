@@ -3,7 +3,7 @@ FILE(GLOB_RECURSE app_sources src/*.cpp src/*.c)
 idf_component_register(
         SRCS ${app_sources}
         INCLUDE_DIRS inc
-        REQUIRES "driver" "esp_timer" "esp_driver_gptimer" "lamp_scan" "filament" "profiler" "lamp_map" "machine_config" "pinled_schema"
+        REQUIRES "driver" "esp_timer" "esp_driver_gptimer" "lamp_scan" "filament" "profiler" "lamp_map" "machine_config" "pinled_schema" "pinled_net" "pinled_api"
 )
 
 # Bring-up only, and destructive while it is on: this overwrites the device's

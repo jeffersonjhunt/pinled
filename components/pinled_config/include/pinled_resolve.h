@@ -90,6 +90,35 @@ namespace ooe::pinled
     /// Human-readable status, for logs and test failure messages.
     const char *install_status_str(InstallStatus s);
 
+    /**
+     * @brief Describe the running configuration as an install document.
+     *
+     * The reverse of `install_to_machine()`, and **deliberately lossy**. The
+     * runtime records do not carry everything a document can — there is no
+     * device-wide gain, no brightness cap, no lamp names, and nothing at all
+     * from a newer schema this build does not understand.
+     *
+     * That lossiness is the whole argument for how `GET /api/v1/config`
+     * behaves: when a document is stored it is streamed back **verbatim**,
+     * never re-encoded, because re-encoding would silently drop every field
+     * this firmware cannot represent — which is exactly what unknown-field
+     * preservation exists to prevent (FR-UI-4). This function is only for the
+     * case where nothing is stored and the UI still needs to know what the
+     * device is actually running.
+     *
+     * @param m         the running device-wide record
+     * @param channels  the running per-channel records; may be null
+     * @param count     number of entries in @p channels
+     * @param out       receives the document; fully overwritten
+     *
+     * @note Emits a wiring entry only for channels that are bound or mapped.
+     *       A channel that is neither is absent from the document, which is
+     *       what `resolve()` already treats as the default.
+     */
+    void machine_to_install(const MachineConfig &m,
+                            const ChannelConfig *channels, size_t count,
+                            pinled_v1_InstallConfig &out);
+
     enum class ResolveStatus
     {
         Ok = 0,

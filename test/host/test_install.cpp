@@ -391,4 +391,124 @@ TEST(a_rejected_document_leaves_the_defaults_untouched)
     CHECK_EQ(out.num_modules, static_cast<size_t>(99));
 }
 
+// ------------------------------------------------- the reverse projection --
+
+TEST(a_running_config_round_trips_through_a_document)
+{
+    // What GET /api/v1/config returns when nothing is stored. It has to be
+    // accurate about the fields it carries, because the UI will show it as
+    // "what this device is doing" and may well PUT it straight back.
+    const MachineConfig before = fallback();
+
+    pinled_v1_InstallConfig doc = blank();
+    machine_to_install(before, nullptr, 0, doc);
+
+    MachineConfig after{};
+    CHECK(install_to_machine(doc, after, MachineConfig{}) == InstallStatus::Ok);
+
+    CHECK_EQ(after.num_modules, before.num_modules);
+    CHECK_EQ(after.channels_per_module, before.channels_per_module);
+    CHECK_EQ(after.led_count, before.led_count);
+    CHECK_EQ(after.clk_pin, before.clk_pin);
+    CHECK_EQ(after.pl_pin, before.pl_pin);
+    CHECK_EQ(after.data_pin, before.data_pin);
+    CHECK_EQ(after.led_pin, before.led_pin);
+    CHECK_EQ(after.spi_hz, before.spi_hz);
+    CHECK_EQ(after.spi_mode, before.spi_mode);
+    CHECK_EQ(after.active_low, before.active_low);
+    CHECK_EQ(after.pl_from_cs, before.pl_from_cs);
+    CHECK_EQ(after.refresh_hz, before.refresh_hz);
+    CHECK(near(after.sample_rate_hz, before.sample_rate_hz));
+    CHECK(near(after.gamma, before.gamma));
+    CHECK(near(after.attack_ms, before.attack_ms));
+    CHECK(near(after.decay_ms, before.decay_ms));
+}
+
+TEST(a_not_fitted_pin_survives_the_round_trip)
+{
+    // -1 through an int32 and back. If this became 0 the document would claim
+    // /PL is on GPIO 0, and a UI that PUT it back would break the chain.
+    MachineConfig before = fallback();
+    before.pl_pin = kPinNotFitted;
+
+    pinled_v1_InstallConfig doc = blank();
+    machine_to_install(before, nullptr, 0, doc);
+
+    MachineConfig after{};
+    CHECK(install_to_machine(doc, after, MachineConfig{}) == InstallStatus::Ok);
+    CHECK_EQ(after.pl_pin, kPinNotFitted);
+}
+
+TEST(the_strip_byte_order_survives_the_round_trip)
+{
+    MachineConfig before = fallback();
+    before.color_order = ColorOrder::BRG;
+
+    pinled_v1_InstallConfig doc = blank();
+    machine_to_install(before, nullptr, 0, doc);
+
+    MachineConfig after{};
+    CHECK(install_to_machine(doc, after, MachineConfig{}) == InstallStatus::Ok);
+    CHECK(after.color_order == ColorOrder::BRG);
+}
+
+TEST(wiring_is_emitted_for_bound_or_mapped_channels_only)
+{
+    ChannelConfig ch[8]{};
+    ch[0].lamp = 11; ch[0].led_index = 0;   // bound and mapped
+    ch[1].lamp = 0;  ch[1].led_index = 3;   // mapped only
+    ch[2].lamp = 7;  ch[2].led_index = -1;  // bound only
+    // 3..7 left neither, and must not appear.
+
+    pinled_v1_InstallConfig doc = blank();
+    machine_to_install(fallback(), ch, 8, doc);
+
+    CHECK_EQ(static_cast<int>(doc.wiring_count), 3);
+    CHECK_EQ(doc.wiring[0].channel, static_cast<uint32_t>(0));
+    CHECK_EQ(doc.wiring[0].lamp, static_cast<uint32_t>(11));
+    CHECK_EQ(doc.wiring[1].channel, static_cast<uint32_t>(1));
+    CHECK_EQ(doc.wiring[1].led_index, 3);
+    CHECK_EQ(doc.wiring[2].channel, static_cast<uint32_t>(2));
+    CHECK_EQ(doc.wiring[2].led_index, -1);
+}
+
+TEST(a_wiring_round_trip_lands_on_the_same_channels)
+{
+    // The join is the part most worth checking: channel -> lamp -> LED has to
+    // survive being written out and read back, or a UI that reads and rewrites
+    // the running config would silently remap the playfield.
+    ChannelConfig before[32]{};
+    before[0].lamp = 11; before[0].led_index = 0;
+    before[4].lamp = 2;  before[4].led_index = 1;
+    before[31].lamp = 99; before[31].led_index = 15;
+
+    pinled_v1_InstallConfig doc = blank();
+    machine_to_install(fallback(), before, 32, doc);
+
+    ChannelConfig after[32]{};
+    size_t n = 0;
+    const pinled_v1_MachineProfile empty = pinled_v1_MachineProfile_init_zero;
+    CHECK(resolve(empty, doc, after, 32, &n) == ResolveStatus::Ok);
+    CHECK_EQ(n, static_cast<size_t>(32));
+
+    CHECK_EQ(after[0].lamp, static_cast<uint16_t>(11));
+    CHECK_EQ(after[0].led_index, static_cast<int16_t>(0));
+    CHECK_EQ(after[4].lamp, static_cast<uint16_t>(2));
+    CHECK_EQ(after[4].led_index, static_cast<int16_t>(1));
+    CHECK_EQ(after[31].lamp, static_cast<uint16_t>(99));
+    CHECK_EQ(after[31].led_index, static_cast<int16_t>(15));
+    CHECK_EQ(after[7].lamp, static_cast<uint16_t>(0));
+    CHECK_EQ(after[7].led_index, static_cast<int16_t>(-1));
+}
+
+TEST(the_reverse_projection_does_not_invent_a_gain)
+{
+    // MachineConfig has no device-wide gain. Emitting 1000 would look like
+    // someone chose unity; 0 means inherit, which is the truth.
+    pinled_v1_InstallConfig doc = blank();
+    machine_to_install(fallback(), nullptr, 0, doc);
+    CHECK(doc.has_filament);
+    CHECK_EQ(doc.filament.gain_permille, static_cast<uint32_t>(0));
+}
+
 int main() { return ooe::test::run_all(); }

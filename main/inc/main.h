@@ -29,6 +29,9 @@
 #include "lamp_map.h"
 #include "machine_config.h"
 
+#include "api.h"
+#include "net.h"
+
 #include "pinled_apply.h"
 #include "pinled_channel_config.h"
 
@@ -48,6 +51,11 @@ namespace ooe::pinled
         void version();
         esp_err_t start_tasks();
         void profile_boot(); ///< run the boot-time auto-profiler pass
+
+        /// Bring up Wi-Fi and the HTTP API. Last, and deliberately not fatal:
+        /// the lamps are the product and they must work on a bench with no
+        /// network at all.
+        void start_network();
 
         /// FR-SCAN-9: measure what the scan hardware actually sustains and
         /// clamp the configured sample rate to it. The clamped value becomes
@@ -100,6 +108,8 @@ namespace ooe::pinled
 
         MachineConfig cfg_{};
         MachineConfigStore store_{};
+        Net net_{};
+        Api api_{};
         LampScan scan_{};
         Filament filament_{};
         Profiler profiler_{};
