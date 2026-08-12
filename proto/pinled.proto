@@ -216,6 +216,36 @@ message Version {
   MachineProfile profile = 7;
 }
 
+// ------------------------------------------------------- provisioning --
+// Network credentials. Deliberately its OWN message and never a field of
+// InstallConfig: FR-CFG-12 says credentials live in NVS and appear in no
+// export at any privacy level, and the surest way to honour that is to give
+// the exportable document no place to put them.
+//
+// Sent once, over the SoftAP the user is standing next to, to a device with no
+// stored secret and no account behind it (FR-REG-1). There is nothing here to
+// authenticate against and nothing to protect it from that being on the same
+// AP would not already defeat.
+
+message WifiCredentials {
+  string ssid     = 1;
+  string password = 2;   // empty for an open network
+}
+
+// One visible access point, from GET /api/v1/scan. Exists so the portal can
+// offer a list rather than a text box — an SSID typed from memory is the most
+// common way provisioning fails.
+message AccessPoint {
+  string ssid    = 1;
+  int32  rssi    = 2;
+  uint32 channel = 3;
+  bool   secured = 4;
+}
+
+message ScanResult {
+  repeated AccessPoint aps = 1;
+}
+
 // ------------------------------------------------------------ device API --
 
 message DeviceInfo {

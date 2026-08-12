@@ -97,6 +97,18 @@ namespace ooe::pinled
          */
         esp_err_t walk(uint32_t ms_per_led);
 
+        /**
+         * @brief Drive the entire string to one colour, bypassing the map.
+         *
+         * For load measurement and bring-up. Like `walk`, this is about the
+         * string rather than the wiring, so every pixel lights whether or not
+         * a channel points at it.
+         *
+         * @warning At full white this is the worst-case current the string can
+         *          draw. Know your supply before calling it on a long string.
+         */
+        esp_err_t fill(uint8_t r, uint8_t g, uint8_t b);
+
         size_t led_count() const { return cfg_.led_count; }
 
         /// Highest refresh the driver can actually display, in **Hz**, given

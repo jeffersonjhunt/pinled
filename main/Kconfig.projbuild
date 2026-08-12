@@ -208,32 +208,32 @@ menu "pinled configuration"
     endmenu
 
     menu "Networking"
-        config PINLED_WIFI_SSID
-            string "Wi-Fi SSID (bench bring-up only; empty = SoftAP)"
-            default ""
+        config PINLED_RESCUE_GPIO
+            int "Rescue button GPIO (-1 = disabled)"
+            default 0
+            range -1 48
             help
-                Leave EMPTY for normal behaviour: the device raises its own
-                SoftAP and you join that. Set it only to put a bench board on
-                an existing network so the API can be reached from another
-                machine.
+                Held down on a RUNNING device, this erases the stored network
+                and restarts into the SoftAP (FR-UI-7) -- the way back in when
+                a router has been replaced and the controller is joining
+                nothing.
 
-                THIS IS A BRING-UP STOPGAP AND IS COMPILED INTO THE IMAGE.
-                FR-CFG-12 says Wi-Fi credentials live in NVS and appear in no
-                export at any privacy level; a Kconfig string satisfies
-                neither. M3 step 7 replaces this with provisioning, and these
-                two options are deleted then.
+                GPIO 0 is the BOOT button on both the QT Py and the DevKitC.
+                Note this is NOT the same as holding BOOT while resetting,
+                which puts the chip in ROM download mode before any firmware
+                runs.
 
-                `sdkconfig` is gitignored, so what you type here is not
-                committed -- but it IS readable in the built binary by anyone
-                holding the board. Do not use a network you care about, and do
-                not ship an image built with these set.
+                HARDWARE.md also gives this pin to the profiler re-arm, so the
+                two are split by duration: a short press is reserved for that,
+                a long hold does this.
 
-        config PINLED_WIFI_PASSWORD
-            string "Wi-Fi password (bring-up only)"
-            default ""
+        config PINLED_RESCUE_HOLD_MS
+            int "Rescue button hold (ms)"
+            default 5000
+            range 1000 30000
             help
-                See the warning on PINLED_WIFI_SSID. Empty means an open
-                network.
+                Long enough that nobody does it by accident while handling the
+                board, short enough that nobody gives up first.
 
         config PINLED_HOSTNAME
             string "mDNS hostname"
@@ -246,6 +246,25 @@ menu "pinled configuration"
                 Two boards on one network with the same name will collide;
                 mDNS resolves that by renaming one, so check the boot log for
                 the name actually claimed.
+
+        config PINLED_LED_LOAD_TEST
+            bool "Measure string current at boot (bring-up only)"
+            default n
+            help
+                Holds the WHOLE string at white, stepping 25/50/75/100% with
+                ten seconds at each level and a log line announcing the step,
+                so a meter in series with the string yields a curve rather
+                than a single number.
+
+                Exists because the 60 mA/LED in HARDWARE.md was a datasheet
+                worst case that nobody had measured, and the bench says
+                otherwise. A power budget is worth measuring once.
+
+                WARNING: this is the highest current the string can draw, and
+                it lasts 40 seconds. Check your supply against
+                led_count x (whatever you measure at 100%) before enabling it
+                on a long string. Leave it off otherwise -- it delays boot and
+                blinds anyone looking at the playfield.
     endmenu
 
     menu "Configuration store"

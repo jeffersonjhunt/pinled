@@ -144,6 +144,24 @@ namespace ooe::pinled
         return ESP_OK;
     }
 
+    esp_err_t LampMap::fill(uint8_t r, uint8_t g, uint8_t b)
+    {
+        if (!initialized_)
+            return ESP_ERR_INVALID_STATE;
+
+        tNeopixel *frame = static_cast<tNeopixel *>(frame_);
+        const uint32_t rgb = pack_for_order(cfg_.color_order, r, g, b);
+        for (size_t i = 0; i < cfg_.led_count; ++i)
+        {
+            frame[i].index = static_cast<uint32_t>(i);
+            frame[i].rgb = rgb;
+        }
+        return neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_),
+                                 frame, static_cast<uint32_t>(cfg_.led_count))
+                   ? ESP_OK
+                   : ESP_FAIL;
+    }
+
     esp_err_t LampMap::set_entry(size_t channel, const LampMapEntry &e)
     {
         if (channel >= cfg_.channel_count)

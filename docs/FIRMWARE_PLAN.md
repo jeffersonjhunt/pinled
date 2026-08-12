@@ -704,10 +704,80 @@ machine runs. Commissioning wants "turn the game on, press re-profile, watch
 the classes settle" — which means an API endpoint, and belongs with the
 profiler work rather than here.
 
-**Step 7 — provisioning (FR-UI-6/7).** Take ESP-IDF's `wifi_provisioning`
-component rather than writing credential exchange by hand; it assumes a
-companion app, so pair it with the DNS-hijack captive portal from IDF's own
-`protocols/http_server` example. Button-held rescue back to SoftAP.
+**Step 7 — provisioning (FR-UI-6/7). *(Done, 2026-08-12.)***
+
+**Written directly rather than with `wifi_provisioning`, and the plan above was
+wrong about that.** `wifi_provisioning` speaks protocomm — protobuf over a
+custom endpoint with an X25519 + AES-CTR handshake, designed for Espressif's
+phone app. FR-UI-6 wants a page *self-contained on the device*, so using the
+component would have meant writing that entire client in JavaScript, by hand,
+with crypto. It saves writing credential exchange and costs far more writing
+the thing that talks to it. There is also nothing to protect: the API is
+deliberately unauthenticated (FR-UI-3), identity is the factory MAC with no
+stored secret (FR-REG-1), and the exchange happens on an AP the user is
+standing beside.
+
+What landed instead, on top of step 5's server: `POST /api/v1/provision`
+taking a `WifiCredentials` protobuf, `GET /api/v1/scan` listing visible
+networks, and a captive portal — DNS hijack plus the probe URLs each OS uses
+to decide a network is captive.
+
+**Credentials live in NVS and nowhere else** (FR-CFG-12), in their own
+namespace. `InstallConfig` still has no field for them and the `.proto` says
+not to add one: two independent barriers, because "remember not to export
+this" survives exactly as long as the person who wrote it. They are **not**
+encrypted — NVS encryption without secure boot is a lock beside its key — so
+treat a board as carrying the credentials of any network it has joined.
+
+The portal page fetches nothing. It hand-rolls two protobuf fields in about
+ten lines of JavaScript rather than shipping a schema library to a
+microcontroller, and it lists networks from `/scan` because an SSID typed from
+memory is the commonest way provisioning fails.
+
+**Rescue** (FR-UI-7) is GPIO 0 held for 5 s on a *running* device — distinct
+from holding BOOT at reset, which is ROM download mode. `HARDWARE.md` also
+gives that pin to the profiler re-arm step 6 showed we need, so the two are
+split by duration and a short press is logged and ignored, deliberately.
+
+Two behaviours worth knowing: a provisioned device that **cannot reach its
+network falls back to the SoftAP** rather than sitting unreachable — someone
+whose router died needs a way in that is not a USB cable; and the scan is
+**de-duplicated by SSID**, because the bench returned four entries for two
+networks and a dropdown offering the same name three times asks a question
+nobody can answer.
+
+**The build-time credentials are gone**, as their own help text promised.
+Verified in the right order: provisioned over the LAN, confirmed the next boot
+joined *without* the build-time warning, and only then deleted the options and
+reflashed — the board still joins, so NVS is demonstrably the only source.
+
+**157 host cases green**, both golden fixtures byte-identical after the schema
+addition, and the `fs_seed` documents checked against their JSON.
+
+**Verified end to end on the bench**, including the half a wired build host
+cannot reach: BOOT held five seconds wiped the network and dropped the board
+into `pinled-82F6DD`; a phone joined and **the setup page popped by itself**;
+both networks appeared in the list; provisioning through the page stored the
+credentials, restarted, rejoined, and `pinled.local` answered 200.
+
+**Two bugs, and both were tested-in-the-wrong-state.** The SoftAP came up in
+`WIFI_MODE_AP`, and `esp_wifi_scan_start` needs a station interface — so the
+scan endpoint worked perfectly in the one state where nobody needs it (already
+joined to a LAN) and returned nothing in the only state that matters. Then
+`APSTA` alone was not enough: the shared event handler called
+`esp_wifi_connect()` on `STA_START`, which now fired for the station interface
+that exists purely to make scanning legal, leaving the driver permanently
+"connecting" and refusing scans. It connects deliberately now.
+
+Scanning is done **once at boot and cached**, not on demand: a scan hops
+channels and the AP cannot follow, so scanning when the page asks would
+disconnect the phone that asked.
+
+**And a design gap the bugs exposed:** the page offered a dropdown and nothing
+else, so an empty list was a dead end. That was wrong even with the scan
+working — a hidden network appears in no scan at all — so manual entry is now
+unconditional and the typed name wins when present. The failure was the scan;
+the fault was a form with one path through it.
 
 Two things to measure rather than assume along the way: **heap** — Wi-Fi, lwIP
 and httpd together are on the order of 50–80 KB and nothing has checked that

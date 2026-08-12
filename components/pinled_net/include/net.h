@@ -38,13 +38,24 @@
 #include "esp_err.h"
 #include "esp_netif.h"
 
+#include "credentials.h"
+
 namespace ooe::pinled
 {
     enum class NetMode
     {
         None = 0,
-        Station,  ///< joined an existing network (bring-up only)
-        SoftAp,   ///< raised our own (FR-UI-6)
+        Station, ///< joined an existing network
+        SoftAp,  ///< raised our own, awaiting provisioning (FR-UI-6)
+    };
+
+    /// One visible access point, for the provisioning page's list.
+    struct ApInfo
+    {
+        char ssid[kMaxSsid]{};
+        int8_t rssi{0};
+        uint8_t channel{0};
+        bool secured{false};
     };
 
     class Net
@@ -79,8 +90,32 @@ namespace ooe::pinled
         /// True once station mode holds an address, or SoftAP is running.
         bool up() const { return up_; }
 
+        /**
+         * @brief Scan for visible access points, strongest first.
+         *
+         * Offered so the provisioning page can present a list: an SSID typed
+         * from memory is the most common way provisioning fails, and the
+         * device already knows what it can hear.
+         *
+         * @return number written to @p out.
+         *
+         * @note Blocks for about a second and briefly interrupts traffic —
+         *       the radio cannot listen on every channel and hold an
+         *       association at once. Called from a request handler, never from
+         *       a loop.
+         */
+        size_t scan(ApInfo *out, size_t cap);
+
+        /// How many networks the boot-time scan cached. Zero in station mode,
+        /// where scanning is done live.
+        size_t cached_networks() const { return cached_count_; }
+
+        /// True when the device came up unprovisioned and is waiting for
+        /// someone to tell it about a network.
+        bool awaiting_provisioning() const { return mode_ == NetMode::SoftAp; }
+
     private:
-        esp_err_t start_station();
+        esp_err_t start_station(const WifiCredentials &creds);
         esp_err_t start_softap();
         esp_err_t start_mdns();
 
@@ -93,7 +128,20 @@ namespace ooe::pinled
         bool up_{false};
         char ip_[16]{"0.0.0.0"};
         char hostname_[32]{};
+        /// Networks seen at boot, before the AP had a client to disturb.
+        /// See the note in start_softap() for why this is not scanned on
+        /// demand.
+        static constexpr size_t kMaxCached = 20;
+        ApInfo cached_[kMaxCached]{};
+        size_t cached_count_{0};
+
+        size_t do_scan(ApInfo *out, size_t cap);
+
         esp_netif_t *netif_{nullptr};
+        /// Whether WIFI_EVENT_STA_START should try to associate. False in
+        /// SoftAP mode, where the station interface exists only to make
+        /// scanning legal.
+        bool want_sta_connect_{false};
         int retries_{0};
         void *connected_{nullptr}; ///< EventGroupHandle_t, opaque here
     };

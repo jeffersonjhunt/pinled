@@ -90,6 +90,24 @@ namespace ooe::pinled
         ESP_ERROR_CHECK(map_.init(mc));
         clamp_refresh(); // FR-LED-8
 
+#ifdef CONFIG_PINLED_LED_LOAD_TEST
+        // Bring-up only: hold the string at rising brightness so a meter in
+        // series can be read at each step. Before the render task exists, so
+        // nothing else is touching the strip.
+        {
+            const uint8_t steps[] = {64, 128, 191, 255};
+            for (uint8_t v : steps)
+            {
+                ESP_LOGW(TAG, "load test: %u%% white on %u LEDs — read the meter now",
+                         (unsigned)((v * 100u + 127u) / 255u), (unsigned)cfg_.led_count);
+                map_.fill(v, v, v);
+                vTaskDelay(pdMS_TO_TICKS(10000));
+            }
+            map_.fill(0, 0, 0);
+            ESP_LOGW(TAG, "load test: done, string dark");
+        }
+#endif
+
 #ifdef CONFIG_PINLED_STARTUP_WALK
         // Before anything is sensed or mapped: prove the string itself works.
         // Deliberately here rather than after apply_channel_config(), so a
@@ -147,6 +165,10 @@ namespace ooe::pinled
 
         if (api_.start(store_, cfg_, channels_, num_channels_, net_, live_) != ESP_OK)
             ESP_LOGE(TAG, "API did not start");
+
+        // FR-UI-7. Started whatever mode we came up in: the rescue is most
+        // useful on a device that thinks it is provisioned and is wrong.
+        rescue_button_start(CONFIG_PINLED_RESCUE_GPIO, CONFIG_PINLED_RESCUE_HOLD_MS);
     }
 
     void Main::apply_channel_config()

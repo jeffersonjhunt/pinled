@@ -26,6 +26,7 @@
 #include "pb_encode.h"
 #include "pinled.pb.h"
 #include "pinled_doc_file.h"
+#include "credentials.h"
 #include "pinled_resolve.h"
 
 namespace ooe::pinled
@@ -49,6 +50,7 @@ namespace ooe::pinled
             const ChannelConfig *channels;
             size_t count;
             const Net *net;
+            Net *net_mutable; ///< scanning is not a const operation
             LiveState *live;
             httpd_handle_t server;
         };
@@ -182,6 +184,209 @@ namespace ooe::pinled
             esp_timer_handle_t t = nullptr;
             if (esp_timer_create(&args, &t) == ESP_OK)
                 esp_timer_start_once(t, kRestartDelayUs);
+        }
+
+        // --- captive portal ------------------------------------------------
+        //
+        // Self-contained on the device (FR-UI-6): no CDN, no font, no
+        // framework, nothing fetched. A setup page that needs the internet to
+        // tell a device about the internet is a page that does not work.
+        //
+        // It is also deliberately plain. This is seen once per device, on a
+        // phone, by someone standing next to a pinball machine — the job is a
+        // list, a box and a button.
+        constexpr char kPortalPage[] =
+            "<!doctype html><meta charset=utf-8>"
+            "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+            "<title>pinled setup</title>"
+            "<style>"
+            "body{font:16px system-ui,sans-serif;margin:0;padding:24px;"
+            "background:#12100D;color:#EDE6DA}"
+            "h1{font-size:20px;margin:0 0 4px}p{color:#9A9086;margin:0 0 20px}"
+            "label{display:block;margin:16px 0 6px;font-size:13px;color:#9A9086}"
+            "select,input,button{width:100%;box-sizing:border-box;font-size:16px;"
+            "padding:12px;border-radius:8px;border:1px solid #3A342C;"
+            "background:#1C1915;color:#EDE6DA}"
+            "button{margin-top:24px;background:#FFB23F;color:#12100D;border:0;"
+            "font-weight:600}"
+            "#s{margin-top:16px;color:#9A9086;font-size:14px}"
+            "</style>"
+            "<h1>pinled</h1><p>Choose the network this controller should join.</p>"
+            "<label for=n>Network</label><select id=n></select>"
+            // Always present, never conditional on the scan. A hidden network
+            // appears in no scan at all, and a scan that finds nothing must
+            // still leave a way forward — the first version offered a dropdown
+            // and nothing else, so an empty list was a dead end.
+            "<label for=m>...or type the name</label>"
+            "<input id=m autocomplete=off autocapitalize=none spellcheck=false "
+            "placeholder=\"for a hidden network\">"
+            "<label for=p>Password</label>"
+            "<input id=p type=password autocomplete=current-password placeholder=\"leave empty if open\">"
+            "<button onclick=save()>Join</button><div id=s></div>"
+            "<script>"
+            "var S=document.getElementById('s');"
+            // Protobuf by hand, because the whole schema in a page served off
+            // a microcontroller would be absurd for two strings. Field 1 and
+            // field 2, both length-delimited.
+            "function f(n,v){var b=new TextEncoder().encode(v);"
+            "var o=[n<<3|2];var l=b.length;while(l>127){o.push(l&127|128);l>>=7}o.push(l);"
+            "return o.concat(Array.from(b))}"
+            "fetch('/api/v1/scan').then(r=>r.arrayBuffer()).then(b=>{"
+            "var d=new Uint8Array(b),i=0,o=document.getElementById('n');"
+            "while(i<d.length){var k=d[i++];if((k>>3)!=1||(k&7)!=2)break;"
+            "var n=d[i++],e=i+n,ss='';"
+            "while(i<e){var k2=d[i++],t=k2>>3,w=k2&7;"
+            "if(w==2){var m=d[i++];if(t==1)ss=new TextDecoder().decode(d.slice(i,i+m));i+=m}"
+            "else if(w==0){while(d[i]&128)i++;i++}else break}"
+            "if(ss){var op=document.createElement('option');op.textContent=ss;o.appendChild(op)}}"
+            "if(!o.options.length){"
+            "var op=document.createElement('option');op.textContent='(none found)';"
+            "op.value='';o.appendChild(op);"
+            "S.textContent='No networks found — type the name below.'}"
+            "}).catch(e=>{S.textContent='Scan unavailable — type the name below.'});"
+            "function save(){"
+            // The typed name wins when present: someone who filled it in meant
+            // it, and the dropdown may be showing a placeholder.
+            "var ss=document.getElementById('m').value.trim()"
+            "||document.getElementById('n').value,"
+            "pw=document.getElementById('p').value;"
+            "if(!ss){S.textContent='Pick a network or type its name.';return}"
+            "S.textContent='Joining '+ss+'...';"
+            "var body=new Uint8Array(f(1,ss).concat(pw?f(2,pw):[]));"
+            "fetch('/api/v1/provision',{method:'POST',"
+            "headers:{'Content-Type':'application/x-protobuf'},body:body})"
+            ".then(r=>{S.textContent=r.ok?"
+            "'Accepted. The controller is restarting and will join '+ss+'. "
+            "This network will disappear.':'Rejected ('+r.status+')'})"
+            ".catch(e=>{S.textContent='Sent; the controller is restarting.'})}"
+            "</script>";
+
+        esp_err_t get_portal(httpd_req_t *req)
+        {
+            add_cors(req);
+            httpd_resp_set_type(req, "text/html");
+            return httpd_resp_send(req, kPortalPage, HTTPD_RESP_USE_STRLEN);
+        }
+
+        /// Every OS probes a different URL to decide whether a network is
+        /// captive. Redirecting them all is what makes the phone pop the page
+        /// by itself instead of the user being told to type an IP address.
+        esp_err_t redirect_to_portal(httpd_req_t *req)
+        {
+            httpd_resp_set_status(req, "302 Found");
+            httpd_resp_set_hdr(req, "Location", "/");
+            return httpd_resp_send(req, nullptr, 0);
+        }
+
+        esp_err_t get_scan(httpd_req_t *req)
+        {
+            auto *aps = new (std::nothrow) ApInfo[20];
+            if (aps == nullptr)
+                return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+
+            const size_t n = g_ctx.net_mutable->scan(aps, 20);
+
+            pinled_v1_ScanResult result = pinled_v1_ScanResult_init_zero;
+            result.aps_count = static_cast<pb_size_t>(n);
+            for (size_t i = 0; i < n; ++i)
+            {
+                std::snprintf(result.aps[i].ssid, sizeof(result.aps[i].ssid), "%s", aps[i].ssid);
+                result.aps[i].rssi = aps[i].rssi;
+                result.aps[i].channel = aps[i].channel;
+                result.aps[i].secured = aps[i].secured;
+            }
+            delete[] aps;
+
+            uint8_t buf[pinled_v1_ScanResult_size];
+            pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
+            if (!pb_encode(&os, pinled_v1_ScanResult_fields, &result))
+                return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "encode failed");
+            return send_protobuf(req, buf, os.bytes_written);
+        }
+
+        esp_err_t post_provision(httpd_req_t *req)
+        {
+            const size_t len = static_cast<size_t>(req->content_len);
+            if (len == 0 || len > 256)
+                return fail(req, HTTPD_400_BAD_REQUEST, "implausible credential body");
+
+            uint8_t body[256];
+            size_t got = 0;
+            int stalls = 0;
+            while (got < len)
+            {
+                const int n = httpd_req_recv(req, reinterpret_cast<char *>(body) + got,
+                                             len - got);
+                if (n == HTTPD_SOCK_ERR_TIMEOUT)
+                {
+                    if (++stalls > 4)
+                        return fail(req, HTTPD_408_REQ_TIMEOUT, "body never arrived");
+                    continue;
+                }
+                if (n <= 0)
+                    return fail(req, HTTPD_400_BAD_REQUEST, "truncated body");
+                stalls = 0;
+                got += static_cast<size_t>(n);
+            }
+
+            pinled_v1_WifiCredentials msg = pinled_v1_WifiCredentials_init_zero;
+            pb_istream_t is = pb_istream_from_buffer(body, got);
+            if (!pb_decode(&is, pinled_v1_WifiCredentials_fields, &msg))
+                return fail(req, HTTPD_400_BAD_REQUEST, "not valid credentials");
+            if (msg.ssid[0] == '\0')
+                return fail(req, HTTPD_400_BAD_REQUEST, "empty ssid");
+
+            WifiCredentials creds{};
+            std::snprintf(creds.ssid, sizeof(creds.ssid), "%s", msg.ssid);
+            std::snprintf(creds.password, sizeof(creds.password), "%s", msg.password);
+
+            // Wiped from the request buffer immediately. It still exists in
+            // NVS and in the radio's config, so this is hygiene rather than a
+            // guarantee — but a passphrase has no business lingering in a heap
+            // block that the next request will reuse.
+            std::memset(body, 0, sizeof(body));
+            std::memset(&msg, 0, sizeof(msg));
+
+            if (credentials_save(creds) != ESP_OK)
+                return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not store");
+
+            pinled_v1_ApplyResult result = pinled_v1_ApplyResult_init_zero;
+            result.accepted = true;
+            result.restarted = true;
+            std::snprintf(result.message, sizeof(result.message),
+                          "provisioned; restarting to join");
+
+            uint8_t out[pinled_v1_ApplyResult_size];
+            pb_ostream_t os = pb_ostream_from_buffer(out, sizeof(out));
+            pb_encode(&os, pinled_v1_ApplyResult_fields, &result);
+
+            const esp_err_t err = send_protobuf(req, out, os.bytes_written);
+            restart_soon();
+            return err;
+        }
+
+        /// Forget the network and restart into the SoftAP — the same outcome
+        /// as the button hold (FR-UI-7), reachable from the UI. Someone
+        /// moving a machine to a new building should not have to open the
+        /// cabinet to do it.
+        esp_err_t delete_provision(httpd_req_t *req)
+        {
+            if (credentials_erase() != ESP_OK)
+                return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not erase");
+
+            pinled_v1_ApplyResult result = pinled_v1_ApplyResult_init_zero;
+            result.accepted = true;
+            result.restarted = true;
+            std::snprintf(result.message, sizeof(result.message),
+                          "network forgotten; restarting into setup mode");
+
+            uint8_t out[pinled_v1_ApplyResult_size];
+            pb_ostream_t os = pb_ostream_from_buffer(out, sizeof(out));
+            pb_encode(&os, pinled_v1_ApplyResult_fields, &result);
+
+            const esp_err_t err = send_protobuf(req, out, os.bytes_written);
+            restart_soon();
+            return err;
         }
 
         // ------------------------------------------------------------ GET --
@@ -554,12 +759,22 @@ namespace ooe::pinled
                          const Net &net,
                          LiveState &live)
     {
-        g_ctx = {&store, &running, channels, count, &net, &live, nullptr};
+        g_ctx.store = &store;
+        g_ctx.running = &running;
+        g_ctx.channels = channels;
+        g_ctx.count = count;
+        g_ctx.net = &net;
+        // Scanning retunes the radio, so it cannot be const — but everything
+        // else about Net is read-only from here, and the reference the caller
+        // hands us says so.
+        g_ctx.net_mutable = const_cast<Net *>(&net);
+        g_ctx.live = &live;
+        g_ctx.server = nullptr;
 
         httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
         // Nine handlers below, and the default cap is eight — which fails at
         // registration time with a log line nobody reads.
-        cfg.max_uri_handlers = 16;
+        cfg.max_uri_handlers = 32;
         cfg.max_open_sockets = 7;
         // LRU purging closes the least recently used socket when a new one
         // arrives — and a live WebSocket looks idle to httpd, because the
@@ -600,6 +815,21 @@ namespace ooe::pinled
             {"/api/v1/profile", HTTP_PUT, put_profile},
             {"/api/v1/profile", HTTP_DELETE, delete_profile},
             {"/api/v1/profile", HTTP_OPTIONS, handle_options},
+            {"/api/v1/scan", HTTP_GET, get_scan},
+            {"/api/v1/provision", HTTP_POST, post_provision},
+            {"/api/v1/provision", HTTP_DELETE, delete_provision},
+            {"/api/v1/provision", HTTP_OPTIONS, handle_options},
+            // The portal itself, plus the URLs each OS probes to decide a
+            // network is captive. Registering them explicitly rather than with
+            // a wildcard keeps the API paths unambiguous.
+            {"/", HTTP_GET, get_portal},
+            {"/generate_204", HTTP_GET, redirect_to_portal},          // Android
+            {"/gen_204", HTTP_GET, redirect_to_portal},               // Android, older
+            {"/hotspot-detect.html", HTTP_GET, redirect_to_portal},   // iOS, macOS
+            {"/library/test/success.html", HTTP_GET, redirect_to_portal},
+            {"/connecttest.txt", HTTP_GET, redirect_to_portal},       // Windows
+            {"/ncsi.txt", HTTP_GET, redirect_to_portal},              // Windows
+            {"/canonical.html", HTTP_GET, redirect_to_portal},        // Firefox
         };
         for (const auto &r : routes)
         {

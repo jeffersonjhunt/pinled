@@ -31,6 +31,7 @@
 
 #include "api.h"
 #include "net.h"
+#include "rescue.h"
 
 #include "pinled_apply.h"
 #include "pinled_channel_config.h"

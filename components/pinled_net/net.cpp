@@ -6,12 +6,15 @@
 
 #include "net.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_wifi.h"
+#include "dns_hijack.h"
 #include "mdns.h"
 #include "sdkconfig.h"
 
@@ -36,9 +39,15 @@ namespace ooe::pinled
         /// not look like a hang.
         constexpr TickType_t kJoinTimeout = pdMS_TO_TICKS(20000);
 
-        bool have_credentials()
+        /// NVS is now the only source. The build-time credentials that got
+        /// step 5 onto a network are gone, as their own help text promised:
+        /// FR-CFG-12 wants credentials in NVS and absent from every export,
+        /// and a compiled-in string was readable in any image built from this
+        /// tree. An unprovisioned device raises the SoftAP instead, which is
+        /// the shipping behaviour and no longer a fallback.
+        bool resolve_credentials(WifiCredentials &out)
         {
-            return sizeof(CONFIG_PINLED_WIFI_SSID) > 1;
+            return credentials_load(out) == ESP_OK && out.valid();
         }
     } // namespace
 
@@ -50,7 +59,13 @@ namespace ooe::pinled
         switch (id)
         {
         case WIFI_EVENT_STA_START:
-            esp_wifi_connect();
+            // Only when we actually mean to join something. In SoftAP mode the
+            // station interface exists purely so a scan is legal (APSTA), and
+            // connecting it with an empty config puts the driver in a
+            // "connecting" state that refuses scans outright — which presented
+            // as an empty network list on the setup page.
+            if (self->want_sta_connect_)
+                esp_wifi_connect();
             break;
         case WIFI_EVENT_STA_DISCONNECTED:
             if (self->retries_ < kMaxRetries)
@@ -96,7 +111,10 @@ namespace ooe::pinled
         ESP_ERROR_CHECK(esp_netif_init());
         ESP_ERROR_CHECK(esp_event_loop_create_default());
 
-        const esp_err_t err = have_credentials() ? start_station() : start_softap();
+        WifiCredentials creds{};
+        const bool provisioned = resolve_credentials(creds);
+
+        const esp_err_t err = provisioned ? start_station(creds) : start_softap();
         if (err != ESP_OK)
             return err;
 
@@ -111,10 +129,9 @@ namespace ooe::pinled
         return ESP_OK;
     }
 
-    esp_err_t Net::start_station()
+    esp_err_t Net::start_station(const WifiCredentials &creds)
     {
-        ESP_LOGW(TAG, "station mode with BUILD-TIME credentials — bring-up only, "
-                      "replaced by provisioning at step 7 (FR-CFG-12)");
+        want_sta_connect_ = true;
 
         auto group = xEventGroupCreate();
         connected_ = group;
@@ -128,11 +145,17 @@ namespace ooe::pinled
         ESP_ERROR_CHECK(esp_event_handler_instance_register(
             IP_EVENT, IP_EVENT_STA_GOT_IP, &Net::on_ip_event, this, nullptr));
 
+        // memcpy, not snprintf: the driver's fields are fixed 32/64-byte
+        // arrays that are NOT NUL-terminated when full, so a 32-character SSID
+        // — perfectly legal — has no room for the terminator snprintf insists
+        // on writing. cfg is zero-initialised, so a short name is padded.
         wifi_config_t cfg{};
-        std::snprintf(reinterpret_cast<char *>(cfg.sta.ssid), sizeof(cfg.sta.ssid),
-                      "%s", CONFIG_PINLED_WIFI_SSID);
-        std::snprintf(reinterpret_cast<char *>(cfg.sta.password), sizeof(cfg.sta.password),
-                      "%s", CONFIG_PINLED_WIFI_PASSWORD);
+        const size_t ssid_len =
+            std::min(std::strlen(creds.ssid), sizeof(cfg.sta.ssid));
+        const size_t pass_len =
+            std::min(std::strlen(creds.password), sizeof(cfg.sta.password));
+        std::memcpy(cfg.sta.ssid, creds.ssid, ssid_len);
+        std::memcpy(cfg.sta.password, creds.password, pass_len);
 
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
@@ -154,7 +177,7 @@ namespace ooe::pinled
         // The SSID is logged and the password is not. Anyone with the board can
         // read both out of the flash, so this is tidiness rather than security
         // — but a log that gets pasted into a bug report should not carry it.
-        ESP_LOGI(TAG, "joining \"%s\"...", CONFIG_PINLED_WIFI_SSID);
+        ESP_LOGI(TAG, "joining \"%s\"...", creds.ssid);
 
         const EventBits_t bits = xEventGroupWaitBits(
             group, kConnectedBit | kFailedBit, pdFALSE, pdFALSE, kJoinTimeout);
@@ -166,19 +189,26 @@ namespace ooe::pinled
             return ESP_OK;
         }
 
-        // Deliberately not an error return. A board that cannot reach the
-        // configured network must still finish booting and still run the scan
-        // and render path; the lamps working is not contingent on Wi-Fi.
-        ESP_LOGE(TAG, "%s — the API will not be reachable",
+        // A provisioned device that cannot reach its network falls back to
+        // the SoftAP rather than sitting unreachable (FR-UI-6). Someone whose
+        // router was replaced needs a way in, and the alternative is a board
+        // that can only be recovered with a USB cable.
+        ESP_LOGE(TAG, "%s — falling back to the SoftAP so the device can be reached",
                  (bits & kFailedBit) ? "join failed" : "join timed out");
-        mode_ = NetMode::Station;
-        up_ = false;
-        return ESP_OK;
+        esp_wifi_stop();
+        esp_wifi_deinit();
+        return start_softap();
     }
 
     esp_err_t Net::start_softap()
     {
+        // The station interface is created and started but never asked to
+        // connect: it exists so esp_wifi_scan_start has something to scan
+        // with.
+        want_sta_connect_ = false;
+
         netif_ = esp_netif_create_default_wifi_ap();
+        esp_netif_create_default_wifi_sta();
 
         wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
         ESP_ERROR_CHECK(esp_wifi_init(&init));
@@ -203,9 +233,20 @@ namespace ooe::pinled
         // not a secret, only an obstacle.
         cfg.ap.authmode = WIFI_AUTH_OPEN;
 
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+        // APSTA, not AP. esp_wifi_scan_start needs a station interface to
+        // exist, and without one the provisioning page offers an empty list —
+        // which is exactly how this shipped, because scanning had only ever
+        // been exercised on a board already joined to a network.
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &cfg));
         ESP_ERROR_CHECK(esp_wifi_start());
+        ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+
+        // Scanned once, here, before the AP has a client to disturb. The
+        // result is served from cache for the life of this boot.
+        cached_count_ = do_scan(cached_, kMaxCached);
+        ESP_LOGI(TAG, "cached %u network(s) for the setup page",
+                 (unsigned)cached_count_);
 
         esp_netif_ip_info_t info{};
         if (netif_ && esp_netif_get_ip_info(netif_, &info) == ESP_OK)
@@ -213,8 +254,101 @@ namespace ooe::pinled
 
         mode_ = NetMode::SoftAp;
         up_ = true;
-        ESP_LOGI(TAG, "SoftAP \"%s\" (open) up", reinterpret_cast<char *>(cfg.ap.ssid));
+
+        // Only here, never in station mode: hijacking DNS on someone's home
+        // network would be indefensible; on an AP we raised, for as long as
+        // somebody is typing a password into it, it IS the mechanism.
+        if (info.ip.addr != 0)
+            dns_hijack_start(info.ip.addr);
+
+        ESP_LOGI(TAG, "SoftAP \"%s\" (open) up — join it and any web address "
+                      "will land on the setup page",
+                 reinterpret_cast<char *>(cfg.ap.ssid));
         return ESP_OK;
+    }
+
+    size_t Net::scan(ApInfo *out, size_t cap)
+    {
+        if (out == nullptr || cap == 0)
+            return 0;
+
+        // In SoftAP mode, serve the list captured at boot rather than
+        // scanning now. A scan hops channels, and the AP cannot follow — so
+        // scanning on demand would disconnect the very phone that asked for
+        // the list, which reads as "the setup page is broken".
+        if (mode_ == NetMode::SoftAp)
+        {
+            const size_t n = cached_count_ < cap ? cached_count_ : cap;
+            for (size_t i = 0; i < n; ++i)
+                out[i] = cached_[i];
+            return n;
+        }
+
+        return do_scan(out, cap);
+    }
+
+    size_t Net::do_scan(ApInfo *out, size_t cap)
+    {
+        if (out == nullptr || cap == 0)
+            return 0;
+
+        wifi_scan_config_t sc{};
+        sc.show_hidden = false;
+        if (esp_wifi_scan_start(&sc, true) != ESP_OK)
+            return 0;
+
+        uint16_t found = 0;
+        esp_wifi_scan_get_ap_num(&found);
+        if (found == 0)
+            return 0;
+
+        // Bounded before allocating: a crowded band can return dozens, and the
+        // list is for a person to choose from.
+        const uint16_t want = found > 32 ? 32 : found;
+        auto *records = new (std::nothrow) wifi_ap_record_t[want];
+        if (records == nullptr)
+        {
+            esp_wifi_scan_get_ap_records(&found, nullptr); // release the driver's copy
+            return 0;
+        }
+
+        uint16_t got = want;
+        esp_wifi_scan_get_ap_records(&got, records);
+
+        // The driver already returns these strongest-first, which is the order
+        // a person wants: their own network is almost always the loudest.
+        //
+        // De-duplicated by name, keeping the first (strongest) sighting. A
+        // dual-band router or a mesh presents the same SSID several times, and
+        // a dropdown offering "Pekitanoui" three identical times asks the user
+        // a question they cannot answer — observed on the bench, four entries
+        // for two networks.
+        size_t n = 0;
+        for (uint16_t i = 0; i < got && n < cap; ++i)
+        {
+            if (records[i].ssid[0] == '\0')
+                continue; // hidden or malformed; nothing to offer
+
+            const char *name = reinterpret_cast<const char *>(records[i].ssid);
+            bool seen = false;
+            for (size_t j = 0; j < n; ++j)
+                if (std::strcmp(out[j].ssid, name) == 0)
+                {
+                    seen = true;
+                    break;
+                }
+            if (seen)
+                continue;
+
+            std::snprintf(out[n].ssid, sizeof(out[n].ssid), "%s", name);
+            out[n].rssi = records[i].rssi;
+            out[n].channel = records[i].primary;
+            out[n].secured = records[i].authmode != WIFI_AUTH_OPEN;
+            ++n;
+        }
+        delete[] records;
+        ESP_LOGI(TAG, "scan: %u visible, %u distinct networks", (unsigned)got, (unsigned)n);
+        return n;
     }
 
     esp_err_t Net::start_mdns()

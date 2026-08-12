@@ -40,6 +40,21 @@ pinled.v1.Version.label             max_size:64
 pinled.v1.Version.created           max_size:32
 pinled.v1.Version.parent            max_size:32
 
+# --- provisioning -------------------------------------------------------------
+#
+# 32 is the SSID maximum in 802.11; 64 is the WPA2 passphrase maximum. Both are
+# the standard's limits rather than a choice, so a credential that does not fit
+# here could not have worked anyway.
+
+pinled.v1.WifiCredentials.ssid      max_size:33
+pinled.v1.WifiCredentials.password  max_size:65
+pinled.v1.AccessPoint.ssid          max_size:33
+
+# A scan on a crowded band routinely sees more than this; the list is for a
+# human to pick from, and it is sorted by signal so the truncation drops the
+# ones nobody would choose.
+pinled.v1.ScanResult.aps            max_count:20
+
 # --- device API --------------------------------------------------------------
 
 pinled.v1.DeviceInfo.firmware_version max_size:16

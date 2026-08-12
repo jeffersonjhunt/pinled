@@ -271,7 +271,9 @@ What does remain:
 - **Batch the frame.** One `neopixel_SetPixel()` call with the full pixel array
   per frame. The POC calls it once per channel inside the render loop, and each
   call pushes the entire strip — 128 full transmits per frame.
-- **Power cap (FR-LED-7).** 128 LEDs at the warm-white base is ~6 A / 30 W worst
+- **Power cap (FR-LED-7).** Supported by measurement as of 2026-08-11: 16 LEDs
+  at 50% white drew 530 mA, i.e. ~66 mA/LED extrapolated to full, against the
+  ~60 mA assumed here. See `HARDWARE.md`. 128 LEDs at the warm-white base is ~6 A / 30 W worst
   case. A global brightness/current budget belongs in the render path, not in
   polish.
 - **Level shift.** WS2812B wants V_IH ≥ 0.7 × VDD = 3.5 V; a 3.3 V S3 output is
