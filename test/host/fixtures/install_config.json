@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "geometry": {
+    "num_modules": 4,
+    "channels_per_module": 16,
+    "led_count": 64
+  },
+  "pins": {
+    "clk": 18,
+    "pl": 17,
+    "data": 9,
+    "led": 8
+  },
+  "scan": {
+    "sample_rate_hz": 10000,
+    "spi_hz": 4000000,
+    "spi_mode": 2,
+    "active_low": false,
+    "pl_from_cs": true
+  },
+  "render": {
+    "refresh_hz": 90,
+    "gamma_x100": 220,
+    "brightness_cap": 180
+  },
+  "wiring": [
+    { "channel": 0, "lamp": 17, "led_index": 0 },
+    { "channel": 4, "lamp": 45, "led_index": 4 }
+  ]
+}

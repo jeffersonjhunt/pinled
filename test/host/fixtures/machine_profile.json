@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "profile_id": "01J8QK7ZC3",
+  "revision": 3,
+  "machine": {
+    "make": "Bally",
+    "model": "Eight Ball Deluxe",
+    "year": 1981,
+    "lamp_count": 60
+  },
+  "author": {
+    "handle": "jhunt",
+    "verified": true
+  },
+  "lamps": [
+    {
+      "lamp": 17,
+      "name": "Left Drop Target",
+      "color": { "r": 0, "g": 80, "b": 255 },
+      "class_lock": "DRIVE_CLASS_STEADY",
+      "attack_ms": 30,
+      "decay_ms": 40,
+      "gain_permille": 1000
+    },
+    {
+      "lamp": 45,
+      "name": "GI Upper Left",
+      "color": { "r": 255, "g": 233, "b": 196 },
+      "class_lock": "DRIVE_CLASS_AC_STEADY",
+      "attack_ms": 0,
+      "decay_ms": 0,
+      "gain_permille": 0
+    }
+  ]
+}

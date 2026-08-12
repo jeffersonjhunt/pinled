@@ -27,7 +27,10 @@
 #include <cstdint>
 
 #include "esp_err.h"
+
 #include "driver/gpio.h"
+
+#include "pinled_color_order.h"
 
 namespace ooe::pinled
 {
@@ -44,6 +47,9 @@ namespace ooe::pinled
         gpio_num_t led_pin{GPIO_NUM_NC};
         size_t led_count{0};
         size_t channel_count{0};
+        /// Byte order the strip expects (FR-CFG-6). Default GRB — standard
+        /// WS2812B, and what this driver emits natively.
+        ColorOrder color_order{ColorOrder::UNSPECIFIED};
     };
 
     class LampMap
@@ -64,6 +70,44 @@ namespace ooe::pinled
          * pure function of `levels[]` rather than of what was shown before.
          */
         esp_err_t render(const uint8_t *levels, size_t n);
+
+        /**
+         * @brief Walk a single lit pixel along the whole string, in order.
+         *
+         * A power-on proof that every LED is present, wired the right way
+         * round, and reachable — end to end, before any lamp has been sensed.
+         * A WS2812 string is a shift register in disguise: one dead pixel or
+         * one bad joint kills everything after it, and without this the
+         * symptom is "the far half of my playfield does nothing", which reads
+         * as a configuration fault and is not one.
+         *
+         * Deliberately bypasses the channel map. This tests the STRING, not
+         * the wiring — an LED with no channel mapped to it must still light
+         * here, or the test would only ever confirm what is already
+         * configured.
+         *
+         * @param ms_per_led dwell per LED; 0 skips the walk entirely
+         *
+         * @note One pixel at a time, not a cumulative fill. A full string of
+         *       white is ~60 mA a pixel — 7.7 A at the 128-LED maximum, which
+         *       would brown out most bench supplies. A single dot is 60 mA
+         *       whatever the string length.
+         * @note Blocks for `led_count * ms_per_led`. Called before the render
+         *       task starts, so nothing is competing for the strip.
+         */
+        esp_err_t walk(uint32_t ms_per_led);
+
+        /**
+         * @brief Drive the entire string to one colour, bypassing the map.
+         *
+         * For load measurement and bring-up. Like `walk`, this is about the
+         * string rather than the wiring, so every pixel lights whether or not
+         * a channel points at it.
+         *
+         * @warning At full white this is the worst-case current the string can
+         *          draw. Know your supply before calling it on a long string.
+         */
+        esp_err_t fill(uint8_t r, uint8_t g, uint8_t b);
 
         size_t led_count() const { return cfg_.led_count; }
 

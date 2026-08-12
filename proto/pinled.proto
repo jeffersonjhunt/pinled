@@ -1,0 +1,296 @@
+// pinled configuration schema — THE schema authority (FR-CFG-13).
+//
+// Everything else is generated from this file:
+//   firmware   nanopb  -> static C structs, no malloc, no JSON parser on device
+//   browser    protobuf.js -> objects, and proto3 canonical JSON both ways
+//
+// The human-readable JSON form is NOT a second schema. It is proto3's
+// canonical JSON mapping of this file, so it round-trips losslessly and
+// cannot drift. See docs/WEBUI.md §2a.
+//
+// COMPATIBILITY RULES — a cloud-hosted SPA talks to firmware that may be years
+// old (FR-UI-4), so this file is append-only in practice:
+//   * never reuse or renumber a field number
+//   * never change a field's type
+//   * to remove a field, mark it `reserved` and leave the number burned
+//   * new fields must be optional in meaning: a zero value must mean "as before"
+// Unknown-field preservation is what lets an old device round-trip a document
+// written by a newer SPA without destroying what it does not understand.
+//
+// Units are explicit in field names. No floats anywhere: the firmware is
+// fixed-point by NFR-4/FR-FIL-5, and float in a wire format invites drift
+// between the two implementations.
+
+syntax = "proto3";
+
+package pinled.v1;
+
+// ---------------------------------------------------------------- common --
+
+// Drive scheme, as classified by the profiler (FR-PROF-1).
+//
+// UNSPECIFIED is deliberately the zero value and deliberately means "auto":
+// an entry that has never been touched by hand leaves the profiler in charge.
+// That is why LampEntry.class_lock is a lock rather than a value.
+enum DriveClass {
+  DRIVE_CLASS_UNSPECIFIED = 0;  // auto — the profiler owns this channel
+  DRIVE_CLASS_OFF         = 1;
+  DRIVE_CLASS_STEADY      = 2;
+  DRIVE_CLASS_MATRIX      = 3;
+  DRIVE_CLASS_AC_STEADY   = 4;
+  DRIVE_CLASS_AC_DIMMED   = 5;
+}
+
+// 8-bit per component. Three fields rather than a packed uint32 so the JSON
+// form reads as {"r":0,"g":80,"b":255} instead of an opaque integer — these
+// documents get shared and diffed by people.
+message Color {
+  uint32 r = 1;
+  uint32 g = 2;
+  uint32 b = 3;
+}
+
+// ------------------------------------------------------- machine profile --
+// Shareable. Keyed by lamp number in the machine's OWN lamp matrix, never by
+// channel index — two people with the same machine may have wired their
+// modules in a different order (FR-CFG-5).
+
+message LampEntry {
+  // The key. Lamp number as the operator's manual numbers it.
+  uint32 lamp = 1;
+
+  string name = 2;
+  Color  color = 3;
+
+  // UNSPECIFIED leaves the profiler in charge; anything else is a lock.
+  DriveClass class_lock = 4;
+
+  // Per-lamp presentation overrides. Zero means "inherit the global default",
+  // which is why these are not floats and why 0 is not a legal tau.
+  uint32 attack_ms = 5;
+  uint32 decay_ms  = 6;
+
+  // Normalisation, in permille. 0 = inherit, 1000 = unity.
+  uint32 gain_permille = 7;
+}
+
+message MachineIdentity {
+  string make  = 1;   // "Bally"
+  string model = 2;   // "Eight Ball Deluxe"
+  uint32 year  = 3;
+  uint32 lamp_count = 4;
+}
+
+message Author {
+  string handle = 1;
+  // Set by the sharing service, never by the device — the device has no way
+  // to verify anything and does not try (FR-REG-1).
+  bool verified = 2;
+}
+
+message MachineProfile {
+  uint32 schema = 1;
+
+  string profile_id = 2;
+  uint32 revision   = 3;
+
+  MachineIdentity machine = 4;
+  Author          author  = 5;
+
+  repeated LampEntry lamps = 6;
+}
+
+// -------------------------------------------------------- install config --
+// Private to one physical build. Exportable and restorable, but never
+// published to the shared registry (FR-CFG-5). Wi-Fi credentials are
+// deliberately absent — they live in NVS and appear in no export at any
+// privacy level (FR-CFG-12). Do not add them.
+
+message Geometry {
+  uint32 num_modules         = 1;
+  uint32 channels_per_module = 2;
+  uint32 led_count           = 3;
+}
+
+// Signed, because a negative Kconfig value already means "not fitted" for /PL
+// on a bench rig (see machine_config.cpp).
+message Pins {
+  int32 clk  = 1;
+  int32 pl   = 2;
+  int32 data = 3;
+  int32 led  = 4;
+}
+
+message ScanConfig {
+  uint32 sample_rate_hz = 1;
+  uint32 spi_hz         = 2;
+  uint32 spi_mode       = 3;
+  bool   active_low     = 4;
+  bool   pl_from_cs     = 5;
+}
+
+// Byte order the LED strip expects on the wire. A property of the parts that
+// were bought, so it belongs to the install and not to a shared profile.
+//
+// WS2812B is GRB and the driver emits GRB natively, but RGB-ordered clones are
+// common and are visually identical. The failure is quiet: a near-white tint
+// through a swapped pair still looks near-white, so an install can be wrong
+// about this for as long as nobody displays a saturated colour. Found exactly
+// that way on the bench, 2026-08-11 — the first pure blue came out pink.
+//
+// UNSPECIFIED must mean GRB: it is what every document written before this
+// field existed meant, and a zero has to mean "as before".
+enum ColorOrder {
+  COLOR_ORDER_UNSPECIFIED = 0;  // GRB
+  COLOR_ORDER_GRB         = 1;
+  COLOR_ORDER_RGB         = 2;
+  COLOR_ORDER_BGR         = 3;
+  COLOR_ORDER_BRG         = 4;
+  COLOR_ORDER_RBG         = 5;
+  COLOR_ORDER_GBR         = 6;
+}
+
+message RenderConfig {
+  uint32 refresh_hz     = 1;
+  uint32 gamma_x100     = 2;   // 220 = 2.20
+  uint32 brightness_cap = 3;   // 0..255
+
+  // Added 2026-08-11. Additive; zero means GRB, which is what documents
+  // written before it already meant.
+  ColorOrder color_order = 4;
+}
+
+// What a per-lamp zero inherits from. LampEntry.attack_ms / decay_ms /
+// gain_permille use 0 to mean "inherit", and this is the thing inherited —
+// so the resolver can produce fully-settled per-channel values and nothing
+// downstream ever has to know the convention exists (FR-CFG-14).
+//
+// Belongs to the install rather than the profile because it is a property of
+// how this machine was measured, not of how the lamps should look, and a
+// shared profile must not be able to retune someone else's whole playfield.
+message FilamentDefaults {
+  uint32 attack_ms     = 1;
+  uint32 decay_ms      = 2;
+  uint32 gain_permille = 3;
+}
+
+// The join between the two documents: channel -> lamp number -> profile entry.
+// led_index lives here and not in the profile because the physical order of
+// the LED string is a property of how THIS install was built (FR-CFG-6).
+message WiringEntry {
+  uint32 channel   = 1;
+  uint32 lamp      = 2;
+  int32  led_index = 3;   // -1 = unmapped
+}
+
+message InstallConfig {
+  uint32 schema = 1;
+
+  Geometry     geometry = 2;
+  Pins         pins     = 3;
+  ScanConfig   scan     = 4;
+  RenderConfig render   = 5;
+
+  repeated WiringEntry wiring = 6;
+
+  // Added 2026-08-10. Additive, so documents written before it decode
+  // unchanged and re-encode byte-identically — which the fixtures assert.
+  FilamentDefaults filament = 7;
+}
+
+// --------------------------------------------------------------- version --
+// The two documents captured together, because what a user compares is a
+// look, and a look spans both (FR-CFG-9). Managed by the UI and stored off
+// the device — the board holds one active configuration and no history
+// (FR-CFG-10), so this message is never written to device storage.
+
+message Version {
+  uint32 schema = 1;
+
+  string version_id = 2;
+  string label      = 3;
+  string created    = 4;   // RFC 3339
+  string parent     = 5;   // lineage; empty = root
+
+  InstallConfig  install = 6;
+  MachineProfile profile = 7;
+}
+
+// ------------------------------------------------------- provisioning --
+// Network credentials. Deliberately its OWN message and never a field of
+// InstallConfig: FR-CFG-12 says credentials live in NVS and appear in no
+// export at any privacy level, and the surest way to honour that is to give
+// the exportable document no place to put them.
+//
+// Sent once, over the SoftAP the user is standing next to, to a device with no
+// stored secret and no account behind it (FR-REG-1). There is nothing here to
+// authenticate against and nothing to protect it from that being on the same
+// AP would not already defeat.
+
+message WifiCredentials {
+  string ssid     = 1;
+  string password = 2;   // empty for an open network
+}
+
+// One visible access point, from GET /api/v1/scan. Exists so the portal can
+// offer a list rather than a text box — an SSID typed from memory is the most
+// common way provisioning fails.
+message AccessPoint {
+  string ssid    = 1;
+  int32  rssi    = 2;
+  uint32 channel = 3;
+  bool   secured = 4;
+}
+
+message ScanResult {
+  repeated AccessPoint aps = 1;
+}
+
+// ------------------------------------------------------------ device API --
+
+message DeviceInfo {
+  // Distinct from firmware_version on purpose. A cloud-updated bundle
+  // branches on THIS, so that firmware from two years ago stays usable
+  // (FR-UI-4).
+  uint32 api_version = 1;
+
+  string firmware_version = 2;
+
+  // Derived from the factory eFuse MAC. No provisioning step, no secret
+  // (FR-REG-1).
+  string device_id = 3;
+
+  string   author_handle = 4;
+  Geometry geometry      = 5;
+
+  bool   ota_armed             = 6;
+  uint32 ota_arm_seconds_left  = 7;
+}
+
+// Result of applying a configuration. Applying is write-file-then-restart
+// (FR-CFG-16), so in practice the SPA sees the connection drop and this
+// message is what it gets on reconnect.
+message ApplyResult {
+  bool   accepted    = 1;
+  bool   restarted   = 2;
+  string message     = 3;
+}
+
+// Live channel state (FR-UI-5). A protobuf envelope over a PACKED payload,
+// not a `repeated` scalar: the envelope stays versionable like everything
+// else, while the per-channel data costs a flat two bytes a channel and
+// arrives in the browser as a typed array.
+//
+// samples layout, 2 bytes per channel, channel-major:
+//   [0] level  0..255, the reconstructed brightness (post-filament)
+//   [1] flags  bit0 = active since last push (sticky, cleared on send)
+//              bit1 = channel is bound to a lamp
+//              bits 2..4 = DriveClass as currently classified
+//
+// The sticky bit is why a dropped push is lossless and why the push task may
+// be starved without consequence (FR-UI-9).
+message LiveFrame {
+  uint32 seq           = 1;
+  uint32 channel_count = 2;
+  bytes  samples       = 3;
+}

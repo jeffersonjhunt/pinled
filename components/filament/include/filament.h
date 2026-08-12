@@ -26,19 +26,12 @@
 
 #include "esp_err.h"
 
+#include "pinled_filament_params.h" // FilamentParams — moved out so the config
+                                    // layer, which must build off-target, can
+                                    // produce and test one
+
 namespace ooe::pinled
 {
-    /// Per-channel tuning. Attack/decay are thermal time constants; gain
-    /// normalizes duty (e.g. a ~1/8-duty matrix lamp uses gain ~8 to reach full
-    /// brightness, while a dimmed GI channel uses gain 1 so brightness tracks
-    /// the conduction angle).
-    struct FilamentParams
-    {
-        float attack_ms{30.0f}; ///< rise time constant (ms)
-        float decay_ms{40.0f};  ///< fall time constant (ms)
-        float gain{1.0f};       ///< duty normalization multiplier at output
-    };
-
     class Filament
     {
     public:

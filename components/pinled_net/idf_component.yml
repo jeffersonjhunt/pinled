@@ -1,0 +1,6 @@
+dependencies:
+  idf: '>=5.5'
+  # mDNS so `pinled.local` works. Advisory rather than load-bearing: the boot
+  # log always reports the numeric address too (FR-UI-6), because mDNS is the
+  # thing most likely to be broken on someone's network.
+  espressif/mdns: '^1.2'

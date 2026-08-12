@@ -337,40 +337,447 @@ storage,  data, spiffs,  0x210000, 1536K     → ends 0x390000, inside 4 MB
 §7 replaces this at M4. Reflashing the table erases NVS, which currently holds
 nothing.
 
-**Step 1 — the `.proto` and the host test rig.** No target, no board, no IDF.
-`filament` and the whole schema layer are pure logic, so they build with plain
-CMake + CTest and run in CI. Write the schema, generate both sides, and get
-round-trip tests passing (document → protobuf → document, and the proto3 JSON
-mapping in both directions) before any of it touches firmware. This is also
-where the `protoc --encode` / `--decode` wrappers live, since they are what
-replaces `curl` for the rest of the milestone (`WEBUI.md` §2a).
+**Step 1 — the `.proto` and the host test rig. *(Done, 2026-08-10.)*** No
+target, no board, no IDF.
 
-**Step 2 — the two models (FR-CFG-14).** The document type, the flat runtime
-record, and the projection between them. Host-testable.
+- `proto/pinled.proto` and `proto/pinled.options` — the schema authority, with
+  the compatibility rules that make FR-UI-4's version window work.
+- `components/pinled_schema` — CRC-32 and the 16-byte stored-document frame
+  (FR-CFG-15), deliberately free of any IDF dependency so the same sources
+  build on host and target.
+- `test/host` — a 60-line harness rather than a vendored framework; ASan,
+  UBSan and `-Werror` (`-Wconversion`, `-Wshadow`) on by default.
+- `tools/pbtool.py` — the `curl` replacement that protobuf on the wire costs
+  us, verified to produce byte-identical output to the committed fixtures.
 
-**Step 3 — per-channel state through the pipeline (FR-CFG-8).** The one that
-ripples: `filament`, `lamp_map` and `profiler` all take *global* attack, decay
-and gamma today and must take them per channel. Largest diff in the milestone
-and the one most likely to disturb behaviour already proven on the bench — so
-it lands while the rig is still set up to notice.
+**38 cases green** on the build host: 8 CRC, 17 frame, 13 schema. The schema
+suite decodes golden bytes produced by *Google's* protobuf implementation using
+*nanopb*, which is what makes it a cross-implementation check rather than
+nanopb agreeing with itself — protobuf.js in the browser is the third
+implementation that must agree. The committed fixtures pin the wire format:
+renumbering `LampEntry.name` fails three cases, which is precisely the
+protection the `.proto`'s compatibility rules need in order to be more than a
+comment.
 
-**Step 4 — LittleFS store (FR-CFG-7/15).** Replace the `machine_config` stub
-(`save()` currently returns `ESP_ERR_NOT_SUPPORTED`). Two documents, CRC per
-document, boot to Kconfig defaults when absent (FR-CFG-4).
+Both the harness and the fixtures were verified to *fail* when deliberately
+broken. A suite that is green by construction is worth nothing.
 
-**Step 5 — `esp_http_server` and `/api/v1`.** Config and profile read/write,
-`info` reporting the API version (FR-UI-4). Exercised through the step-1
-wrappers.
+Toolchain now on `intel-nuc.tworivers`: `protoc` 3.21.12, a venv at
+`~/.venvs/pinled-tools` (`protobuf`, `nanopb`), and the nanopb C runtime at
+`~/.local/src/nanopb` pinned to 0.4.9. Where nanopb is absent — the dev
+container — CMake skips that one suite and the rest still run.
 
-**Step 6 — the live WebSocket (FR-UI-5/9).** Needs `CONFIG_HTTPD_WS_SUPPORT`.
-The push task reads the sticky flags `scan_task` already maintains per frame;
-define that hand-off explicitly rather than relying on `uint8_t` writes being
-atomic. Low priority, off core 1, drops under load.
+*Deferred to step 2:* the document ⇄ runtime projection tests (FR-CFG-14),
+which need the two models to exist before there is anything to project.
 
-**Step 7 — provisioning (FR-UI-6/7).** Take ESP-IDF's `wifi_provisioning`
-component rather than writing credential exchange by hand; it assumes a
-companion app, so pair it with the DNS-hijack captive portal from IDF's own
-`protocols/http_server` example. Button-held rescue back to SoftAP.
+**Step 2 — the two models (FR-CFG-14). *(Done, 2026-08-10.)***
+
+The **document model is the generated nanopb struct** — there is deliberately
+no hand-written parallel class tree, because a second definition of the same
+schema is a second thing to keep in step, which is what one schema authority
+(FR-CFG-13) exists to prevent.
+
+The **runtime model** is `ChannelConfig`: 14 bytes, POD, no pointers, no
+strings, `static_assert`ed on its size since the render path reads it every
+frame. **No lamp names** — nothing in scan or render has ever needed one, and
+leaving them out means `GET /profile` can verify the stored CRC and stream the
+payload back *without decoding it*, so names never exist as a resident
+structure on the device.
+
+`resolve()` joins channel → lamp → profile entry through `install.wiring[]` and
+settles every inherit-marker, so nothing downstream learns the convention
+exists. Lenient where a half-finished install is normal (unwired channels,
+unstyled lamps, profile entries for lamps this install lacks), strict where a
+value is ambiguous or impossible (duplicate channels, out-of-range geometry,
+unrepresentable colours and time constants).
+
+Also moved `DriveClass` out of `profiler.h` into `pinled_drive_class.h`:
+`profiler.h` pulls in `filament.h` and therefore `esp_err.h`, which made the
+enum unreachable from anything host-buildable. `static_assert`s now pin it to
+the wire enum value-for-value.
+
+**68 cases green** (8 CRC, 17 frame, 13 schema, 30 resolve), and the firmware
+still builds for `esp32s3` with the moved enum. Three deliberate breakages
+confirmed the new tests fail when they should. Adding `FilamentDefaults` as
+field 7 left both golden fixtures byte-identical — checked, not assumed.
+
+*Not in the IDF build yet:* `pinled_channel_config.cpp` needs the generated
+nanopb header, and nanopb joins the firmware build at step 4 with the store.
+The rest of `pinled_schema` compiles for target today.
+
+**Step 3 — per-channel state through the pipeline (FR-CFG-8). *(Done,
+2026-08-10.)***
+
+*This was scoped wrongly in the original plan.* `Filament::set_params(ch, …)`
+and `LampMap::set_entry(ch, …)` already existed, and `profile_boot()` already
+called the former per channel — so it was never an API change across three
+components. The gaps were narrower and more specific:
+
+- **`set_entry` was never called by anything.** `LampMap::init()` calls
+  `set_default_mapping()` and that was the end of it, so per-lamp colour had
+  nowhere to enter the system.
+- **`class_lock` was not honoured.** `profile_boot()` overwrote every channel
+  with the classifier's output, locked or not.
+- **No path existed** from a resolved `ChannelConfig[]` into the components.
+
+What landed: `pinled_apply` holding the precedence rule as ordinary testable
+logic, `Main::apply_channel_config()` as the single place a configuration
+becomes running behaviour, and `profile_boot()` now treating the classifier's
+answer as a suggestion.
+
+The precedence rule has two halves, and the second is the one that matters: a
+locked class means the profiler leaves the channel alone, **and an explicitly
+chosen value wins regardless of the lock**. Without that second half a lamp
+given a deliberately soft fade would have it silently replaced at the next
+boot-time profiling pass — per-lamp presentation would appear to work and then
+stop, which is the bug that gets reported as "it forgets".
+
+That also corrected a step 2 mistake: settling the inherit-markers destroyed
+the difference between "30 ms because someone asked" and "30 ms because that is
+the default", which is exactly what the profiler needs in order to know what it
+may overwrite. `ChannelConfig` now carries `ChannelFlags` recording it, at the
+cost of two bytes (14 → 16).
+
+Also moved `FilamentParams` out of `filament.h` into `pinled_schema`, mirroring
+`DriveClass` in step 2 — the rule deserves ordinary tests, so the type it
+operates on has to be reachable off-target.
+
+Reading the rig's boot log before flashing found a real bug that
+"behaviour-preserving by construction" had missed: `set_default_mapping()`
+carried its own copy of the default tint as three literals, and
+`ResolveDefaults` had drifted to a different warm white. Routing boot through
+the config path would have silently restyled every unconfigured lamp. Fixed at
+the cause — one definition, read by both — with a test pinning them together.
+
+**87 cases green** (8 crc, 17 frame, 17 apply, 13 schema, 32 resolve), and
+**verified on hardware**: flashed to the bench QT Py, the boot log diffed
+against the pre-step-3 boot is exactly two lines — the intended locked-count
+message, and 37334 → 37345 Hz free-run, which is 0.03% measurement jitter with
+frame time, Fs and duty unchanged. Two minutes uptime, zero errors, warnings,
+panics or overruns.
+
+**Step 4 — LittleFS store (FR-CFG-7/15). *(Done, 2026-08-10.)*** Step 0's
+partition table came with it.
+
+The store is written against `<cstdio>`, not an ESP-IDF file API. LittleFS is
+reached through VFS, so `fopen("/cfg/install.pb")` is the real interface on the
+target — which means the whole of `pinled_doc_file` is host-testable against a
+temporary directory, with genuinely truncated and genuinely corrupt files
+rather than simulated ones. Only the *mount* is target-specific, and it is
+about fifteen lines.
+
+Durability is write-to-`.tmp`, fsync, `rename`. FR-CFG-15 exists because
+filesystem consistency and write durability are different promises and LittleFS
+only makes the first; the rename is what turns "the write failed" into "the
+previous configuration is still there".
+
+**Boot never fails because of storage.** A missing document is the normal state
+of a device nobody has configured, and a corrupt one is a fault the user needs
+to hear about but not be stranded by; either way boot continues on Kconfig
+defaults (FR-CFG-4). Rejected files are logged and **kept** — deleting them
+destroys the only evidence, and they are never read again.
+
+`save_document()` takes encoded bytes rather than a `MachineConfig`, because
+the device is not the author of its own configuration. Re-encoding from the
+runtime record would silently drop every field this firmware does not
+understand, which is exactly what the schema's unknown-field preservation
+exists to prevent (FR-UI-4).
+
+nanopb joins the IDF build by pointing at the same checkout `test/host` uses,
+with the generator run at build time and nothing generated committed. Vendoring
+the runtime while still generating would have bought nothing — the generator
+stays machine-local either way — so **the firmware now builds only where the
+nanopb toolchain is installed**, which is the same requirement the tests have
+had since step 1. The day a second machine needs to build it, the fix is to
+vendor the runtime *and* commit the generated sources together, with a
+regeneration check like `test/host/fixtures/regenerate.py` has.
+
+`pinled_resolve` moved to its own component, `pinled_config`. `pinled_schema`
+is reachable from `filament.h` and `profiler.h` and so must link without
+nanopb; that constraint used to live in a comment, and a comment is not a build
+failure. `MachineConfig` moved into `pinled_schema` as an IDF-free POD for the
+same reason `DriveClass` moved in step 2 and `FilamentParams` in step 3.
+
+`install_to_machine()` has one real question in it, asked field by field: what
+does a zero mean? proto3 gives scalars no presence, so **submessage presence is
+the granularity of "specified"**, and within a present submessage a zero
+inherits only where zero cannot be a real value. SPI mode 0 is a real mode;
+GPIO 0 is a real pin. An all-zero `Pins` message is the one special case and it
+is not arbitrary — four signals cannot share a pin, but a writer that emitted
+`Pins` without filling it in is entirely plausible, and honouring it literally
+would drive a strapping pin at boot.
+
+**138 cases green** (8 crc, 17 frame, 17 apply, 20 file, 7 colour order,
+13 schema, 32 resolve, 24 install). Four deliberate breakages confirmed the new suites fail when they
+should: no atomic rename (1), absence folded into an error (1), an all-zero
+`Pins` honoured literally (4), `spi_mode` 0 made unreachable (1).
+
+**The adversarial pass found the two worst bugs in the step**, neither of them
+in the new code's own logic:
+
+- **A rejected profile still styled lamps.** nanopb leaves whatever it managed
+  to decode behind on failure, and `resolve()` was handed the profile whenever
+  the *install* was present — rejected or not. The reachable case is exactly
+  the one FR-CFG-5 is about: a shared profile from a bigger machine, where
+  nanopb fills 128 lamps, hits `max_count` and fails, leaving 128 real entries
+  to be applied to this playfield. Confirmed on hardware A/B with a 129-lamp
+  document: **2 of 32 channels locked** without the fix, **0** with it, same
+  fixture, same boot.
+- **Moving the channel count into the store defeated main's own guard.** It
+  could only ever see a count that had already been clamped to fit, while the
+  oversized geometry went on to `scan_.init()` and `filament_.init()`
+  unchecked. Refused now, not truncated.
+
+Also fixed: `mount()` used `format_if_mount_failed` under a comment claiming
+that could not destroy a configuration — true only of a filesystem that
+mounts. It still formats, because an unmountable config partition must not
+leave the device unable to boot the UI that would replace it, but the log now
+says the configuration is gone.
+
+**Verified on hardware**, in several flashes, because the fallback path and the
+feature are different claims:
+
+| What was flashed | What it proved |
+|---|---|
+| no documents | mounts, formats, falls back to Kconfig defaults; boot otherwise unchanged |
+| `fs_seed` documents | `(stored)`, 12 LEDs from the document, exactly 1 locked channel |
+| a byte flipped in `install.pb` | `rejected: bad document (bad crc) — KEPT`, defaults restored, profile warning fired |
+| a 129-lamp profile, with and without the fix | 2 locked vs 0 locked — the partial-decode bug, and its repair |
+| primaries on the five wired inputs | the strip is RGB-ordered; then all five correct once declared |
+| app only, seed off | documents survive an app flash — `/cfg` is not touched |
+
+One thing worth writing down about method: an early run of that A/B showed
+"0 locked" for *both* arms, which looked like the bug not existing. It was a
+backgrounded flash racing the logger, so the second arm was still running the
+first arm's binary. The ELF SHA in the boot log is what settled it, and is the
+cheapest way to know which firmware actually answered.
+
+The store selftest (`CONFIG_PINLED_STORE_SELFTEST`) covers the one thing host
+tests cannot: that LittleFS's `rename` on real flash behaves like POSIX's. It
+passed.
+
+Two bugs came out of hardware rather than tests. `partitions.csv` was the first
+flash to change the table, and the config summary said `(stored)` above a
+configuration that was entirely defaults — `defaulted()` means *neither*
+document is present, which is right for the API and wrong for a line describing
+numbers that all come from the install. Found only by corrupting a document on
+purpose.
+
+**And the fixture found a rendering bug older than this milestone.** The bench
+strip is RGB-ordered, not GRB, so the first saturated colour it was ever asked
+to display came out pink. Nothing before step 4 could have revealed it: pinled
+had only ever shown its near-white default tint, and grey is byte-identical
+through any permutation. Byte order is now `RenderConfig.color_order` in the
+install document — additive, `UNSPECIFIED` meaning GRB, so documents written
+before the field behave identically — and the packing lives in `pinled_schema`
+with its own suite, because `neopixel.c` transmits bits 15:8 *first*, then
+23:16, then 7:0, and the byte sent first sits in the middle of the word.
+Verified on the bench: five channels, five pure colours, all correct.
+
+**Heap, measured rather than assumed:** the decode buffers peak at **21,388
+bytes transient**, all freed before boot completes, leaving **353,404 bytes
+free** after init. Two independent measurements agree (368,712 − 21,388 =
+347,324, the since-boot minimum). A header comment claiming "roughly 45 KB" was
+wrong and is gone. **Image: 0x4e4f0 (317 KB) in a 2 MB partition**, so M4's
+Wi-Fi, lwIP and httpd have room in both.
+
+**Step 5 — `esp_http_server` and `/api/v1`. *(Done, 2026-08-11.)***
+
+`GET`/`PUT`/`DELETE` on `/config` and `/profile`, `GET /info`, plus the
+networking to reach them: station mode when Kconfig credentials are set,
+SoftAP otherwise, and mDNS so `pinled.local` resolves. Both modes now rather
+than SoftAP alone, because step 7 needs both anyway and a stopgap with no
+successor tends to become the design.
+
+**`GET` returns the stored bytes, unmodified.** The CRC is verified and the
+payload copied out without ever being decoded, which is what makes the FR-UI-4
+version window real rather than aspirational — a document written by a newer
+SPA carries fields this build has no struct for, and re-encoding would drop
+every one. It also means `GET /profile` never materialises lamp names on the
+device, which is what step 2's two-model split was for. Both behaviours were
+observed side by side on the bench: the stored document came back carrying
+only geometry, `color_order` and wiring, while the same endpoint on an erased
+device synthesised one carrying pins, rates and gamma.
+
+`PUT` decodes **only to validate** and throws the result away; the bytes
+stored are the bytes that arrived. An install config is additionally projected
+before being accepted, because one that cannot project would leave the device
+unbootable-as-configured after the restart — a 400 costs the caller a retry,
+accepting it costs a trip to the bench with a USB cable.
+
+CORS is wide open per FR-UI-3, **including on error responses**, and `OPTIONS`
+is handled: `application/x-protobuf` is not a CORS-safelisted content type, so
+every browser `PUT` preflights. Omit that and writes fail in browsers while
+working perfectly from `pbtool`.
+
+Networking never blocks boot. No credentials is the normal state of an
+unprovisioned device, not a fault; a join failure is logged and survived. The
+lamps are the product and they work with no network at all.
+
+**The bench found a bug that no test could have.** With ESP-IDF's default
+`WIFI_PS_MIN_MODEM`, the board answered roughly one packet in ten — mDNS
+resolved, the occasional request succeeded at 2 ms, and everything else timed
+out. It looked like an httpd fault and was not: ping showed 90% loss below the
+HTTP layer. `esp_wifi_set_ps(WIFI_PS_NONE)` took it to **15 of 15 at 2.9 ms
+average**, same board, same AP, one line of difference. Modem sleep is wrong
+for a mains-powered controller whose job while someone commissions it is to
+answer promptly, and the LED string dwarfs anything the radio saves.
+
+Reading the diff afterwards found a worse one: the body-receive loop
+`continue`d on timeout without bound, and httpd runs one handler at a time —
+so anyone who opened a `PUT`, declared a length and then said nothing would
+hang the entire API. Now bounded, verified by holding a connection open with
+the body withheld: **408 after 5 s, and `GET /info` still answered 200**.
+
+**Verified on hardware:** `GET /info` (API version 1, device_id from the eFuse
+MAC), `GET` on both documents, an `OPTIONS` preflight returning the right
+headers, a `PUT` that changed `led_count` and survived the restart, `DELETE`
+reverting to build defaults, and both rejection paths — random bytes and a
+valid protobuf with impossible geometry — returning **400 with the device
+neither restarting nor changing anything**.
+
+**Cost, measured:** image 317 KB → **929 KB** (Wi-Fi, lwIP, httpd and mDNS are
+~612 KB of flash), still 56% free in the 2 MB partition. Heap 353 KB → **230
+KB free**, so the stack costs ~123 KB of RAM — above the 50–80 KB the plan
+guessed, and worth knowing before the WebSocket lands.
+
+*Deferred deliberately:* OTA (`FR-OTA-*`). The endpoint needs button-arming
+(FR-OTA-2) and an unarmed bricking endpoint behind open CORS is exactly what
+that requirement exists to prevent.
+
+**Step 6 — the live WebSocket (FR-UI-5/9). *(Done, 2026-08-11.)***
+
+`/api/v1/live` carries a `LiveFrame` at ~30 Hz: two bytes a channel, level and
+flags, with `DriveClass` in bits 2–4.
+
+**The hand-off is the design.** The scan accumulates activity into plain local
+words — **no atomics in the 10 kHz inner loop** — and publishes with four
+`fetch_or`s per frame; the push drains with `exchange(0)`. That pairing is what
+makes the race benign: a set landing before the drain is reported now, one
+landing after survives to the next push. A plain load-then-store on the drain
+side would swallow anything set in between, which would present as "the UI
+occasionally misses a flash" and never reproduce on demand. `LiveState` lives
+in `pinled_schema` so both halves are host-tested, including a two-thread
+contention case.
+
+Sticky activity is also what makes FR-UI-9 free: a dropped push is a *longer
+window*, not a lost sample. Nothing accumulates and nothing blocks.
+
+**Verified on hardware, with buttons.** All five wired inputs — U1.H, U1.D,
+U2.D, U3.D, U4.D, being channels 0, 4, 12, 20 and 28 — appear on the socket
+when pressed, and the raw scan's `tog` line agrees independently
+(`T---T--- ----T--- ----T--- ----T---`). The level sequence is the strongest
+evidence: `59, 173, 225, 244, 251, 253…` then decaying on release, which is the
+filament integrator's attack curve sampled at 30 Hz. The whole chain is intact
+end to end, not merely the bit.
+
+**Three bugs the bench found, none of which a test would have.**
+
+- **21.4 Hz against a nominal 30.** `vTaskDelay` sleeps for the period *after*
+  the work, so the real rate was 1/(work + period). `vTaskDelayUntil` gives
+  30.5 Hz with zero sequence gaps over four minutes.
+- **LRU socket purging is actively wrong here.** httpd closes the least
+  recently used socket when a new one arrives, and a live WebSocket looks
+  *idle* to httpd because all its traffic is outbound — so opening a second
+  browser tab would have silently killed the first tab's monitor.
+- **Discovering a dead client from a failed send is too late.** The OS reuses
+  descriptors immediately, so the same fd can already name a different client
+  and the "failed" send evicts the newcomer. The log showed exactly that, fd 58
+  dropping and reconnecting inside a second. Clients are pruned from httpd's
+  `close_fn` now, which is the only reliable moment.
+
+Also a log line that lied: "refusing client 61" immediately followed by
+"client 61 connected", with the refused client left holding a socket that would
+never carry a frame — indistinguishable from a dead device. It fails the
+request now so the socket closes.
+
+Cost: **~5 KB of RAM** (224.8 KB free) and 8 KB of image.
+
+**Open, and the monitor is what exposed it:** every frame reports
+`DriveClass = OFF`, for every channel, including ones plainly being pressed.
+That is not a packing bug — the profiler runs **once, at boot**, when nothing
+was active, so it classified everything as OFF and the socket has faithfully
+reported that ever since. The class field is therefore honest and useless: a UI
+would paint a working playfield as dead. `FR-PROF-5` anticipates a re-arm path
+on GPIO 0, but nothing triggers it and classification never updates while the
+machine runs. Commissioning wants "turn the game on, press re-profile, watch
+the classes settle" — which means an API endpoint, and belongs with the
+profiler work rather than here.
+
+**Step 7 — provisioning (FR-UI-6/7). *(Done, 2026-08-12.)***
+
+**Written directly rather than with `wifi_provisioning`, and the plan above was
+wrong about that.** `wifi_provisioning` speaks protocomm — protobuf over a
+custom endpoint with an X25519 + AES-CTR handshake, designed for Espressif's
+phone app. FR-UI-6 wants a page *self-contained on the device*, so using the
+component would have meant writing that entire client in JavaScript, by hand,
+with crypto. It saves writing credential exchange and costs far more writing
+the thing that talks to it. There is also nothing to protect: the API is
+deliberately unauthenticated (FR-UI-3), identity is the factory MAC with no
+stored secret (FR-REG-1), and the exchange happens on an AP the user is
+standing beside.
+
+What landed instead, on top of step 5's server: `POST /api/v1/provision`
+taking a `WifiCredentials` protobuf, `GET /api/v1/scan` listing visible
+networks, and a captive portal — DNS hijack plus the probe URLs each OS uses
+to decide a network is captive.
+
+**Credentials live in NVS and nowhere else** (FR-CFG-12), in their own
+namespace. `InstallConfig` still has no field for them and the `.proto` says
+not to add one: two independent barriers, because "remember not to export
+this" survives exactly as long as the person who wrote it. They are **not**
+encrypted — NVS encryption without secure boot is a lock beside its key — so
+treat a board as carrying the credentials of any network it has joined.
+
+The portal page fetches nothing. It hand-rolls two protobuf fields in about
+ten lines of JavaScript rather than shipping a schema library to a
+microcontroller, and it lists networks from `/scan` because an SSID typed from
+memory is the commonest way provisioning fails.
+
+**Rescue** (FR-UI-7) is GPIO 0 held for 5 s on a *running* device — distinct
+from holding BOOT at reset, which is ROM download mode. `HARDWARE.md` also
+gives that pin to the profiler re-arm step 6 showed we need, so the two are
+split by duration and a short press is logged and ignored, deliberately.
+
+Two behaviours worth knowing: a provisioned device that **cannot reach its
+network falls back to the SoftAP** rather than sitting unreachable — someone
+whose router died needs a way in that is not a USB cable; and the scan is
+**de-duplicated by SSID**, because the bench returned four entries for two
+networks and a dropdown offering the same name three times asks a question
+nobody can answer.
+
+**The build-time credentials are gone**, as their own help text promised.
+Verified in the right order: provisioned over the LAN, confirmed the next boot
+joined *without* the build-time warning, and only then deleted the options and
+reflashed — the board still joins, so NVS is demonstrably the only source.
+
+**157 host cases green**, both golden fixtures byte-identical after the schema
+addition, and the `fs_seed` documents checked against their JSON.
+
+**Verified end to end on the bench**, including the half a wired build host
+cannot reach: BOOT held five seconds wiped the network and dropped the board
+into `pinled-82F6DD`; a phone joined and **the setup page popped by itself**;
+both networks appeared in the list; provisioning through the page stored the
+credentials, restarted, rejoined, and `pinled.local` answered 200.
+
+**Two bugs, and both were tested-in-the-wrong-state.** The SoftAP came up in
+`WIFI_MODE_AP`, and `esp_wifi_scan_start` needs a station interface — so the
+scan endpoint worked perfectly in the one state where nobody needs it (already
+joined to a LAN) and returned nothing in the only state that matters. Then
+`APSTA` alone was not enough: the shared event handler called
+`esp_wifi_connect()` on `STA_START`, which now fired for the station interface
+that exists purely to make scanning legal, leaving the driver permanently
+"connecting" and refusing scans. It connects deliberately now.
+
+Scanning is done **once at boot and cached**, not on demand: a scan hops
+channels and the AP cannot follow, so scanning when the page asks would
+disconnect the phone that asked.
+
+**And a design gap the bugs exposed:** the page offered a dropdown and nothing
+else, so an empty list was a dead end. That was wrong even with the scan
+working — a hidden network appears in no scan at all — so manual entry is now
+unconditional and the typed name wins when present. The failure was the scan;
+the fault was a form with one path through it.
 
 Two things to measure rather than assume along the way: **heap** — Wi-Fi, lwIP
 and httpd together are on the order of 50–80 KB and nothing has checked that

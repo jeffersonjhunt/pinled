@@ -10,6 +10,7 @@
 #include <memory>
 #include <new>
 
+#include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 #include "esp_check.h"
 #include "esp_timer.h"
@@ -39,20 +40,27 @@ namespace ooe::pinled
         version();
         ESP_LOGI(TAG, "Initializing...");
 
-        // 1. Configuration (NVS profile or Kconfig defaults).
-        ESP_ERROR_CHECK(store_.load(cfg_));
-        num_channels_ = cfg_.total_channels();
-        if (num_channels_ > LampScan::MAX_CHANNELS)
+#ifdef CONFIG_PINLED_STORE_SELFTEST
+        // Before anything is loaded, so it cannot disturb a real configuration.
+        store_.selftest();
+#endif
+
+        // 1. Configuration: the stored documents, or Kconfig defaults for
+        //    whatever is absent or unusable (FR-CFG-4). This also resolves the
+        //    per-channel records, so there is one place a configuration is
+        //    decided and it is not here.
+        ESP_ERROR_CHECK(store_.load(cfg_, channels_, LampScan::MAX_CHANNELS, &num_channels_));
+        if (num_channels_ == 0 || num_channels_ > LampScan::MAX_CHANNELS)
         {
-            ESP_LOGE(TAG, "too many channels: %u", (unsigned)num_channels_);
+            ESP_LOGE(TAG, "bad channel count: %u", (unsigned)num_channels_);
             return ESP_ERR_INVALID_SIZE;
         }
 
         // 2. Scan driver.
         LampScanConfig sc{};
-        sc.clk_pin = cfg_.clk_pin;
-        sc.data_pin = cfg_.data_pin;
-        sc.pl_pin = cfg_.pl_pin;
+        sc.clk_pin = static_cast<gpio_num_t>(cfg_.clk_pin);
+        sc.data_pin = static_cast<gpio_num_t>(cfg_.data_pin);
+        sc.pl_pin = static_cast<gpio_num_t>(cfg_.pl_pin);
         sc.spi_hz = cfg_.spi_hz;
         sc.spi_mode = cfg_.spi_mode;
         sc.pl_from_cs = cfg_.pl_from_cs;
@@ -69,23 +77,49 @@ namespace ooe::pinled
         // 4. Filament bank, seeded with the MEASURED rate, not the configured one.
         ESP_ERROR_CHECK(filament_.init(num_channels_, fs_actual_));
         filament_.set_gamma(cfg_.gamma);
-        FilamentParams fp{};
-        fp.attack_ms = cfg_.attack_ms;
-        fp.decay_ms = cfg_.decay_ms;
-        ESP_ERROR_CHECK(filament_.set_params_all(fp));
 
         // 5. Profiler (used at boot, then idle).
         ESP_ERROR_CHECK(profiler_.init(num_channels_, fs_actual_));
 
         // 6. LED map + string.
         LampMapConfig mc{};
-        mc.led_pin = cfg_.led_pin;
+        mc.led_pin = static_cast<gpio_num_t>(cfg_.led_pin);
         mc.led_count = cfg_.led_count;
         mc.channel_count = num_channels_;
+        mc.color_order = cfg_.color_order;
         ESP_ERROR_CHECK(map_.init(mc));
         clamp_refresh(); // FR-LED-8
 
-        // 7. Boot-time auto-profiling pass.
+#ifdef CONFIG_PINLED_LED_LOAD_TEST
+        // Bring-up only: hold the string at rising brightness so a meter in
+        // series can be read at each step. Before the render task exists, so
+        // nothing else is touching the strip.
+        {
+            const uint8_t steps[] = {64, 128, 191, 255};
+            for (uint8_t v : steps)
+            {
+                ESP_LOGW(TAG, "load test: %u%% white on %u LEDs — read the meter now",
+                         (unsigned)((v * 100u + 127u) / 255u), (unsigned)cfg_.led_count);
+                map_.fill(v, v, v);
+                vTaskDelay(pdMS_TO_TICKS(10000));
+            }
+            map_.fill(0, 0, 0);
+            ESP_LOGW(TAG, "load test: done, string dark");
+        }
+#endif
+
+#ifdef CONFIG_PINLED_STARTUP_WALK
+        // Before anything is sensed or mapped: prove the string itself works.
+        // Deliberately here rather than after apply_channel_config(), so a
+        // playfield with half its channels unmapped still lights every pixel.
+        map_.walk(CONFIG_PINLED_STARTUP_WALK_MS);
+#endif
+
+        // 7. Configuration becomes running behaviour. Must follow both
+        //    filament_.init() and map_.init(), since it writes into each.
+        apply_channel_config();
+
+        // 8. Boot-time auto-profiling pass.
         profile_boot();
 
         ESP_ERROR_CHECK(start_tasks());
@@ -93,7 +127,65 @@ namespace ooe::pinled
         ESP_LOGI(TAG, "Initializing complete. %u channels, %u LEDs, Fs %.0f Hz, %u Hz refresh.",
                  (unsigned)num_channels_, (unsigned)cfg_.led_count,
                  fs_actual_, (unsigned)cfg_.refresh_hz);
+
+        // 9. Network and API, last. Nothing above depends on it.
+        start_network();
+
+        // M4 puts Wi-Fi, lwIP and httpd on top of whatever is left here, and
+        // nothing has ever measured it. The minimum is the useful half: the
+        // store decodes both documents into heap and frees them again, so the
+        // gap between the two numbers is that transient peak rather than a
+        // guess at it. The shipping board has no PSRAM to fall back on (NFR-8).
+        ESP_LOGI(TAG, "heap: %u bytes free, %u minimum since boot",
+                 (unsigned)esp_get_free_heap_size(),
+                 (unsigned)esp_get_minimum_free_heap_size());
         return ESP_OK;
+    }
+
+    void Main::start_network()
+    {
+        // Every failure here is logged and survived. A board that cannot join
+        // a network still senses lamps and still drives LEDs, and making boot
+        // conditional on Wi-Fi would turn a router reboot into a dark
+        // playfield.
+        if (net_.start() != ESP_OK)
+        {
+            ESP_LOGE(TAG, "network did not start; API unavailable");
+            return;
+        }
+        if (!net_.up())
+        {
+            ESP_LOGW(TAG, "no address; API unavailable this boot");
+            return;
+        }
+        live_.levels = levels_;
+        live_.channels = channels_;
+        live_.classes = classes_;
+        live_.count = num_channels_;
+
+        if (api_.start(store_, cfg_, channels_, num_channels_, net_, live_) != ESP_OK)
+            ESP_LOGE(TAG, "API did not start");
+
+        // FR-UI-7. Started whatever mode we came up in: the rescue is most
+        // useful on a device that thinks it is provisioned and is wrong.
+        rescue_button_start(CONFIG_PINLED_RESCUE_GPIO, CONFIG_PINLED_RESCUE_HOLD_MS);
+    }
+
+    void Main::apply_channel_config()
+    {
+        for (size_t ch = 0; ch < num_channels_; ++ch)
+        {
+            const ChannelConfig &c = channels_[ch];
+
+            filament_.set_params(ch, params_from_config(c));
+
+            LampMapEntry e{};
+            e.led_index = c.led_index;
+            e.r = c.r;
+            e.g = c.g;
+            e.b = c.b;
+            map_.set_entry(ch, e);
+        }
     }
 
     void Main::profile_boot()
@@ -120,9 +212,30 @@ namespace ooe::pinled
         }
         if (profiler_.classify(profiles.get(), params.get(), num_channels_) == ESP_OK)
         {
+            // The classifier's answer is a suggestion, not a verdict. A channel
+            // whose class a person locked keeps its own tuning, and explicit
+            // per-lamp values survive regardless of the lock (FR-CFG-8,
+            // FR-PROF-4) — otherwise a hand-set fade would be silently replaced
+            // on every boot and per-lamp presentation would not work.
+            size_t locked = 0;
             for (size_t ch = 0; ch < num_channels_; ++ch)
-                filament_.set_params(ch, params[ch]);
-            ESP_LOGI(TAG, "auto-profiling applied");
+            {
+                const ChannelConfig &c = channels_[ch];
+                if (!profiler_may_classify(c))
+                {
+                    ++locked;
+                    profiles[ch].locked = true;
+                    profiles[ch].klass = c.class_lock;
+                }
+                filament_.set_params(ch, effective_params(c, params[ch]));
+            }
+            // Kept for the live monitor: the class is what the UI colours a
+            // channel by, and it is otherwise thrown away here.
+            for (size_t ch = 0; ch < num_channels_; ++ch)
+                classes_[ch] = profiles[ch].klass;
+
+            ESP_LOGI(TAG, "auto-profiling applied (%u of %u channels locked)",
+                     (unsigned)locked, (unsigned)num_channels_);
         }
     }
 
@@ -274,9 +387,23 @@ namespace ooe::pinled
 
             if (self->scan_.read_frame(frame, self->num_channels_) == ESP_OK)
             {
+                // Accumulated in plain locals — no atomics in the inner loop,
+                // which is the whole reason the live hand-off is a bitmap
+                // rather than a flag per channel (pinled_live.h).
+                uint32_t active[LiveState::kWords]{};
+
                 for (size_t ch = 0; ch < self->num_channels_; ++ch)
+                {
                     self->filament_.update(ch, frame[ch]);
+                    if (frame[ch])
+                        active[ch / 32] |= (1u << (ch % 32));
+                }
                 self->filament_.snapshot(self->levels_, self->num_channels_);
+
+                // Four atomics a frame regardless of how many lamps are lit.
+                // Sticky, so the push task may be arbitrarily late without
+                // losing anything (FR-UI-9).
+                self->live_.publish(active);
 
 #ifdef CONFIG_PINLED_SCAN_DEBUG
                 for (size_t ch = 0; ch < self->num_channels_; ++ch)

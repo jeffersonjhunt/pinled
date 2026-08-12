@@ -1,2 +1,8 @@
 dependencies:
   idf: '>=5.5'
+  # The configuration filesystem (FR-CFG-7). LittleFS rather than SPIFFS
+  # because it is power-cut tolerant by design and SPIFFS is deprecated in
+  # IDF; note that "tolerant" means the filesystem stays consistent, not that
+  # the last write landed — which is what FR-CFG-15's per-document CRC and the
+  # write-then-rename in pinled_doc_file.cpp are for.
+  joltwallet/littlefs: '^1.14'

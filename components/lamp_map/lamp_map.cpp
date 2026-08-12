@@ -9,7 +9,13 @@
 
 #include "lamp_map.h"
 
+#include "pinled_channel_config.h" // ResolveDefaults — the one definition of the default tint
+#include "pinled_color_order.h"
+
 #include <new>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "esp_log.h"
 #include "neopixel.h"
@@ -57,8 +63,8 @@ namespace ooe::pinled
         initialized_ = true;
         ESP_LOGI(TAG, "init: %u LEDs on GPIO %d, %u channels, 1 transmit/frame",
                  (unsigned)cfg_.led_count, (int)cfg_.led_pin, (unsigned)cfg_.channel_count);
-        ESP_LOGI(TAG, "  strip supports up to %u Hz refresh",
-                 (unsigned)max_refresh_hz());
+        ESP_LOGI(TAG, "  strip supports up to %u Hz refresh, byte order %s",
+                 (unsigned)max_refresh_hz(), color_order_str(cfg_.color_order));
         return ESP_OK;
     }
 
@@ -81,11 +87,79 @@ namespace ooe::pinled
         for (size_t ch = 0; ch < cfg_.channel_count; ++ch)
         {
             LampMapEntry &e = map_[ch];
+            // One definition of the default tint, shared with the config layer
+            // (ResolveDefaults). This used to be three literals here, and they
+            // had drifted from the config layer's copy — which would have
+            // restyled every unconfigured lamp the moment boot started routing
+            // through apply_channel_config().
+            static constexpr ResolveDefaults kDefaults{};
             e.led_index = (ch < cfg_.led_count) ? static_cast<int16_t>(ch) : -1;
-            e.r = 255; // warm-white-ish base; real tints come from config
-            e.g = 200;
-            e.b = 140;
+            e.r = kDefaults.r;
+            e.g = kDefaults.g;
+            e.b = kDefaults.b;
         }
+    }
+
+    esp_err_t LampMap::walk(uint32_t ms_per_led)
+    {
+        if (!initialized_)
+            return ESP_ERR_INVALID_STATE;
+        if (ms_per_led == 0)
+            return ESP_OK;
+
+        ESP_LOGI(TAG, "startup walk: %u LEDs at %u ms (%u ms total)",
+                 (unsigned)cfg_.led_count, (unsigned)ms_per_led,
+                 (unsigned)(cfg_.led_count * ms_per_led));
+
+        tNeopixel *frame = static_cast<tNeopixel *>(frame_);
+
+        // White, so all three elements are exercised. It is also the one colour
+        // that looks identical whatever byte order the strip uses, which is
+        // correct here: this answers "is the pixel alive", and the fixture in
+        // fs_seed answers "is the order right".
+        const uint32_t lit = pack_for_order(cfg_.color_order, 255, 255, 255);
+
+        for (size_t on = 0; on < cfg_.led_count; ++on)
+        {
+            for (size_t i = 0; i < cfg_.led_count; ++i)
+            {
+                frame[i].index = static_cast<uint32_t>(i);
+                frame[i].rgb = (i == on) ? lit : 0;
+            }
+            neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_),
+                              frame, static_cast<uint32_t>(cfg_.led_count));
+            vTaskDelay(pdMS_TO_TICKS(ms_per_led));
+        }
+
+        // Leave the string dark rather than holding the last pixel on: the
+        // next thing to touch it is the render task, and a stuck pixel between
+        // the two would look like a fault this test had just caused.
+        for (size_t i = 0; i < cfg_.led_count; ++i)
+        {
+            frame[i].index = static_cast<uint32_t>(i);
+            frame[i].rgb = 0;
+        }
+        neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_),
+                          frame, static_cast<uint32_t>(cfg_.led_count));
+        return ESP_OK;
+    }
+
+    esp_err_t LampMap::fill(uint8_t r, uint8_t g, uint8_t b)
+    {
+        if (!initialized_)
+            return ESP_ERR_INVALID_STATE;
+
+        tNeopixel *frame = static_cast<tNeopixel *>(frame_);
+        const uint32_t rgb = pack_for_order(cfg_.color_order, r, g, b);
+        for (size_t i = 0; i < cfg_.led_count; ++i)
+        {
+            frame[i].index = static_cast<uint32_t>(i);
+            frame[i].rgb = rgb;
+        }
+        return neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_),
+                                 frame, static_cast<uint32_t>(cfg_.led_count))
+                   ? ESP_OK
+                   : ESP_FAIL;
     }
 
     esp_err_t LampMap::set_entry(size_t channel, const LampMapEntry &e)
@@ -127,7 +201,13 @@ namespace ooe::pinled
             if (e.led_index < 0 || static_cast<size_t>(e.led_index) >= cfg_.led_count)
                 continue;
             const uint8_t v = levels[ch];
-            frame[e.led_index].rgb = NP_RGB(scale8(e.r, v), scale8(e.g, v), scale8(e.b, v));
+            // NOT NP_RGB: that macro hard-codes the driver's native GRB
+            // transmission order, which is wrong on an RGB-ordered strip. The
+            // packing is the same 24-bit layout, chosen by the install's
+            // declared order — see pinled_color_order.h for why the byte sent
+            // first lives in the middle of the word.
+            frame[e.led_index].rgb =
+                pack_for_order(cfg_.color_order, scale8(e.r, v), scale8(e.g, v), scale8(e.b, v));
         }
 
         // ONE transmit per refresh (FR-LED-6). The driver drops SetPixel calls

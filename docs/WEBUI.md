@@ -438,10 +438,16 @@ storage,  data, spiffs,   0x620000, 0x1E0000
 3 MB per app slot, 1.875 MB filesystem, exactly filling 8 MB. App partitions
 are 64 KB aligned as required. (`spiffs` is the subtype LittleFS uses too.)
 
-> **Not yet applied.** `partitions.csv` is still `factory, 1M` and
-> `sdkconfig.defaults` still pins `CONFIG_ESPTOOLPY_FLASHSIZE_4MB`, because the
-> bench QT Py is a 4 MB FH4R2 and this table does not fit on it. Both change
-> together when the 8 MB board arrives.
+> **Not yet applied.** `sdkconfig.defaults` still pins
+> `CONFIG_ESPTOOLPY_FLASHSIZE_4MB`, because the bench QT Py is a 4 MB FH4R2 and
+> this table does not fit on it. Both change together when the 8 MB board
+> arrives.
+>
+> `partitions.csv` is now the interim 4 MB table from `FIRMWARE_PLAN.md` §5.1
+> step 0 — `factory` 2M plus a 1536K `storage` partition, flashed 2026-08-10.
+> It carries no OTA slots, so replacing it with the table above is still a
+> partition-table flash and still erases NVS. Doing that before NVS holds Wi-Fi
+> credentials costs nothing; afterwards it costs a re-provision (FR-CFG-12).
 
 > **Bench trap:** the 8 MB no-PSRAM QT Py (FN8C0) is **visually identical** to
 > the 4 MB FH4R2 — same silkscreen, same USB VID/PID `239a:8143`. Label them

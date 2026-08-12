@@ -308,3 +308,38 @@ S3. Full derivation in `TIMING.md` §5.
   worst case white; ~6 A at 128 LEDs) — do not run the string off the logic
   regulator. Level-shift the LED data line or run the strip at reduced VDD
   (HW-9): WS2812B wants V_IH ≥ 0.7 × VDD = 3.5 V, above a 3.3 V S3 output.
+
+  **Measured 2026-08-11**, 16 LEDs off the QT Py's USB 5 V, all white:
+  170 mA at 25% duty, **530 mA at 50%**, and a **brown-out entering 75%**.
+  530 mA over 16 LEDs is 33 mA/LED at half brightness, so ~66 mA at full —
+  which puts the 60 mA figure above within about 10%, and it stands.
+
+  The brown-out is the useful half. The QT Py's USB path gives out somewhere
+  between 530 mA and the ~800 mA that 75% would need, on a string of just
+  **sixteen** LEDs. "Do not run the string off the logic regulator" is
+  therefore not a margin-of-safety note; it is the difference between a board
+  that boots and one that does not. `CONFIG_PINLED_LED_LOAD_TEST` reproduces
+  this on demand — with a supply that can take it.
+
+  An earlier bench reading of 25 mA/LED prompted a plan to revise all of this
+  downward. The sweep contradicted it, and the number was left alone. Recorded
+  because the near-miss is the lesson: one point is not a curve.
+
+### Strip byte order — check this on every new strip
+
+WS2812B is **GRB** and the driver emits GRB. RGB-ordered clones are common,
+carry identical markings, and are sold as the same part. **The bench strip is
+one of them** (confirmed 2026-08-11), which is why `fs_seed/install.json`
+declares `COLOR_ORDER_RGB`.
+
+Getting it wrong is quiet, not loud, and that is the trap. A near-white tint
+through a swapped pair is still a near-white tint — pinled's default
+`{255, 200, 140}` looked correct for the entire life of the project. Only a
+saturated colour reveals it, and until M3 step 4 the firmware had never
+displayed one.
+
+**Test a new strip before trusting it:** drive one LED pure red. If it lights
+green, red and green are swapped; if blue, red and blue are. Then set
+`RenderConfig.color_order` in the install document — it is a property of the
+parts, so it belongs there and not in firmware, and a shared machine profile
+deliberately cannot carry it.

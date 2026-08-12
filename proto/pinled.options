@@ -1,0 +1,84 @@
+# nanopb field options for pinled.proto.
+#
+# protobuf has no notion of a maximum size; nanopb needs one to generate
+# static structs with no malloc, which is the entire reason it was chosen
+# (FR-CFG-13). Every bound here is a firmware memory decision, so changing one
+# changes the static footprint — check the arithmetic at the bottom.
+#
+# Anything left unbounded generates a callback field instead, which is a
+# perfectly good outcome for the large repeated fields (see the note below)
+# but a silent trap for a string you expected to be inline.
+
+# --- machine profile ---------------------------------------------------------
+
+# 32 is comfortable for "Left Drop Target" / "GI Upper Right" and still lets
+# the UI show a name without truncating. Includes the NUL.
+pinled.v1.LampEntry.name            max_size:32
+
+pinled.v1.MachineIdentity.make      max_size:24
+pinled.v1.MachineIdentity.model     max_size:48
+pinled.v1.Author.handle             max_size:32
+
+pinled.v1.MachineProfile.profile_id max_size:32
+
+# 128 is the hard channel ceiling from FR-SCAN-3 (8 modules x 16), so a
+# machine cannot legally have more bound lamps than this.
+pinled.v1.MachineProfile.lamps      max_count:128
+
+# --- install config ----------------------------------------------------------
+
+pinled.v1.InstallConfig.wiring      max_count:128
+
+# --- version (off-device only) -----------------------------------------------
+#
+# Version is never written to device storage — the board keeps one active
+# configuration and no history (FR-CFG-10). These bounds exist only so the
+# generated header compiles if firmware ever needs to *read* one.
+
+pinled.v1.Version.version_id        max_size:32
+pinled.v1.Version.label             max_size:64
+pinled.v1.Version.created           max_size:32
+pinled.v1.Version.parent            max_size:32
+
+# --- provisioning -------------------------------------------------------------
+#
+# 32 is the SSID maximum in 802.11; 64 is the WPA2 passphrase maximum. Both are
+# the standard's limits rather than a choice, so a credential that does not fit
+# here could not have worked anyway.
+
+pinled.v1.WifiCredentials.ssid      max_size:33
+pinled.v1.WifiCredentials.password  max_size:65
+pinled.v1.AccessPoint.ssid          max_size:33
+
+# A scan on a crowded band routinely sees more than this; the list is for a
+# human to pick from, and it is sorted by signal so the truncation drops the
+# ones nobody would choose.
+pinled.v1.ScanResult.aps            max_count:20
+
+# --- device API --------------------------------------------------------------
+
+pinled.v1.DeviceInfo.firmware_version max_size:16
+pinled.v1.DeviceInfo.device_id        max_size:24
+pinled.v1.DeviceInfo.author_handle    max_size:32
+pinled.v1.ApplyResult.message         max_size:96
+
+# The live frame is built and sent every ~33 ms, so it must not carry a
+# 256-byte static buffer around in a struct. Encode it with a callback that
+# writes straight out of the scan buffers.
+pinled.v1.LiveFrame.samples         type:FT_CALLBACK
+
+# --- static footprint --------------------------------------------------------
+#
+#   LampEntry    ~= 32 (name) + 12 (color) + 4 + 4 + 4 + 4 + 4   ~=  64 B
+#   lamps[128]                                                   ~=   8 KB
+#   WiringEntry  ~= 12 B; wiring[128]                            ~= 1.5 KB
+#
+# ~10 KB of .bss for a fully populated 128-channel machine, against 512 KB of
+# SRAM. Acceptable, but note it is a SECOND copy: the runtime record
+# (FR-CFG-14) is the flat POD array the render path actually reads, and this
+# decoded struct is only the intermediate.
+#
+# If that intermediate ever matters, the fix is to make `lamps` and `wiring`
+# FT_CALLBACK too and stream entries directly into the runtime record as they
+# decode. That is strictly better for memory and strictly worse for
+# readability, so it is deferred until something measures a problem.

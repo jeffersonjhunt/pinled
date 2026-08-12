@@ -29,6 +29,14 @@
 #include "lamp_map.h"
 #include "machine_config.h"
 
+#include "api.h"
+#include "net.h"
+#include "rescue.h"
+
+#include "pinled_apply.h"
+#include "pinled_channel_config.h"
+#include "pinled_live.h"
+
 #include "version.h"
 
 namespace ooe::pinled
@@ -45,6 +53,11 @@ namespace ooe::pinled
         void version();
         esp_err_t start_tasks();
         void profile_boot(); ///< run the boot-time auto-profiler pass
+
+        /// Bring up Wi-Fi and the HTTP API. Last, and deliberately not fatal:
+        /// the lamps are the product and they must work on a bench with no
+        /// network at all.
+        void start_network();
 
         /// FR-SCAN-9: measure what the scan hardware actually sustains and
         /// clamp the configured sample rate to it. The clamped value becomes
@@ -91,12 +104,31 @@ namespace ooe::pinled
         uint8_t seen_low_[LampScan::MAX_CHANNELS]{};     ///< channel ever read 0
 #endif
 
+        /// Push `channels_` into the filament bank and the LED map. The single
+        /// place a configuration becomes running behaviour (FR-CFG-8).
+        void apply_channel_config();
+
         MachineConfig cfg_{};
         MachineConfigStore store_{};
+        Net net_{};
+        Api api_{};
         LampScan scan_{};
         Filament filament_{};
         Profiler profiler_{};
         LampMap map_{};
+
+        /// Resolved per-channel configuration, filled by the store from the
+        /// two documents or from Kconfig defaults. 2 KB at 128 channels, which
+        /// is why it is a member and not a stack array — the boot path already
+        /// overflows the main task stack with less than this.
+        ChannelConfig channels_[LampScan::MAX_CHANNELS]{};
+
+        /// Last classification per channel, kept for the live monitor.
+        DriveClass classes_[LampScan::MAX_CHANNELS]{};
+
+        /// Scan -> push hand-off (FR-UI-5/9). Borrows levels_, channels_ and
+        /// classes_; owns only the sticky bitmap.
+        LiveState live_{};
 
         // Shared brightness buffer: scan_task writes, render_task reads.
         uint8_t levels_[LampScan::MAX_CHANNELS]{};
