@@ -90,6 +90,13 @@ namespace ooe::pinled
         ESP_ERROR_CHECK(map_.init(mc));
         clamp_refresh(); // FR-LED-8
 
+#ifdef CONFIG_PINLED_STARTUP_WALK
+        // Before anything is sensed or mapped: prove the string itself works.
+        // Deliberately here rather than after apply_channel_config(), so a
+        // playfield with half its channels unmapped still lights every pixel.
+        map_.walk(CONFIG_PINLED_STARTUP_WALK_MS);
+#endif
+
         // 7. Configuration becomes running behaviour. Must follow both
         //    filament_.init() and map_.init(), since it writes into each.
         apply_channel_config();
@@ -133,7 +140,12 @@ namespace ooe::pinled
             ESP_LOGW(TAG, "no address; API unavailable this boot");
             return;
         }
-        if (api_.start(store_, cfg_, channels_, num_channels_, net_) != ESP_OK)
+        live_.levels = levels_;
+        live_.channels = channels_;
+        live_.classes = classes_;
+        live_.count = num_channels_;
+
+        if (api_.start(store_, cfg_, channels_, num_channels_, net_, live_) != ESP_OK)
             ESP_LOGE(TAG, "API did not start");
     }
 
@@ -195,6 +207,11 @@ namespace ooe::pinled
                 }
                 filament_.set_params(ch, effective_params(c, params[ch]));
             }
+            // Kept for the live monitor: the class is what the UI colours a
+            // channel by, and it is otherwise thrown away here.
+            for (size_t ch = 0; ch < num_channels_; ++ch)
+                classes_[ch] = profiles[ch].klass;
+
             ESP_LOGI(TAG, "auto-profiling applied (%u of %u channels locked)",
                      (unsigned)locked, (unsigned)num_channels_);
         }
@@ -348,9 +365,23 @@ namespace ooe::pinled
 
             if (self->scan_.read_frame(frame, self->num_channels_) == ESP_OK)
             {
+                // Accumulated in plain locals — no atomics in the inner loop,
+                // which is the whole reason the live hand-off is a bitmap
+                // rather than a flag per channel (pinled_live.h).
+                uint32_t active[LiveState::kWords]{};
+
                 for (size_t ch = 0; ch < self->num_channels_; ++ch)
+                {
                     self->filament_.update(ch, frame[ch]);
+                    if (frame[ch])
+                        active[ch / 32] |= (1u << (ch % 32));
+                }
                 self->filament_.snapshot(self->levels_, self->num_channels_);
+
+                // Four atomics a frame regardless of how many lamps are lit.
+                // Sticky, so the push task may be arbitrarily late without
+                // losing anything (FR-UI-9).
+                self->live_.publish(active);
 
 #ifdef CONFIG_PINLED_SCAN_DEBUG
                 for (size_t ch = 0; ch < self->num_channels_; ++ch)

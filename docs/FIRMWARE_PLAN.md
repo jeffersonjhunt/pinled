@@ -645,10 +645,64 @@ guessed, and worth knowing before the WebSocket lands.
 (FR-OTA-2) and an unarmed bricking endpoint behind open CORS is exactly what
 that requirement exists to prevent.
 
-**Step 6 — the live WebSocket (FR-UI-5/9).** Needs `CONFIG_HTTPD_WS_SUPPORT`.
-The push task reads the sticky flags `scan_task` already maintains per frame;
-define that hand-off explicitly rather than relying on `uint8_t` writes being
-atomic. Low priority, off core 1, drops under load.
+**Step 6 — the live WebSocket (FR-UI-5/9). *(Done, 2026-08-11.)***
+
+`/api/v1/live` carries a `LiveFrame` at ~30 Hz: two bytes a channel, level and
+flags, with `DriveClass` in bits 2–4.
+
+**The hand-off is the design.** The scan accumulates activity into plain local
+words — **no atomics in the 10 kHz inner loop** — and publishes with four
+`fetch_or`s per frame; the push drains with `exchange(0)`. That pairing is what
+makes the race benign: a set landing before the drain is reported now, one
+landing after survives to the next push. A plain load-then-store on the drain
+side would swallow anything set in between, which would present as "the UI
+occasionally misses a flash" and never reproduce on demand. `LiveState` lives
+in `pinled_schema` so both halves are host-tested, including a two-thread
+contention case.
+
+Sticky activity is also what makes FR-UI-9 free: a dropped push is a *longer
+window*, not a lost sample. Nothing accumulates and nothing blocks.
+
+**Verified on hardware, with buttons.** All five wired inputs — U1.H, U1.D,
+U2.D, U3.D, U4.D, being channels 0, 4, 12, 20 and 28 — appear on the socket
+when pressed, and the raw scan's `tog` line agrees independently
+(`T---T--- ----T--- ----T--- ----T---`). The level sequence is the strongest
+evidence: `59, 173, 225, 244, 251, 253…` then decaying on release, which is the
+filament integrator's attack curve sampled at 30 Hz. The whole chain is intact
+end to end, not merely the bit.
+
+**Three bugs the bench found, none of which a test would have.**
+
+- **21.4 Hz against a nominal 30.** `vTaskDelay` sleeps for the period *after*
+  the work, so the real rate was 1/(work + period). `vTaskDelayUntil` gives
+  30.5 Hz with zero sequence gaps over four minutes.
+- **LRU socket purging is actively wrong here.** httpd closes the least
+  recently used socket when a new one arrives, and a live WebSocket looks
+  *idle* to httpd because all its traffic is outbound — so opening a second
+  browser tab would have silently killed the first tab's monitor.
+- **Discovering a dead client from a failed send is too late.** The OS reuses
+  descriptors immediately, so the same fd can already name a different client
+  and the "failed" send evicts the newcomer. The log showed exactly that, fd 58
+  dropping and reconnecting inside a second. Clients are pruned from httpd's
+  `close_fn` now, which is the only reliable moment.
+
+Also a log line that lied: "refusing client 61" immediately followed by
+"client 61 connected", with the refused client left holding a socket that would
+never carry a frame — indistinguishable from a dead device. It fails the
+request now so the socket closes.
+
+Cost: **~5 KB of RAM** (224.8 KB free) and 8 KB of image.
+
+**Open, and the monitor is what exposed it:** every frame reports
+`DriveClass = OFF`, for every channel, including ones plainly being pressed.
+That is not a packing bug — the profiler runs **once, at boot**, when nothing
+was active, so it classified everything as OFF and the socket has faithfully
+reported that ever since. The class field is therefore honest and useless: a UI
+would paint a working playfield as dead. `FR-PROF-5` anticipates a re-arm path
+on GPIO 0, but nothing triggers it and classification never updates while the
+machine runs. Commissioning wants "turn the game on, press re-profile, watch
+the classes settle" — which means an API endpoint, and belongs with the
+profiler work rather than here.
 
 **Step 7 — provisioning (FR-UI-6/7).** Take ESP-IDF's `wifi_provisioning`
 component rather than writing credential exchange by hand; it assumes a

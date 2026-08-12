@@ -34,6 +34,7 @@
 
 #include "pinled_apply.h"
 #include "pinled_channel_config.h"
+#include "pinled_live.h"
 
 #include "version.h"
 
@@ -120,6 +121,13 @@ namespace ooe::pinled
         /// is why it is a member and not a stack array — the boot path already
         /// overflows the main task stack with less than this.
         ChannelConfig channels_[LampScan::MAX_CHANNELS]{};
+
+        /// Last classification per channel, kept for the live monitor.
+        DriveClass classes_[LampScan::MAX_CHANNELS]{};
+
+        /// Scan -> push hand-off (FR-UI-5/9). Borrows levels_, channels_ and
+        /// classes_; owns only the sticky bitmap.
+        LiveState live_{};
 
         // Shared brightness buffer: scan_task writes, render_task reads.
         uint8_t levels_[LampScan::MAX_CHANNELS]{};

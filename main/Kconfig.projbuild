@@ -161,6 +161,50 @@ menu "pinled configuration"
         config PINLED_LED_COUNT
             int "Number of addressable LEDs"
             default 16
+
+        config PINLED_STARTUP_WALK
+            bool "Walk the LED string at startup"
+            default y
+            help
+                At boot, light one LED at a time from 0 upwards, so you can see
+                that every pixel is present, wired the right way round, and
+                reachable.
+
+                A WS2812 string is a shift register in disguise: one dead pixel
+                or one cold joint kills everything downstream of it. Without
+                this the symptom is "the far half of my playfield does
+                nothing", which looks like a configuration fault and is not
+                one -- and which you would otherwise only discover after
+                wiring and mapping the whole machine.
+
+                Turn off once a machine is commissioned and you would rather
+                have the boot time back.
+
+        config PINLED_STARTUP_WALK_MS
+            int "Startup walk: ms per LED"
+            depends on PINLED_STARTUP_WALK
+            default 10
+            range 1 1000
+            help
+                At boot, light one LED at a time from 0 upwards, so you can see
+                that every pixel is present, wired the right way round, and
+                reachable.
+
+                A WS2812 string is a shift register in disguise: one dead pixel
+                or one cold joint kills everything downstream of it. Without
+                this the symptom is "the far half of my playfield does
+                nothing", which looks like a configuration fault and is not
+                one -- and which you would otherwise only discover after
+                wiring and mapping the whole machine.
+
+                One pixel at a time rather than a cumulative fill: a full
+                string of white is about 60 mA a pixel, which is 7.7 A at the
+                128-LED maximum and would brown out most bench supplies. A
+                single dot is 60 mA however long the string is.
+
+                COSTS BOOT TIME: led_count x this. At 10 ms a 16-LED string is
+                160 ms and a full 128 is 1.3 s -- fast enough to read as a
+                sweep rather than a wait, and still slow enough to see a gap.
     endmenu
 
     menu "Networking"

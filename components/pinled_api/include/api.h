@@ -16,6 +16,7 @@
  * | GET | `/api/v1/config` | `InstallConfig` |
  * | PUT | `/api/v1/config` | `InstallConfig` → stored, then restart |
  * | DELETE | `/api/v1/config` | none → revert to build defaults |
+ * | GET | `/api/v1/live` | WebSocket, `LiveFrame` at ~30 Hz |
  * | GET | `/api/v1/profile` | `MachineProfile` |
  * | PUT | `/api/v1/profile` | `MachineProfile` → stored, then restart |
  * | DELETE | `/api/v1/profile` | none → revert to unstyled |
@@ -51,6 +52,13 @@
  * `FR-OTA-2` gates it behind a physical button press — and why it is not in
  * this step.
  *
+ * @par The live socket
+ * `/api/v1/live` upgrades to a WebSocket carrying a `LiveFrame` about thirty
+ * times a second (FR-UI-5). The push task runs at low priority off the scan
+ * core and **drops frames rather than waiting** (FR-UI-9) — the sticky
+ * activity bit in `pinled_live.h` is what makes that free, because a dropped
+ * push is a longer window rather than a lost sample.
+ *
  * Note that `application/x-protobuf` is not a CORS-safelisted request content
  * type, so every browser `PUT` is preceded by an `OPTIONS` preflight. Handling
  * it is not optional: without it writes fail in a browser while working
@@ -64,6 +72,7 @@
 
 #include "machine_config.h"
 #include "net.h"
+#include "pinled_live.h"
 
 namespace ooe::pinled
 {
@@ -93,7 +102,8 @@ namespace ooe::pinled
         esp_err_t start(MachineConfigStore &store,
                         const MachineConfig &running,
                         const ChannelConfig *channels, size_t count,
-                        const Net &net);
+                        const Net &net,
+                        LiveState &live);
 
         void stop();
 

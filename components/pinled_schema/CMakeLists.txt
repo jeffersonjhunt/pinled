@@ -22,6 +22,7 @@ idf_component_register(
              "src/pinled_color_order.cpp"
              "src/pinled_doc_frame.cpp"
              "src/pinled_doc_file.cpp"
+             "src/pinled_live.cpp"
              "src/pinled_drive_class.cpp"
              "src/pinled_apply.cpp"
         INCLUDE_DIRS "include"

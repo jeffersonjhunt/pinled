@@ -39,3 +39,8 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 # TIMING.md section 2 derives every scan-budget number from a 240 MHz LX7.
 # The esp32s3 default is 160 MHz, which inflates the frame budget by 1.5x.
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# The live monitor is a WebSocket (FR-UI-5). Off by default in IDF, and its
+# absence also changes the shape of httpd_uri_t, which is why api.cpp assigns
+# that struct field by field rather than brace-initialising it.
+CONFIG_HTTPD_WS_SUPPORT=y

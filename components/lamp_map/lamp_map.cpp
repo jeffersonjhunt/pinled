@@ -14,6 +14,9 @@
 
 #include <new>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_log.h"
 #include "neopixel.h"
 
@@ -95,6 +98,50 @@ namespace ooe::pinled
             e.g = kDefaults.g;
             e.b = kDefaults.b;
         }
+    }
+
+    esp_err_t LampMap::walk(uint32_t ms_per_led)
+    {
+        if (!initialized_)
+            return ESP_ERR_INVALID_STATE;
+        if (ms_per_led == 0)
+            return ESP_OK;
+
+        ESP_LOGI(TAG, "startup walk: %u LEDs at %u ms (%u ms total)",
+                 (unsigned)cfg_.led_count, (unsigned)ms_per_led,
+                 (unsigned)(cfg_.led_count * ms_per_led));
+
+        tNeopixel *frame = static_cast<tNeopixel *>(frame_);
+
+        // White, so all three elements are exercised. It is also the one colour
+        // that looks identical whatever byte order the strip uses, which is
+        // correct here: this answers "is the pixel alive", and the fixture in
+        // fs_seed answers "is the order right".
+        const uint32_t lit = pack_for_order(cfg_.color_order, 255, 255, 255);
+
+        for (size_t on = 0; on < cfg_.led_count; ++on)
+        {
+            for (size_t i = 0; i < cfg_.led_count; ++i)
+            {
+                frame[i].index = static_cast<uint32_t>(i);
+                frame[i].rgb = (i == on) ? lit : 0;
+            }
+            neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_),
+                              frame, static_cast<uint32_t>(cfg_.led_count));
+            vTaskDelay(pdMS_TO_TICKS(ms_per_led));
+        }
+
+        // Leave the string dark rather than holding the last pixel on: the
+        // next thing to touch it is the render task, and a stuck pixel between
+        // the two would look like a fault this test had just caused.
+        for (size_t i = 0; i < cfg_.led_count; ++i)
+        {
+            frame[i].index = static_cast<uint32_t>(i);
+            frame[i].rgb = 0;
+        }
+        neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_),
+                          frame, static_cast<uint32_t>(cfg_.led_count));
+        return ESP_OK;
     }
 
     esp_err_t LampMap::set_entry(size_t channel, const LampMapEntry &e)

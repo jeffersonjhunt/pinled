@@ -264,6 +264,140 @@ def cmd_roundtrip(args) -> int:
     return 0
 
 
+# --- the live socket ----------------------------------------------------------
+#
+# A ~60-line WebSocket client rather than a dependency, for the same reason
+# harness.h is sixty lines rather than Catch2: the only thing needed is "open
+# it, read binary frames", and `pip install websockets` is a network fetch on a
+# machine that may not have one.
+#
+# Client-to-server frames must be masked (RFC 6455 §5.3) but we never send any
+# except the close, so the masking here is minimal and deliberate.
+
+
+def _ws_connect(url: str, timeout: float = 5.0):
+    import base64
+    import os as _os
+    import socket
+    from urllib.parse import urlparse
+
+    u = urlparse(url)
+    host = u.hostname or ""
+    port = u.port or (443 if u.scheme == "wss" else 80)
+    if u.scheme == "wss":
+        _die("wss is not supported", "the device speaks plain HTTP on the LAN (FR-UI-1)")
+    path = u.path or "/"
+
+    key = base64.b64encode(_os.urandom(16)).decode()
+    sock = socket.create_connection((host, port), timeout=timeout)
+    sock.sendall(
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n".encode()
+    )
+
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(1024)
+        if not chunk:
+            _die(f"{url} closed during the handshake")
+        buf += chunk
+    status = buf.split(b"\r\n", 1)[0].decode(errors="replace")
+    if "101" not in status:
+        _die(f"{url} refused the upgrade: {status}")
+    return sock, buf.split(b"\r\n\r\n", 1)[1]
+
+
+def _ws_frames(sock, initial: bytes = b""):
+    """Yield (opcode, payload) for each frame. Server frames are unmasked."""
+    buf = bytearray(initial)
+
+    def need(n: int) -> bytes:
+        while len(buf) < n:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("socket closed")
+            buf.extend(chunk)
+        out = bytes(buf[:n])
+        del buf[:n]
+        return out
+
+    while True:
+        h = need(2)
+        opcode = h[0] & 0x0F
+        masked = bool(h[1] & 0x80)
+        length = h[1] & 0x7F
+        if length == 126:
+            length = int.from_bytes(need(2), "big")
+        elif length == 127:
+            length = int.from_bytes(need(8), "big")
+        mask = need(4) if masked else b""
+        payload = need(length)
+        if masked:
+            payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        yield opcode, payload
+
+
+def cmd_live(args) -> int:
+    """Watch the live monitor and print one line per push."""
+    import time
+
+    sock, extra = _ws_connect(args.url)
+    msg = _message("LiveFrame")
+
+    started = time.monotonic()
+    count = 0
+    last_seq = None
+    gaps = 0
+
+    try:
+        for opcode, payload in _ws_frames(sock, extra):
+            if opcode == 0x8:  # close
+                print("server closed the socket")
+                break
+            if opcode not in (0x2, 0x1):
+                continue
+
+            msg.Clear()
+            msg.ParseFromString(payload)
+            count += 1
+
+            if last_seq is not None and msg.seq != last_seq + 1:
+                gaps += 1
+            last_seq = msg.seq
+
+            samples = msg.samples
+            active, bound = [], 0
+            for ch in range(msg.channel_count):
+                if ch * 2 + 1 >= len(samples):
+                    break
+                level, flags = samples[ch * 2], samples[ch * 2 + 1]
+                if flags & 0x01:
+                    active.append((ch, level, (flags >> 2) & 0x07))
+                if flags & 0x02:
+                    bound += 1
+
+            if args.verbose or active:
+                shown = " ".join(f"ch{c}:lvl{l}:cls{k}" for c, l, k in active[:8])
+                print(f"seq {msg.seq:6d}  {len(payload):4d}B  "
+                      f"{msg.channel_count} ch, {bound} bound  {shown}")
+
+            if args.seconds and time.monotonic() - started >= args.seconds:
+                break
+    except (ConnectionError, KeyboardInterrupt) as exc:
+        print(f"stream ended: {exc}", file=sys.stderr)
+    finally:
+        sock.close()
+
+    elapsed = max(time.monotonic() - started, 1e-6)
+    print(f"\n{count} frames in {elapsed:.1f}s = {count / elapsed:.1f} Hz; "
+          f"{gaps} sequence gap(s)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="pbtool.py",
@@ -297,6 +431,14 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--framed", action="store_true",
                    help="input is a stored document; verify and strip its header")
     d.set_defaults(func=cmd_decode)
+
+    lv = sub.add_parser("live", help="watch the live monitor WebSocket")
+    lv.add_argument("url", help="ws://<host>/api/v1/live")
+    lv.add_argument("--seconds", type=float, default=5.0,
+                    help="stop after this long (0 = run until interrupted)")
+    lv.add_argument("--verbose", action="store_true",
+                    help="print every frame, not only those with activity")
+    lv.set_defaults(func=cmd_live)
 
     r = sub.add_parser("roundtrip", help="check a JSON document survives a round trip")
     r.add_argument("type")

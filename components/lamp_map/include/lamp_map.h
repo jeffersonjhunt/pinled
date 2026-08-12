@@ -71,6 +71,32 @@ namespace ooe::pinled
          */
         esp_err_t render(const uint8_t *levels, size_t n);
 
+        /**
+         * @brief Walk a single lit pixel along the whole string, in order.
+         *
+         * A power-on proof that every LED is present, wired the right way
+         * round, and reachable — end to end, before any lamp has been sensed.
+         * A WS2812 string is a shift register in disguise: one dead pixel or
+         * one bad joint kills everything after it, and without this the
+         * symptom is "the far half of my playfield does nothing", which reads
+         * as a configuration fault and is not one.
+         *
+         * Deliberately bypasses the channel map. This tests the STRING, not
+         * the wiring — an LED with no channel mapped to it must still light
+         * here, or the test would only ever confirm what is already
+         * configured.
+         *
+         * @param ms_per_led dwell per LED; 0 skips the walk entirely
+         *
+         * @note One pixel at a time, not a cumulative fill. A full string of
+         *       white is ~60 mA a pixel — 7.7 A at the 128-LED maximum, which
+         *       would brown out most bench supplies. A single dot is 60 mA
+         *       whatever the string length.
+         * @note Blocks for `led_count * ms_per_led`. Called before the render
+         *       task starts, so nothing is competing for the strip.
+         */
+        esp_err_t walk(uint32_t ms_per_led);
+
         size_t led_count() const { return cfg_.led_count; }
 
         /// Highest refresh the driver can actually display, in **Hz**, given
