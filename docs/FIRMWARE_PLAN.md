@@ -149,16 +149,19 @@ channel's class (FR-PROF-4). *Stubbed with this algorithm documented in the
 first cut; full DSP in v1.*
 
 The observation window is specified in **milliseconds, not frames** (FR-PROF-5).
-The first cut observes a fixed 512 frames, which at 10 kHz is 51 ms — about
-three AC cycles, far too short to classify AC drive. Budget 500 ms–1 s and
-derive the frame count from the measured Fs.
+*(**Done, 2026-08-13**, §5.1 step 8. `PINLED_PROFILE_WINDOW_MS`, default 750,
+frames derived from the measured Fs. The first cut observed a fixed 512
+frames, which was worse than the 51 ms this paragraph assumed: boot profiling
+ran free-run rather than paced, so it was nearer **14 ms** — under two mains
+half-cycles.)*
 
 The profiler is also the one part of the pipeline that is *not* robust to
 solenoid-induced ground bounce (FR-PROF-6). The filament model absorbs a 1 ms
 false-on glitch as a ~3% brightness bump; the classifier sees it as correlated
 false edges across every channel at once and will push steady lamps into the
 MATRIX bucket. Hence robust statistics, and an easy re-arm path — GPIO 0 (the
-QT Py BOOT button) satisfies FR-PROF-2 with no extra hardware.
+QT Py BOOT button) satisfies FR-PROF-2 with no extra hardware. *(The re-arm
+landed in §5.1 step 8; the robust statistics have not.)*
 
 ### 3.4 Mapping + render (`lamp_map`)
 
@@ -792,6 +795,69 @@ known-good diagnostic build, and the step-0 table is deliberately compatible
 with it — the 2 MB `factory` partition holds the current app with room to
 spare, so the table is flashed once and thereafter switching between the two
 builds is an ordinary app flash.
+
+**Step 8 — the profiler re-arm (FR-PROF-2, FR-PROF-5).**
+
+Step 6 closed with an open problem: the live monitor reported `DriveClass =
+OFF` for every channel, forever, because classification happened once at boot
+on a playfield that was switched off. The class field was honest and useless,
+and a UI built on it would paint a working machine as dead. This closes it.
+
+**The structural point is that there is now one way to produce a
+classification instead of two.** At runtime the scan task owns the chain, so a
+re-arm cannot read frames of its own — two readers on one SPI device is not a
+thing that works. It has to be fed from that task. Boot now goes the same way,
+which is why tasks start *before* the boot pass rather than after it. Two
+paths that classify would have drifted, and the one that mattered is the one
+that did not exist yet.
+
+Three tasks share it and none of them takes a lock, because each owns a phase
+and the state is the baton:
+
+| task | transition |
+|---|---|
+| requester (httpd or button) | `IDLE → OBSERVING`, by compare-exchange |
+| scan | arms, feeds every frame, then `OBSERVING → CLASSIFYING` and notifies |
+| main | classifies, applies, `CLASSIFYING → IDLE` |
+
+The compare-exchange makes a second request during a pass a **refusal** rather
+than a restart of the window — two people, one pressing the button and one
+clicking a UI, should not silently extend how long either waits. And
+`Profiler::observe()` ignores frames past the window, which is what lets the
+main task read the accumulators without a lock and without stopping the writer:
+the counters stop moving on their own.
+
+**The window is milliseconds now** (FR-PROF-5), `PINLED_PROFILE_WINDOW_MS`,
+default 750, with the frame count derived from the **measured** Fs like every
+other time constant. The old fixed 512 frames was about 14 ms at the boot
+free-run rate, which is under two mains half-cycles — it classified
+confidently having seen essentially nothing.
+
+`POST /api/v1/profiler` re-arms and `GET` reports progress; a short press of
+the button does the same thing. One pin, one task, two jobs split by duration
+— and the short press fires on *release*, because at the moment the 300 ms
+threshold passes there is no way to tell a short press from the first third of
+a long hold, and re-profiling on the way to erasing the network would be a
+surprise every time.
+
+**Measured on the bench:** the window runs at a clean 10 kHz throughout
+(9.7–10.3 kHz sampled every 70 ms across a full pass) and classification lands
+**~830 ms** after the POST for a 750 ms window. An earlier reading of 1.1 s
+was the *measurement* — polling status at 20 Hz starves the priority-1 main
+task on core 0, where httpd also lives. Worth knowing rather than fixing: a UI
+polling at 1 Hz will not see it, and the cost of being starved is a slightly
+late classification rather than a wrong one.
+
+**Also fixed on the way past:** the button was started *after* the two early
+returns in `start_network()`, so a board that failed to join a network had no
+rescue button and no re-arm button — the exact case both exist for. It starts
+first now, before anything that can give up.
+
+**Still needs the bench, and it is one button-press:** everything above is
+mechanism. The claim that *classification tracks what the machine is doing* —
+a held channel reading `OFF` before a re-arm and `STEADY` after — cannot be
+made from a wired build host, because the inputs are physical. See the
+checklist in `BRINGUP.md`.
 
 ## 6. Test strategy
 

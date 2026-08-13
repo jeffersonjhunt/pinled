@@ -304,9 +304,56 @@ does**: that rig needed a 74HC14 in the `CLK` path to make its counter advance
 on the falling edge, and rev D needs no inverter anywhere because the phase is
 handled by the SPI mode instead.
 
+## 5b. Verifying the profiler re-arm
+
+Everything about the re-arm except the one claim that matters can be checked
+from a wired build host. The claim that cannot is **that classification tracks
+what the machine is doing** — which needs a channel physically held while a
+pass runs, and therefore needs a person at the rig.
+
+It takes about a minute. Watch the classes in one terminal:
+
+```sh
+tools/pbtool.py live ws://pinled.local/api/v1/live --classes --seconds 120
+```
+
+That prints one letter per channel — `.` off, `S` steady, `M` matrix,
+`A` ac_steady, `D` ac_dimmed — and only when the row **changes**, so a
+completed pass is one new line in an otherwise still terminal.
+
+| # | Do | Expect |
+|---|---|---|
+| 1 | Nothing. Read the first row. | Mostly `.`: the boot pass saw a dark playfield. |
+| 2 | **Hold** a wired input down (`U1.D` is channel 4). | Row unchanged. The class is stale by design — this is the bug being fixed. |
+| 3 | Still holding, `curl -X POST http://pinled.local/api/v1/profiler` | ~0.8 s later, one new row: that channel becomes `S`. |
+| 4 | Release. POST again. | ~0.8 s later, back to `.`. |
+| 5 | Short-press the BOOT button (under 5 s) while holding an input. | Same as 3, from the button. The log says `auto-profiling: window 750 ms`. |
+| 6 | POST twice in quick succession. | Second returns **409** with the in-flight status as its body. |
+| 7 | Hold BOOT the full 5 s. | Still erases the network and reboots into SoftAP — the split by duration did not break the rescue. |
+
+Step 4 is the half that makes this a test rather than a demonstration: a class
+that only ever moves one way would pass steps 1–3 while being a latch rather
+than a classifier.
+
+If step 3 does nothing, check `GET /api/v1/profiler` first — `state` and
+`passes` tell you whether the pass ran at all, which separates "the profiler
+did not re-arm" from "it re-armed and decided the same thing".
+
 ## 6. Tooling traps
 
 These are not hardware faults, but they present as one.
+
+**The IDF is not at `~/esp/esp-idf` on the build host.** It is installed by the
+Espressif IDE with per-version roots, and `export.sh` from the version
+directory **fails** — it looks for a Python venv at a path the installer does
+not use. The activation scripts are the supported entry point:
+
+```sh
+. ~/.espressif/tools/activate_idf_v5.5.sh     # v6.0 is also installed
+```
+
+Sourcing the wrong one, or `export.sh`, leaves `idf.py` undefined and the error
+names a missing venv rather than the actual mistake.
 
 **Opening the serial port resets the board.** On the DevKitC-1's native `USB`
 port, RTS drives `EN`. `cat /dev/ttyACM0`, `idf.py monitor`, and pyserial all
