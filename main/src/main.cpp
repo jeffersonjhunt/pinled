@@ -78,8 +78,12 @@ namespace ooe::pinled
         ESP_ERROR_CHECK(filament_.init(num_channels_, fs_actual_));
         filament_.set_gamma(cfg_.gamma);
 
-        // 5. Profiler (used at boot, then idle).
-        ESP_ERROR_CHECK(profiler_.init(num_channels_, fs_actual_));
+        // 5. Profiler. The window is milliseconds and the frame count comes
+        //    from the measured Fs, so a slower chain observes for the same
+        //    length of time rather than the same number of frames (FR-PROF-5).
+        ESP_ERROR_CHECK(profiler_.init(num_channels_, fs_actual_,
+                                       CONFIG_PINLED_PROFILE_WINDOW_MS));
+        profile_window_frames_ = profiler_.window_frames();
 
         // 6. LED map + string.
         LampMapConfig mc{};
@@ -119,11 +123,18 @@ namespace ooe::pinled
         //    filament_.init() and map_.init(), since it writes into each.
         apply_channel_config();
 
-        // 8. Boot-time auto-profiling pass.
-        profile_boot();
-
+        // 8. Tasks, then the boot profiling pass — in that order, which is a
+        //    change from the first cut and the point of this whole path.
+        //    Profiling now happens by having the scan task hand its frames to
+        //    the profiler, because at runtime that task owns the chain and
+        //    nothing else may read it. Boot going through the same route is
+        //    what stops the two from drifting: there is one way a
+        //    classification is produced, and the button and the API use it.
+        main_task_ = xTaskGetCurrentTaskHandle();
         ESP_ERROR_CHECK(start_tasks());
         ESP_ERROR_CHECK(start_pacing());
+        profile_and_wait("boot");
+
         ESP_LOGI(TAG, "Initializing complete. %u channels, %u LEDs, Fs %.0f Hz, %u Hz refresh.",
                  (unsigned)num_channels_, (unsigned)cfg_.led_count,
                  fs_actual_, (unsigned)cfg_.refresh_hz);
@@ -144,6 +155,13 @@ namespace ooe::pinled
 
     void Main::start_network()
     {
+        // The button first, and before any of the ways this function gives up.
+        // It is not a network feature: it is the way back in on a board that
+        // joined nothing (FR-UI-7) and the way to re-profile a machine on a
+        // bench with no router at all (FR-PROF-2). Starting it after the early
+        // returns below made it available only when it was least needed.
+        start_button();
+
         // Every failure here is logged and survived. A board that cannot join
         // a network still senses lamps and still drives LEDs, and making boot
         // conditional on Wi-Fi would turn a router reboot into a dark
@@ -163,12 +181,27 @@ namespace ooe::pinled
         live_.classes = classes_;
         live_.count = num_channels_;
 
-        if (api_.start(store_, cfg_, channels_, num_channels_, net_, live_) != ESP_OK)
+        if (api_.start(store_, cfg_, channels_, num_channels_, net_, live_, this) != ESP_OK)
             ESP_LOGE(TAG, "API did not start");
+    }
 
-        // FR-UI-7. Started whatever mode we came up in: the rescue is most
-        // useful on a device that thinks it is provisioned and is wrong.
+    void Main::start_button()
+    {
+        // One pin, two jobs, split by how long it is held: a long hold erases
+        // the network (FR-UI-7), a short press re-runs the classifier
+        // (FR-PROF-2). The callback runs on the button's own task, so it does
+        // nothing but post the request — the observation window belongs to the
+        // scan task and the classification to the main task.
+#ifdef CONFIG_PINLED_PROFILE_REARM_BUTTON
+        auto on_short_press = [](void *self) {
+            if (!static_cast<Main *>(self)->rearm_profiler())
+                ESP_LOGI(TAG, "button re-arm ignored: a pass is already running");
+        };
+        rescue_button_start(CONFIG_PINLED_RESCUE_GPIO, CONFIG_PINLED_RESCUE_HOLD_MS,
+                            on_short_press, this);
+#else
         rescue_button_start(CONFIG_PINLED_RESCUE_GPIO, CONFIG_PINLED_RESCUE_HOLD_MS);
+#endif
     }
 
     void Main::apply_channel_config()
@@ -188,20 +221,95 @@ namespace ooe::pinled
         }
     }
 
-    void Main::profile_boot()
+    bool Main::rearm_profiler()
     {
-        ESP_LOGI(TAG, "auto-profiling (%u channels)...", (unsigned)num_channels_);
-        bool frame[LampScan::MAX_CHANNELS];
-
-        profiler_.arm();
-        // Observe a window long enough to span several AC/matrix periods.
-        const int kFrames = 512;
-        for (int i = 0; i < kFrames; ++i)
+        if (scan_task_ == nullptr)
         {
-            if (scan_.read_frame(frame, num_channels_) == ESP_OK)
-                profiler_.observe(frame, num_channels_);
+            // A bring-up scan mode owns the chain, so nothing is feeding the
+            // profiler and nothing ever will on this build.
+            ESP_LOGW(TAG, "profiler re-arm refused: no scan task on this build");
+            return false;
         }
 
+        // Only an idle profiler accepts a request. Losing the exchange means
+        // someone else got there first, which is a refusal and not an error:
+        // the pass they started is the one this caller wanted.
+        ProfilerState expected = ProfilerState::IDLE;
+        if (!profile_state_.compare_exchange_strong(expected, ProfilerState::OBSERVING,
+                                                    std::memory_order_acq_rel,
+                                                    std::memory_order_relaxed))
+            return false;
+
+        ESP_LOGI(TAG, "auto-profiling: window %u ms (%u frames at %.0f Hz)",
+                 (unsigned)CONFIG_PINLED_PROFILE_WINDOW_MS,
+                 (unsigned)profile_window_frames_, fs_actual_);
+        return true;
+    }
+
+    ProfilerStatus Main::profiler_status() const
+    {
+        ProfilerStatus s{};
+        s.state = scan_task_ ? profile_state_.load(std::memory_order_relaxed)
+                             : ProfilerState::UNAVAILABLE;
+        s.window_ms = CONFIG_PINLED_PROFILE_WINDOW_MS;
+        s.window_frames = profile_window_frames_;
+        // Written by the scan task and read here without synchronisation: a
+        // 32-bit aligned load cannot tear on this target, so the worst case is
+        // a progress number a frame or two behind. Taking a lock in the path
+        // of a 10 kHz task to freshen a browser readout would be the wrong
+        // trade by a wide margin.
+        s.frames_observed = profiler_.frames();
+        s.channels = static_cast<uint32_t>(num_channels_);
+        s.passes = profile_passes_.load(std::memory_order_relaxed);
+        return s;
+    }
+
+    void Main::profile_and_wait(const char *reason)
+    {
+        if (!rearm_profiler())
+        {
+            ESP_LOGW(TAG, "auto-profiling (%s) skipped", reason);
+            return;
+        }
+
+        // Generous: the window plus the time the scan task needs to notice the
+        // request, times three. If this expires something is wrong with the
+        // scan, and boot continues rather than hanging — a machine that cannot
+        // classify should still light its lamps with the configured defaults.
+        const uint32_t budget_ms = 3 * CONFIG_PINLED_PROFILE_WINDOW_MS + 500;
+        const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(budget_ms);
+
+        while (profile_state_.load(std::memory_order_acquire) != ProfilerState::CLASSIFYING)
+        {
+            const TickType_t now = xTaskGetTickCount();
+            if (static_cast<int32_t>(deadline - now) <= 0)
+            {
+                ESP_LOGE(TAG, "auto-profiling (%s) did not complete in %u ms; "
+                              "continuing with configured defaults",
+                         reason, (unsigned)budget_ms);
+                // Left OBSERVING deliberately rather than forced back to IDLE:
+                // the scan task may still be mid-window, and stealing the
+                // state from underneath it would let a second request arm the
+                // profiler while the first is still feeding it.
+                return;
+            }
+            ulTaskNotifyTake(pdTRUE, deadline - now);
+        }
+        service_profile();
+    }
+
+    void Main::service_profile()
+    {
+        if (profile_state_.load(std::memory_order_acquire) != ProfilerState::CLASSIFYING)
+            return;
+
+        apply_classification();
+        profile_passes_.fetch_add(1, std::memory_order_relaxed);
+        profile_state_.store(ProfilerState::IDLE, std::memory_order_release);
+    }
+
+    void Main::apply_classification()
+    {
         // Heap-allocated: MAX_CHANNELS-sized arrays overflow the main task stack.
         std::unique_ptr<ChannelProfile[]> profiles(new (std::nothrow) ChannelProfile[num_channels_]());
         std::unique_ptr<FilamentParams[]> params(new (std::nothrow) FilamentParams[num_channels_]());
@@ -387,6 +495,33 @@ namespace ooe::pinled
 
             if (self->scan_.read_frame(frame, self->num_channels_) == ESP_OK)
             {
+                // The auto-profiler is fed from here and nowhere else, because
+                // this task owns the chain: a re-arm cannot read frames of its
+                // own without two readers on one SPI device. Observation is
+                // passive — counting highs and edges — so an armed profiler
+                // costs the frame nothing it would not already spend.
+                if (self->profile_state_.load(std::memory_order_acquire) ==
+                    ProfilerState::OBSERVING)
+                {
+                    if (!self->profile_armed_)
+                    {
+                        self->profiler_.arm(self->profile_window_frames_);
+                        self->profile_armed_ = true;
+                    }
+                    self->profiler_.observe(frame, self->num_channels_);
+                    if (self->profiler_.window_complete())
+                    {
+                        // Hand off. The profiler's accumulators stop moving
+                        // here — observe() ignores anything past the window —
+                        // so the main task can read them without a lock and
+                        // without this task being stopped.
+                        self->profile_armed_ = false;
+                        self->profile_state_.store(ProfilerState::CLASSIFYING,
+                                                   std::memory_order_release);
+                        xTaskNotifyGive(self->main_task_);
+                    }
+                }
+
                 // Accumulated in plain locals — no atomics in the inner loop,
                 // which is the whole reason the live hand-off is a bitmap
                 // rather than a flag per channel (pinled_live.h).
@@ -650,14 +785,23 @@ namespace ooe::pinled
         for (;;)
         {
             log_scan_debug();
+            service_profile();
             vTaskDelay(pdMS_TO_TICKS(500));
         }
 #else
-        // Tasks do the work; keep app_main alive and emit a slow heartbeat.
+        // Tasks do the work; this one classifies whatever the scan task has
+        // finished observing, and otherwise emits a slow heartbeat.
+        //
+        // A notification rather than a poll, so a re-arm lands as soon as its
+        // window fills instead of up to five seconds later — the person who
+        // pressed the button is standing over the machine watching the lamps.
+        // The timeout is still here because it costs nothing and a missed
+        // notification would otherwise strand a completed pass forever.
         for (;;)
         {
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000));
+            service_profile();
             ESP_LOGD(TAG, "tick");
-            vTaskDelay(pdMS_TO_TICKS(5000));
         }
 #endif
     }

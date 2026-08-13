@@ -27,6 +27,7 @@
 #include "filament.h"          // FilamentParams
 #include "pinled_drive_class.h" // DriveClass — moved out so the config layer,
                                 // which must build off-target, can reach it
+#include "pinled_profiling.h"   // profile_window_frames — the window in ms
 
 namespace ooe::pinled
 {
@@ -55,13 +56,44 @@ namespace ooe::pinled
     class Profiler
     {
     public:
-        esp_err_t init(size_t num_channels, float sample_rate_hz);
+        /**
+         * @param num_channels   channels to classify
+         * @param sample_rate_hz the MEASURED Fs, not the configured one
+         * @param window_ms      observation window (FR-PROF-5); the frame
+         *                       count is derived from @p sample_rate_hz
+         */
+        esp_err_t init(size_t num_channels, float sample_rate_hz, uint32_t window_ms);
         void deinit();
 
-        /// Reset accumulators and begin a fresh observation window.
-        void arm();
-        /// Accumulate one frame of booleans (length >= num_channels).
+        /**
+         * @brief Reset accumulators and begin a fresh observation window.
+         * @param window_frames frames to accumulate before the window is
+         *        complete; 0 means "the window set at init()".
+         *
+         * Called only from whichever context feeds observe() — the two are a
+         * pair and splitting them across tasks is what would need a lock.
+         */
+        void arm(size_t window_frames = 0);
+
+        /**
+         * @brief Accumulate one frame of booleans (length >= num_channels).
+         *
+         * Frames past the window are **ignored**, deliberately: that is what
+         * lets a second task call classify() without a lock. Once
+         * window_complete() reads true the accumulators have stopped moving,
+         * so the reader sees a stable set without the writer having to be
+         * stopped or told anything.
+         */
         void observe(const bool *samples, size_t n);
+
+        /// True once the window has been filled. See observe().
+        bool window_complete() const { return frames_ >= window_frames_; }
+
+        /// Frames accumulated in the current window, for progress reporting.
+        uint32_t frames() const { return frames_; }
+        /// Frames this window will accumulate before it is complete.
+        uint32_t window_frames() const { return window_frames_; }
+
         /// Finalize: fill profiles[] and map each to FilamentParams params[].
         esp_err_t classify(ChannelProfile *profiles, FilamentParams *params, size_t n);
 
@@ -69,11 +101,13 @@ namespace ooe::pinled
         static FilamentParams params_for(const ChannelProfile &p);
 
         size_t channels() const { return num_channels_; }
+        float sample_rate_hz() const { return sample_rate_hz_; }
 
     private:
         size_t num_channels_{0};
         float sample_rate_hz_{0};
         uint32_t frames_{0};
+        uint32_t window_frames_{0}; ///< derived from the window in ms (FR-PROF-5)
 
         uint32_t *high_count_{nullptr}; ///< samples seen high, per channel
         uint32_t *edges_{nullptr};      ///< transitions, per channel

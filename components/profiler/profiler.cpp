@@ -20,7 +20,7 @@ namespace ooe::pinled
 {
     static const char *TAG = "profiler";
 
-    esp_err_t Profiler::init(size_t num_channels, float sample_rate_hz)
+    esp_err_t Profiler::init(size_t num_channels, float sample_rate_hz, uint32_t window_ms)
     {
         if (num_channels == 0 || sample_rate_hz <= 0.0f)
             return ESP_ERR_INVALID_ARG;
@@ -35,8 +35,11 @@ namespace ooe::pinled
         }
         num_channels_ = num_channels;
         sample_rate_hz_ = sample_rate_hz;
+        window_frames_ = static_cast<uint32_t>(profile_window_frames(window_ms, sample_rate_hz));
         arm();
-        ESP_LOGI(TAG, "init: %u channels @ %.0f Hz", (unsigned)num_channels, sample_rate_hz);
+        ESP_LOGI(TAG, "init: %u channels @ %.0f Hz, window %u ms = %u frames",
+                 (unsigned)num_channels, sample_rate_hz,
+                 (unsigned)window_ms, (unsigned)window_frames_);
         return ESP_OK;
     }
 
@@ -50,8 +53,10 @@ namespace ooe::pinled
         num_channels_ = 0;
     }
 
-    void Profiler::arm()
+    void Profiler::arm(size_t window_frames)
     {
+        if (window_frames != 0)
+            window_frames_ = static_cast<uint32_t>(window_frames);
         frames_ = 0;
         for (size_t ch = 0; ch < num_channels_; ++ch)
         {
@@ -63,8 +68,8 @@ namespace ooe::pinled
 
     void Profiler::observe(const bool *samples, size_t n)
     {
-        if (!samples)
-            return;
+        if (!samples || window_complete())
+            return; // see the note on observe() in profiler.h
         // Don't count a transition against the reset state on the first frame,
         // or a genuinely steady channel logs a phantom edge and misclassifies.
         const bool first = (frames_ == 0);
@@ -162,8 +167,9 @@ namespace ooe::pinled
             params[ch] = params_for(p);
         }
 
-        ESP_LOGI(TAG, "classified %u channels over %u frames",
-                 (unsigned)num_channels_, (unsigned)frames_);
+        ESP_LOGI(TAG, "classified %u channels over %u frames (%.0f ms at %.0f Hz)",
+                 (unsigned)num_channels_, (unsigned)frames_,
+                 1000.0f * static_cast<float>(frames_) / sample_rate_hz_, sample_rate_hz_);
         return ESP_OK;
     }
 } // namespace ooe::pinled

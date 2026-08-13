@@ -52,6 +52,7 @@ namespace ooe::pinled
             const Net *net;
             Net *net_mutable; ///< scanning is not a const operation
             LiveState *live;
+            ProfilerControl *profiler; ///< null on a build with no scan task
             httpd_handle_t server;
         };
 
@@ -139,8 +140,12 @@ namespace ooe::pinled
         void add_cors(httpd_req_t *req)
         {
             httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+            // POST is listed for the reader's benefit rather than the
+            // browser's: it is a CORS-safelisted method, so a preflight
+            // accepts it whether or not it appears here. Leaving it out was
+            // correct and looked like a bug every time anyone checked.
             httpd_resp_set_hdr(req, "Access-Control-Allow-Methods",
-                               "GET, PUT, DELETE, OPTIONS");
+                               "GET, POST, PUT, DELETE, OPTIONS");
             httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
             httpd_resp_set_hdr(req, "Access-Control-Max-Age", "600");
         }
@@ -148,8 +153,9 @@ namespace ooe::pinled
         esp_err_t fail(httpd_req_t *req, httpd_err_code_t code, const char *msg)
         {
             add_cors(req);
-            const char *verb = req->method == HTTP_PUT      ? "PUT"
-                               : req->method == HTTP_DELETE ? "DELETE"
+            const char *verb = req->method == HTTP_PUT       ? "PUT"
+                               : req->method == HTTP_POST    ? "POST"
+                               : req->method == HTTP_DELETE  ? "DELETE"
                                : req->method == HTTP_OPTIONS ? "OPTIONS"
                                                              : "GET";
             ESP_LOGW(TAG, "%s %s -> %s", verb, req->uri, msg);
@@ -644,6 +650,89 @@ namespace ooe::pinled
         {
             return delete_document(req, DocKind::MachineProfile);
         }
+
+        // ------------------------------------------------------- profiler --
+        //
+        // Note this is the CLASSIFIER, not the stored MachineProfile document
+        // one route above. Nothing here reads or writes flash.
+
+        /// The runtime enum and the wire enum are deliberately separate types:
+        /// the wire one has UNSPECIFIED at zero as proto3 requires, and the
+        /// runtime one has IDLE there because a zeroed struct describes a
+        /// device that is doing nothing. Translating explicitly is what keeps
+        /// that difference from becoming an off-by-one nobody notices.
+        pinled_v1_ProfilerState wire_state(ProfilerState s)
+        {
+            switch (s)
+            {
+            case ProfilerState::IDLE:
+                return pinled_v1_ProfilerState_PROFILER_STATE_IDLE;
+            case ProfilerState::OBSERVING:
+                return pinled_v1_ProfilerState_PROFILER_STATE_OBSERVING;
+            case ProfilerState::CLASSIFYING:
+                return pinled_v1_ProfilerState_PROFILER_STATE_CLASSIFYING;
+            case ProfilerState::UNAVAILABLE:
+                return pinled_v1_ProfilerState_PROFILER_STATE_UNAVAILABLE;
+            }
+            return pinled_v1_ProfilerState_PROFILER_STATE_UNSPECIFIED;
+        }
+
+        /// @param status_line an HTTP status other than 200, or null.
+        esp_err_t send_profiler_status(httpd_req_t *req, const char *status_line = nullptr)
+        {
+            // A build with no profiler answers the question rather than 404ing
+            // it. "Nothing can run a pass here" is a fact a UI can render; a
+            // missing route is one it has to guess about.
+            const ProfilerStatus s = g_ctx.profiler ? g_ctx.profiler->profiler_status()
+                                                    : ProfilerStatus{ProfilerState::UNAVAILABLE,
+                                                                     0, 0, 0, 0, 0};
+
+            pinled_v1_ProfilerStatus msg = pinled_v1_ProfilerStatus_init_zero;
+            msg.state = wire_state(s.state);
+            msg.window_ms = s.window_ms;
+            msg.window_frames = s.window_frames;
+            msg.frames_observed = s.frames_observed;
+            msg.channels = s.channels;
+            msg.passes = s.passes;
+
+            uint8_t buf[pinled_v1_ProfilerStatus_size];
+            pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
+            if (!pb_encode(&os, pinled_v1_ProfilerStatus_fields, &msg))
+                return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "encode failed");
+
+            if (status_line)
+                httpd_resp_set_status(req, status_line);
+            return send_protobuf(req, buf, os.bytes_written);
+        }
+
+        esp_err_t get_profiler(httpd_req_t *req) { return send_profiler_status(req); }
+
+        /// Re-arm (FR-PROF-2). Takes no body: there is nothing to say beyond
+        /// "watch again", and the window is a device setting rather than a
+        /// per-request one — a caller that could shorten it could ask for a
+        /// classification that cannot be right.
+        esp_err_t post_profiler(httpd_req_t *req)
+        {
+            if (g_ctx.profiler == nullptr)
+                return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "no scan task on this build");
+
+            if (!g_ctx.profiler->rearm_profiler())
+            {
+                // 409 with the status as its body, rather than httpd's error
+                // path: a second press while a pass is running has changed
+                // nothing, and the useful reply is *which* pass is in the way
+                // and how far through it is. httpd_resp_send_err would send a
+                // plain-text sentence instead and lose that.
+                ESP_LOGI(TAG, "profiler re-arm refused: a pass is already running");
+                return send_profiler_status(req, "409 Conflict");
+            }
+
+            ESP_LOGI(TAG, "profiler re-armed by API request");
+            // The status, not an ApplyResult: nothing was applied and nothing
+            // restarted. The caller gets the window it is now waiting on.
+            return send_profiler_status(req);
+        }
         /// The upgrade handshake. httpd performs it for us when the handler is
         /// registered as a websocket; this only runs for the GET that opens it
         /// and for subsequent frames from the client, which are ignored — the
@@ -757,7 +846,8 @@ namespace ooe::pinled
                          const MachineConfig &running,
                          const ChannelConfig *channels, size_t count,
                          const Net &net,
-                         LiveState &live)
+                         LiveState &live,
+                         ProfilerControl *profiler)
     {
         g_ctx.store = &store;
         g_ctx.running = &running;
@@ -769,11 +859,12 @@ namespace ooe::pinled
         // hands us says so.
         g_ctx.net_mutable = const_cast<Net *>(&net);
         g_ctx.live = &live;
+        g_ctx.profiler = profiler;
         g_ctx.server = nullptr;
 
         httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-        // Nine handlers below, and the default cap is eight — which fails at
-        // registration time with a log line nobody reads.
+        // Well past the default cap of eight, which fails at registration time
+        // with a log line nobody reads.
         cfg.max_uri_handlers = 32;
         cfg.max_open_sockets = 7;
         // LRU purging closes the least recently used socket when a new one
@@ -815,6 +906,11 @@ namespace ooe::pinled
             {"/api/v1/profile", HTTP_PUT, put_profile},
             {"/api/v1/profile", HTTP_DELETE, delete_profile},
             {"/api/v1/profile", HTTP_OPTIONS, handle_options},
+            // The classifier, not the document above. One letter apart, and
+            // they share nothing.
+            {"/api/v1/profiler", HTTP_GET, get_profiler},
+            {"/api/v1/profiler", HTTP_POST, post_profiler},
+            {"/api/v1/profiler", HTTP_OPTIONS, handle_options},
             {"/api/v1/scan", HTTP_GET, get_scan},
             {"/api/v1/provision", HTTP_POST, post_provision},
             {"/api/v1/provision", HTTP_DELETE, delete_provision},

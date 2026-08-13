@@ -294,3 +294,35 @@ message LiveFrame {
   uint32 channel_count = 2;
   bytes  samples       = 3;
 }
+
+// What the auto-profiler is doing (FR-PROF-2).
+//
+// Boot classification watches a playfield that is switched off, so every
+// channel comes back OFF and the live monitor faithfully reports a dead
+// machine. The pass that produces a useful answer is the one run with the
+// game turned on, which means it has to be re-armable — from here, or from a
+// short press of the button on the board.
+enum ProfilerState {
+  PROFILER_STATE_UNSPECIFIED = 0;
+  PROFILER_STATE_IDLE        = 1;  // holding the last classification
+  PROFILER_STATE_OBSERVING   = 2;  // accumulating a window
+  PROFILER_STATE_CLASSIFYING = 3;  // window full, deciding
+  // Nothing can feed it: the bring-up scan modes own the chain themselves.
+  // Distinct from IDLE, because "not running" and "cannot run" want different
+  // things from the person reading it.
+  PROFILER_STATE_UNAVAILABLE = 4;
+}
+
+message ProfilerStatus {
+  ProfilerState state = 1;
+
+  // The window is declared in milliseconds and the frame count derived from
+  // the MEASURED sample rate (FR-PROF-5), so both are reported: the second is
+  // the only evidence that the first survived the boot Fs clamp.
+  uint32 window_ms       = 2;
+  uint32 window_frames   = 3;
+  uint32 frames_observed = 4;  // progress through the current window
+
+  uint32 channels = 5;
+  uint32 passes   = 6;  // classifications completed since boot, boot included
+}
