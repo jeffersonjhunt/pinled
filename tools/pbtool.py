@@ -345,9 +345,14 @@ def _ws_frames(sock, initial: bytes = b""):
 # chosen to be told apart at a glance in a 128-character row: '.' for a
 # channel the profiler called OFF, so a row of mostly-dots reads as a
 # playfield that was dark when it was last classified.
-_CLASS_LETTERS = "?.SMAD"
+#
+# EIGHT entries for a three-bit field, not six for the six classes that
+# exist. A newer firmware with a seventh class -- or one flipped bit -- would
+# otherwise index past the end and kill the watcher with an IndexError, which
+# is a rotten way to find out you are talking to a device you do not know.
+_CLASS_LETTERS = "?.SMAD!!"
 _CLASS_NAMES = {"?": "unknown", ".": "off", "S": "steady", "M": "matrix",
-                "A": "ac_steady", "D": "ac_dimmed"}
+                "A": "ac_steady", "D": "ac_dimmed", "!": "unrecognised"}
 
 
 def cmd_live(args) -> int:
@@ -464,7 +469,8 @@ def main(argv: list[str] | None = None) -> int:
     lv.add_argument("--seconds", type=float, default=5.0,
                     help="stop after this long (0 = run until interrupted)")
     lv.add_argument("--verbose", action="store_true",
-                    help="print every frame, not only those with activity")
+                    help="print every frame, not only those with activity "
+                         "(ignored with --classes, which prints on change)")
     lv.add_argument("--classes", action="store_true",
                     help="one letter per channel's DriveClass, printed only "
                          "when it changes -- the view for watching a "

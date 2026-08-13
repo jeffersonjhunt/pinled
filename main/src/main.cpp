@@ -231,14 +231,24 @@ namespace ooe::pinled
             return false;
         }
 
-        // Only an idle profiler accepts a request. Losing the exchange means
-        // someone else got there first, which is a refusal and not an error:
-        // the pass they started is the one this caller wanted.
-        ProfilerState expected = ProfilerState::IDLE;
-        if (!profile_state_.compare_exchange_strong(expected, ProfilerState::OBSERVING,
+        // Only an idle profiler accepts a request, and the phase and the pass
+        // number advance together. Losing the exchange means someone else got
+        // there first, which is a refusal and not an error: the pass they
+        // started is the one this caller wanted.
+        uint32_t word = profile_word_.load(std::memory_order_acquire);
+        for (;;)
+        {
+            if (profile_phase(word) != ProfilerState::IDLE)
+                return false;
+            const uint32_t next = profile_pack(ProfilerState::OBSERVING,
+                                               profile_pass(word) + 1);
+            if (profile_word_.compare_exchange_weak(word, next,
                                                     std::memory_order_acq_rel,
-                                                    std::memory_order_relaxed))
-            return false;
+                                                    std::memory_order_acquire))
+                break;
+        }
+        profile_started_ms_.store(static_cast<uint32_t>(esp_timer_get_time() / 1000),
+                                  std::memory_order_relaxed);
 
         ESP_LOGI(TAG, "auto-profiling: window %u ms (%u frames at %.0f Hz)",
                  (unsigned)CONFIG_PINLED_PROFILE_WINDOW_MS,
@@ -249,8 +259,9 @@ namespace ooe::pinled
     ProfilerStatus Main::profiler_status() const
     {
         ProfilerStatus s{};
-        s.state = scan_task_ ? profile_state_.load(std::memory_order_relaxed)
-                             : ProfilerState::UNAVAILABLE;
+        s.state = scan_task_
+                      ? profile_phase(profile_word_.load(std::memory_order_relaxed))
+                      : ProfilerState::UNAVAILABLE;
         s.window_ms = CONFIG_PINLED_PROFILE_WINDOW_MS;
         s.window_frames = profile_window_frames_;
         // Written by the scan task and read here without synchronisation: a
@@ -279,7 +290,8 @@ namespace ooe::pinled
         const uint32_t budget_ms = 3 * CONFIG_PINLED_PROFILE_WINDOW_MS + 500;
         const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(budget_ms);
 
-        while (profile_state_.load(std::memory_order_acquire) != ProfilerState::CLASSIFYING)
+        while (profile_phase(profile_word_.load(std::memory_order_acquire)) !=
+               ProfilerState::CLASSIFYING)
         {
             const TickType_t now = xTaskGetTickCount();
             if (static_cast<int32_t>(deadline - now) <= 0)
@@ -287,10 +299,11 @@ namespace ooe::pinled
                 ESP_LOGE(TAG, "auto-profiling (%s) did not complete in %u ms; "
                               "continuing with configured defaults",
                          reason, (unsigned)budget_ms);
-                // Left OBSERVING deliberately rather than forced back to IDLE:
-                // the scan task may still be mid-window, and stealing the
-                // state from underneath it would let a second request arm the
-                // profiler while the first is still feeding it.
+                // Left running deliberately: the scan task may be mid-window
+                // and merely slow, in which case the pass still lands and
+                // service_profile() picks it up from the main loop. If it is
+                // wedged instead, the same function abandons it once
+                // profile_budget_ms() is up, so nothing stays stuck either way.
                 return;
             }
             ulTaskNotifyTake(pdTRUE, deadline - now);
@@ -300,12 +313,46 @@ namespace ooe::pinled
 
     void Main::service_profile()
     {
-        if (profile_state_.load(std::memory_order_acquire) != ProfilerState::CLASSIFYING)
+        uint32_t word = profile_word_.load(std::memory_order_acquire);
+
+        if (profile_phase(word) == ProfilerState::OBSERVING)
+        {
+            // A window that has outlived its budget means the scan task has
+            // stopped feeding it — a persistently failing read_frame is the
+            // way there, since the profiler is only fed from a good frame.
+            // Without this the phase would stay OBSERVING for the life of the
+            // boot and every later request would be refused, on a device
+            // whose real problem is elsewhere and diagnosable.
+            const uint32_t elapsed =
+                static_cast<uint32_t>(esp_timer_get_time() / 1000) -
+                profile_started_ms_.load(std::memory_order_relaxed);
+            if (elapsed > profile_budget_ms())
+            {
+                // Compare-exchange, not a store: the scan task may be
+                // completing this very pass. Losing means it did, and its
+                // result is the one to keep.
+                if (profile_word_.compare_exchange_strong(
+                        word, profile_pack(ProfilerState::IDLE, profile_pass(word)),
+                        std::memory_order_acq_rel, std::memory_order_acquire))
+                {
+                    ESP_LOGE(TAG, "auto-profiling abandoned after %u ms: the scan task "
+                                  "stopped feeding the profiler (%u of %u frames)",
+                             (unsigned)elapsed, (unsigned)profiler_.frames(),
+                             (unsigned)profile_window_frames_);
+                    return;
+                }
+            }
+        }
+
+        if (profile_phase(word) != ProfilerState::CLASSIFYING)
             return;
 
         apply_classification();
         profile_passes_.fetch_add(1, std::memory_order_relaxed);
-        profile_state_.store(ProfilerState::IDLE, std::memory_order_release);
+        // A plain store is enough here: CLASSIFYING is this task's phase and
+        // nothing else writes the word while it holds it.
+        profile_word_.store(profile_pack(ProfilerState::IDLE, profile_pass(word)),
+                            std::memory_order_release);
     }
 
     void Main::apply_classification()
@@ -500,24 +547,32 @@ namespace ooe::pinled
                 // own without two readers on one SPI device. Observation is
                 // passive — counting highs and edges — so an armed profiler
                 // costs the frame nothing it would not already spend.
-                if (self->profile_state_.load(std::memory_order_acquire) ==
-                    ProfilerState::OBSERVING)
+                uint32_t word = self->profile_word_.load(std::memory_order_acquire);
+                if (profile_phase(word) == ProfilerState::OBSERVING)
                 {
-                    if (!self->profile_armed_)
+                    // Arm on a pass number this task has not seen. Asking that
+                    // question rather than keeping a flag is what makes an
+                    // abandoned pass safe: a request always carries a new
+                    // number, so the accumulators are always reset for it.
+                    const uint32_t pass = profile_pass(word);
+                    if (self->profile_pass_seen_ != pass)
                     {
                         self->profiler_.arm(self->profile_window_frames_);
-                        self->profile_armed_ = true;
+                        self->profile_pass_seen_ = pass;
                     }
                     self->profiler_.observe(frame, self->num_channels_);
-                    if (self->profiler_.window_complete())
+                    if (self->profiler_.window_complete() &&
+                        // Compare-exchange, because the main task may have
+                        // abandoned this pass. Losing means it did, and the
+                        // result belongs to nobody.
+                        self->profile_word_.compare_exchange_strong(
+                            word, profile_pack(ProfilerState::CLASSIFYING, pass),
+                            std::memory_order_acq_rel, std::memory_order_relaxed))
                     {
-                        // Hand off. The profiler's accumulators stop moving
-                        // here — observe() ignores anything past the window —
-                        // so the main task can read them without a lock and
-                        // without this task being stopped.
-                        self->profile_armed_ = false;
-                        self->profile_state_.store(ProfilerState::CLASSIFYING,
-                                                   std::memory_order_release);
+                        // The profiler's accumulators stop moving here —
+                        // observe() ignores anything past the window — so the
+                        // main task can read them without a lock and without
+                        // this task being stopped.
                         xTaskNotifyGive(self->main_task_);
                     }
                 }

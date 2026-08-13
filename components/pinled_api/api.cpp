@@ -713,6 +713,10 @@ namespace ooe::pinled
         /// classification that cannot be right.
         esp_err_t post_profiler(httpd_req_t *req)
         {
+            // GET answers UNAVAILABLE with a 200 because a status endpoint
+            // should always produce a status. POST fails instead: it is a
+            // request to do something, nothing was done, and a 200 would say
+            // otherwise.
             if (g_ctx.profiler == nullptr)
                 return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                             "no scan task on this build");
