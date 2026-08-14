@@ -848,10 +848,22 @@ task on core 0, where httpd also lives. Worth knowing rather than fixing: a UI
 polling at 1 Hz will not see it, and the cost of being starved is a slightly
 late classification rather than a wrong one.
 
-**Also fixed on the way past:** the button was started *after* the two early
-returns in `start_network()`, so a board that failed to join a network had no
-rescue button and no re-arm button — the exact case both exist for. It starts
-first now, before anything that can give up.
+**Also fixed on the way past**, two things neither of which was this step:
+
+The button was started *after* the two early returns in `start_network()`, so
+a board that failed to join a network had no rescue button and no re-arm
+button — the exact case both exist for. It starts first now, before anything
+that can give up.
+
+And **the live monitor's sticky bits accumulated between clients.** The push
+task skipped `snapshot()` when nobody was connected, while the scan kept
+publishing regardless, so "sticky since the last push" quietly meant "sticky
+since the last *reader*" and the first frame of a new session reported
+activity that could be minutes old. Found while explaining why an LED was
+dark: channel 20 arrived `active` on frame one and quiet on every frame of
+the twenty seconds measured afterwards. The push task drains while idle now.
+A ghost lamp is a bad first impression and a worse thing to debug — and it
+would have put a phantom in step 1 of the bench checklist.
 
 **Still needs the bench, and it is one button-press:** everything above is
 mechanism. The claim that *classification tracks what the machine is doing* —
