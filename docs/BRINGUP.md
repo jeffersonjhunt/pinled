@@ -328,12 +328,25 @@ completed pass is one new line in an otherwise still terminal.
 | 3 | Still holding, `curl -X POST http://pinled.local/api/v1/profiler` | ~0.8 s later, one new row: that channel becomes `S`. |
 | 4 | Release. POST again. | ~0.8 s later, back to `.`. |
 | 5 | Short-press the BOOT button (under 5 s) while holding an input. | Same as 3, from the button. The log says `auto-profiling: window 750 ms`. |
-| 6 | POST twice in quick succession. | Second returns **409** with the in-flight status as its body. |
-| 7 | Hold BOOT the full 5 s. | Still erases the network and reboots into SoftAP — the split by duration did not break the rescue. |
+| 6 | Repeat 3 on **`U3.D`, channel 20**, while holding it. | Stays `A`. That channel is `class_lock: AC_STEADY` in `fs_seed/profile.pb.json`, and the profiler is not allowed to touch it (FR-PROF-4, FR-CFG-8). |
+| 7 | POST twice in quick succession. | Second returns **409** with the in-flight status as its body. |
+| 8 | Hold BOOT the full 5 s. | Still erases the network and reboots into SoftAP — the split by duration did not break the rescue. |
 
 Step 4 is the half that makes this a test rather than a demonstration: a class
 that only ever moves one way would pass steps 1–3 while being a latch rather
 than a classifier.
+
+Step 6 is the other half. Steps 3 and 4 only show that the classifier *can*
+change a channel; a re-arm that ignored the lock table would pass both while
+quietly overwriting every hand-set lamp on the playfield. Channel 20 standing
+at `A` through a pass that is actively reclassifying its neighbours is the
+evidence that it does not — and it is free, because the bench profile already
+locks it.
+
+Note which channel is which before reading a row: on this rig the wired inputs
+are the `D` button (pin 14) of each '165, which are channels **4, 12, 20 and
+28** — plus `U1.H`, channel 0. `U3.D` is channel 20 because module 1 starts at
+channel 16 and `D` is the fifth input in `H G F E D C B A` order.
 
 If step 3 does nothing, check `GET /api/v1/profiler` first — `state` and
 `passes` tell you whether the pass ran at all, which separates "the profiler
