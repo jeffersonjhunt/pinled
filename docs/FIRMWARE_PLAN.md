@@ -841,12 +841,25 @@ a long hold, and re-profiling on the way to erasing the network would be a
 surprise every time.
 
 **Measured on the bench:** the window runs at a clean 10 kHz throughout
-(9.7–10.3 kHz sampled every 70 ms across a full pass) and classification lands
-**~830 ms** after the POST for a 750 ms window. An earlier reading of 1.1 s
-was the *measurement* — polling status at 20 Hz starves the priority-1 main
-task on core 0, where httpd also lives. Worth knowing rather than fixing: a UI
-polling at 1 Hz will not see it, and the cost of being starved is a slightly
-late classification rather than a wrong one.
+(9.7–10.3 kHz sampled every 70 ms across a full pass) and classification is
+**applied 1 ms after the window closes** — request at 18195 ms, classified at
+18945, applied at 18946 — so the end-to-end cost of a re-arm is the window
+plus nothing.
+
+Two earlier figures for that were both artefacts of how it was measured, and
+both are worth recording because they are the same mistake twice.
+
+A reading of 1.1 s was *the measurement*: polling status at 20 Hz starves the
+priority-1 main task on core 0, where httpd also lives. A UI polling at 1 Hz
+will not see it, and the cost is a late classification rather than a wrong one.
+
+A reading of ~830 ms was **the wrong half of a Kconfig fork**. `SCAN_DEBUG`
+had a run loop of its own that slept for 500 ms rather than waiting on the
+notification, so a re-arm landed up to half a second after its window. It
+defaults to `y` and the bench runs it, so every measurement came from the poll
+path while the notification path — the one the design comment described — had
+never executed on hardware. The loops are now one loop; `SCAN_DEBUG` sets the
+idle timeout and picks the log line and touches the hand-off not at all.
 
 **Also fixed on the way past**, two things neither of which was this step:
 
