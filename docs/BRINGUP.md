@@ -455,6 +455,45 @@ Settled on that rig:
   actively switching. `num_modules` is a performance setting, not a correctness
   one.
 
+Added 2026-08-14, when the rig was rebuilt with **SN74LVC165** parts and a real
+front end:
+
+- **Clock ceiling** — every rate from 1 to 40 MHz matched its reference, with
+  the caveats in §4b. The chips have stopped being the limit; 40 MHz is the
+  ESP32-S3's own ceiling through the GPIO matrix.
+- **HW-1, the front end** — and this is the first time it has existed on a
+  bench at all. The earlier rig wired buttons straight to 3V3 with pull-downs
+  and had no front end, so the shipping topology was design-only. Now: a 2N7000
+  common-source level shift (inverting) into a 74LVC14 inverting Schmitt,
+  non-inverting overall, on `U1.H`, `U1.D`, `U2.D`, `U3.D` and `U4.D`.
+
+  Measured with hands clear: idle reads all zeros, and each of the five
+  presses lands on channels 0, 4, 12, 20 and 28 — **one channel per press, no
+  neighbours**. `active_low` stays off, the 27 tie-offs stay at GND and the
+  DATA bias resistor stays a pull-down, which is the three-way consistency the
+  `PINLED_ACTIVE_LOW` help describes.
+
+  The FET alone is inverting, and wiring it without the Schmitt is a
+  believable shortcut: the symptom is those five channels reading permanently
+  *on* while the other 27 read correctly. Do not reach for `active_low` to fix
+  it — it is one global XOR, so it would correct five channels and invert
+  twenty-seven, and it also flips the sense of HW-11's self-termination.
+
+  **Still not exercised: the level shift itself.** The Schmitt and the
+  inversion are proven; driving the FET gate from a real 5–20 V lamp rail
+  through the divider is a separate test and the trip point has never been
+  measured.
+
+> **Sticky flags set during live wiring are not evidence.** The first capture
+> after fitting the '14 showed `T` on channels 3 and 27 as well as the five
+> real ones. Both are input `E` (pin 3), both on chips being handled, and both
+> are hard-grounded and so cannot legitimately toggle. The tell is that
+> **neither ever appeared in a logged `raw` frame** — `tog` is set from every
+> frame at 10 kHz while `raw` prints twice a second, so a brush lasting a few
+> frames sets the flag permanently and is essentially never caught in a
+> snapshot. Reset with hands clear and both were gone. When the two disagree,
+> believe `raw`.
+
 **Every rev D correctness claim is measured, and all four diagnostics
 (FR-DIAG-1..4) are exercised on real hardware.** What remains needs either a
 longer chain than four chips or a rig rewire:
