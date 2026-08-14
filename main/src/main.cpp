@@ -834,30 +834,38 @@ namespace ooe::pinled
 #elif CONFIG_PINLED_SCAN_STEP_MS > 0
         step_walk(); // never returns
 #endif
-#ifdef CONFIG_PINLED_SCAN_DEBUG
-        // Tasks do the work; report the raw bus so bring-up has something to
-        // look at that does not depend on the LED path working.
-        for (;;)
-        {
-            log_scan_debug();
-            service_profile();
-            vTaskDelay(pdMS_TO_TICKS(500));
-        }
-#else
         // Tasks do the work; this one classifies whatever the scan task has
-        // finished observing, and otherwise emits a slow heartbeat.
+        // finished observing.
         //
         // A notification rather than a poll, so a re-arm lands as soon as its
-        // window fills instead of up to five seconds later — the person who
+        // window fills instead of up to the timeout later — the person who
         // pressed the button is standing over the machine watching the lamps.
-        // The timeout is still here because it costs nothing and a missed
+        // Measured: classification applied 1 ms after the window closes. The
+        // timeout is still here because it costs nothing and a missed
         // notification would otherwise strand a completed pass forever.
+        //
+        // SCAN_DEBUG changes only the timeout and what gets logged, never the
+        // hand-off. It used to have a loop of its own that slept instead of
+        // waiting, which made the bring-up build the one place a re-arm could
+        // take half a second to land — and since the bench runs that build, it
+        // was the only path ever measured. Two behaviours behind one Kconfig
+        // symbol is how half of a fork goes unverified.
+#ifdef CONFIG_PINLED_SCAN_DEBUG
+        constexpr TickType_t kIdlePeriod = pdMS_TO_TICKS(500); // the raw/tog cadence
+#else
+        constexpr TickType_t kIdlePeriod = pdMS_TO_TICKS(5000); // just a heartbeat
+#endif
         for (;;)
         {
-            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000));
+            ulTaskNotifyTake(pdTRUE, kIdlePeriod);
             service_profile();
+#ifdef CONFIG_PINLED_SCAN_DEBUG
+            // The raw bus, so bring-up has something to look at that does not
+            // depend on the LED path working.
+            log_scan_debug();
+#else
             ESP_LOGD(TAG, "tick");
-        }
 #endif
+        }
     }
 } // namespace ooe::pinled
