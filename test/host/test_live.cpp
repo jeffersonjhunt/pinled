@@ -167,6 +167,59 @@ TEST(many_frames_between_pushes_collapse_to_one_report)
     CHECK((flags_of(buf, 2) & LIVE_ACTIVE) == 0);
 }
 
+TEST(draining_discards_activity_instead_of_reporting_it)
+{
+    // What the push task does while nobody is connected. Without it "sticky
+    // since the last push" silently becomes "sticky since the last reader",
+    // because the scan publishes whether or not anyone is listening — and the
+    // first frame of a new session then carries every blip since the previous
+    // one left. Seen on the bench: one transient survived several minutes
+    // between sessions and arrived looking live.
+    Rig r(8);
+    r.set_active(3);
+
+    r.state.drain();
+
+    uint8_t buf[16]{};
+    r.state.snapshot(buf, sizeof(buf));
+    CHECK((flags_of(buf, 3) & LIVE_ACTIVE) == 0);
+}
+
+TEST(draining_clears_every_word_not_only_the_first)
+{
+    // The bug this guards is a loop bound: a drain that only cleared word 0
+    // would look correct on the 32-channel bench rig and leak on a 128-channel
+    // playfield, which is the half nobody tests until it is in a machine.
+    Rig r(128);
+    uint32_t bits[LiveState::kWords];
+    for (size_t i = 0; i < LiveState::kWords; ++i)
+        bits[i] = 0xFFFFFFFFu;
+    r.state.publish(bits);
+
+    r.state.drain();
+
+    uint8_t buf[256]{};
+    r.state.snapshot(buf, sizeof(buf));
+    for (size_t ch = 0; ch < 128; ++ch)
+        CHECK((flags_of(buf, ch) & LIVE_ACTIVE) == 0);
+}
+
+TEST(draining_leaves_the_levels_alone)
+{
+    // Only the sticky bitmap is the push task's to clear. The levels are
+    // borrowed from the filament bank and belong to the scan.
+    Rig r(8);
+    r.levels[1] = 200;
+    r.set_active(1);
+    r.state.drain();
+
+    uint8_t buf[16]{};
+    const size_t n = r.state.snapshot(buf, sizeof(buf));
+    CHECK_EQ(n, size_t{16});
+    CHECK_EQ(level_of(buf, 1), uint8_t{200});
+    CHECK((flags_of(buf, 1) & LIVE_ACTIVE) == 0);
+}
+
 TEST(publishing_a_word_at_a_time_sets_every_channel_in_it)
 {
     // The scan publishes whole words, not single channels — that is the whole

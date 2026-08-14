@@ -798,7 +798,17 @@ namespace ooe::pinled
                 vTaskDelayUntil(&next, kPushPeriod);
 
                 if (g_client_count == 0)
+                {
+                    // Keep draining. The scan publishes whether or not anyone
+                    // is watching, so skipping this lets the sticky bits
+                    // accumulate for the whole gap between clients — and the
+                    // first frame of a new session then reports activity that
+                    // may be minutes old, on a channel that has been quiet
+                    // throughout. A ghost lamp is a bad first impression and
+                    // a worse thing to debug.
+                    g_ctx.live->drain();
                     continue;
+                }
 
                 const size_t len = g_ctx.live->snapshot(packed, packed_cap - sizeof(size_t));
                 if (len == 0)
