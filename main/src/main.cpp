@@ -659,17 +659,38 @@ namespace ooe::pinled
     {
         static const int kRates[] = {
             1000000, 2000000, 4000000, 6000000, 8000000,
-            10000000, 13000000, 16000000, 20000000, 26000000, 40000000};
+            10000000, 13000000, 16000000, 20000000, 26000000, 33000000, 40000000};
         constexpr int kFramesPerRate = 256;
         constexpr int kDiscard = 8; // let the new divider settle
 
         bool frame[LampScan::MAX_CHANNELS];
         char bits[LampScan::MAX_CHANNELS + 2];
 
+        // Only the first 64 channels are folded into the mask below, which is
+        // ample for any bench rig and would silently ignore a longer chain.
+        const size_t watched = num_channels_ < 64 ? num_channels_ : 64;
+
         for (;;)
         {
-            ESP_LOGI(TAG, "=== chain clock sweep: %u channels, hold one input down ===",
-                     (unsigned)num_channels_);
+            ESP_LOGW(TAG, "=== chain clock sweep: %u channels (watching %u) ===",
+                     (unsigned)num_channels_, (unsigned)watched);
+            ESP_LOGW(TAG, "HOLD AN INPUT DOWN for the whole pass. With nothing pressed the "
+                          "chain reads all-zeros at every rate, scores a perfect stability "
+                          "result, and proves nothing whatever.");
+
+            // The pattern the slowest working rate reads. Every faster rate is
+            // judged against it, which is the half the first version of this
+            // did not do: comparing a rate only against itself calls a rate
+            // that reads the SAME WRONG BITS every frame perfectly stable.
+            uint64_t reference = 0;
+            bool have_reference = false;
+            int best_hz = 0;      ///< fastest rate that matched the reference
+            int best_actual = 0;
+            int inconclusive = 0;
+            /// A rate that failed *below* the fastest passing one. Then the
+            /// fastest pass is a coincidence, not a ceiling, and quoting it as
+            /// one would be how a marginal bus gets called good.
+            bool failed_below_best = false;
 
             for (int r = 0; r < (int)(sizeof(kRates) / sizeof(kRates[0])); ++r)
             {
@@ -689,7 +710,7 @@ namespace ooe::pinled
                     if (scan_.read_frame(frame, num_channels_) != ESP_OK)
                         continue;
                     uint64_t m = 0;
-                    for (size_t ch = 0; ch < num_channels_ && ch < 64; ++ch)
+                    for (size_t ch = 0; ch < watched; ++ch)
                         if (frame[ch])
                             m |= 1ULL << ch;
                     if (reads == 0)
@@ -700,20 +721,90 @@ namespace ooe::pinled
                         ++stable;
                     ++reads;
                 }
+                if (reads == 0)
+                {
+                    ESP_LOGE(TAG, "%9d Hz: no frames read at all", kRates[r]);
+                    continue;
+                }
 
                 size_t b = 0;
-                for (size_t ch = 0; ch < num_channels_ && ch < 64; ++ch)
+                for (size_t ch = 0; ch < watched; ++ch)
                     bits[b++] = (first >> ch) & 1 ? '1' : '0';
                 bits[b] = '\0';
 
-                ESP_LOGI(TAG, "%9d Hz (actual %8d): stable %3d/%3d  [%s]  union=0x%llx  common=0x%llx",
-                         kRates[r], scan_.actual_hz(), stable, reads, bits,
-                         (unsigned long long)any,
-                         (unsigned long long)(reads ? all : 0));
+                const bool steady = (stable == reads) && (any == all);
+                const int actual = scan_.actual_hz();
+
+                // Zero examined is not a pass. A chain reading all-zeros is
+                // perfectly stable and carries no evidence, so it is called
+                // out as such rather than counted as clean.
+                if (any == 0)
+                {
+                    ++inconclusive;
+                    ESP_LOGW(TAG, "%9d Hz (actual %8d): %3d/%3d stable but ALL ZEROS "
+                                  "— nothing held, proves nothing",
+                             kRates[r], actual, stable, reads);
+                    continue;
+                }
+
+                if (!steady)
+                {
+                    failed_below_best = have_reference;
+                    ESP_LOGE(TAG, "%9d Hz (actual %8d): %3d/%3d stable  [%s]  UNSTABLE "
+                                  "flapping=0x%llx",
+                             kRates[r], actual, stable, reads, bits,
+                             (unsigned long long)(any ^ all));
+                    continue;
+                }
+
+                if (!have_reference)
+                {
+                    reference = first;
+                    have_reference = true;
+                    best_hz = kRates[r];
+                    best_actual = actual;
+                    ESP_LOGI(TAG, "%9d Hz (actual %8d): %3d/%3d stable  [%s]  "
+                                  "REFERENCE (0x%llx)",
+                             kRates[r], actual, stable, reads, bits,
+                             (unsigned long long)reference);
+                    continue;
+                }
+
+                if (first != reference)
+                {
+                    failed_below_best = true;
+                    // Stable and wrong: the signature of a rate the chain
+                    // cannot follow, rather than one it follows noisily. A
+                    // dropped or doubled bit shifts the whole frame, so this
+                    // usually reads as every channel moved by one.
+                    ESP_LOGE(TAG, "%9d Hz (actual %8d): %3d/%3d stable  [%s]  "
+                                  "MISMATCH — read 0x%llx, reference 0x%llx",
+                             kRates[r], actual, stable, reads, bits,
+                             (unsigned long long)first, (unsigned long long)reference);
+                    continue;
+                }
+
+                best_hz = kRates[r];
+                best_actual = actual;
+                ESP_LOGI(TAG, "%9d Hz (actual %8d): %3d/%3d stable  [%s]  matches reference",
+                         kRates[r], actual, stable, reads, bits);
             }
 
-            ESP_LOGI(TAG, "=== sweep pass complete ===");
-            vTaskDelay(pdMS_TO_TICKS(3000));
+            if (!have_reference)
+                ESP_LOGE(TAG, "=== sweep INCONCLUSIVE: %d rates read all-zeros. Hold an "
+                              "input down and reset. ===",
+                         inconclusive);
+            else if (failed_below_best)
+                ESP_LOGE(TAG, "=== sweep: %d Hz (actual %d) matched, but a SLOWER rate "
+                              "failed — that is a marginal bus, not a ceiling. Trust the "
+                              "fastest rate below the first failure. ===",
+                         best_hz, best_actual);
+            else
+                ESP_LOGW(TAG, "=== sweep: clean to %d Hz (actual %d), every rate below it "
+                              "matching ===",
+                         best_hz, best_actual);
+
+            vTaskDelay(pdMS_TO_TICKS(5000));
         }
     }
 #endif
