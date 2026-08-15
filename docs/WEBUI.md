@@ -360,8 +360,30 @@ The flow, with the device never contacting the cloud:
 2. SPA asks the cloud API for the latest version.
 3. If newer, the browser `fetch()`es the image from S3 into memory (bucket
    CORS permitting) and verifies a published SHA-256.
-4. User presses the device button to arm.
-5. Browser `POST`s the image to `ota`, streamed to `esp_ota_ops`.
+4. Browser `POST`s the image to `ota`, streamed straight into the **inactive
+   slot**. No arming is needed to upload, because an inactive slot boots
+   nothing; the device verifies the app descriptor and computes the SHA-256
+   itself as it writes.
+5. The device holds the image **staged** and reports `ota_armed` with
+   `ota_arm_seconds_left` counting down from ~30. The status pixel blinks
+   amber, faster as the window closes.
+6. **The user presses the button**, which switches the boot partition and
+   reboots. No press, and the staged image is discarded.
+7. The new firmware marks itself valid only once it is serving the API; if it
+   cannot get that far the bootloader reverts to the previous slot on its own.
+
+**Confirming after the upload rather than arming before it** is the one place
+this departs from the obvious design, and it is deliberate (FR-OTA-2). Writing
+an inactive slot cannot hurt anything, so the act worth gating is the
+boot-partition switch. Arming first would instead open a window during which
+*anything* on the LAN may be uploaded, and would happily accept a truncated
+image that then has to be rejected at boot. Confirming afterwards binds the
+press to one specific image the device has already checked.
+
+That press is the same short press that re-arms the profiler the rest of the
+time (FR-OTA-7). One button, three meanings, and the only reason that is safe
+rather than a trap is that the indicator says which meaning is live
+(FR-IND-3). The long-hold rescue is never modal and works in every state.
 
 Fetching into the browser rather than making the user save and re-select a file
 is the same number of moving parts and better UX; the manual save/upload path

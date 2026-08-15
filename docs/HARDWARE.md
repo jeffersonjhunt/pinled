@@ -52,8 +52,8 @@ Two logic ICs per module — down from six in rev C.
 | `/PL` (SPI `CS`, positive) | out | **bussed to all modules** | 17 (A1) |
 | `DATA` (SPI `MISO`) | in | point-to-point from module 1 | 9 (A2) |
 | `LED` | out (RMT) | whole string | 8 (A3) |
-| status pixel | out (RMT) | onboard | 39 (power enable 38) |
-| profiler re-arm | in | onboard | 0 (BOOT button) |
+| status pixel | out (RMT) | onboard; **own GPIO on the mainboard**, never the playfield string (HW-15) | 39 (power enable 38) |
+| button | in | onboard; short = re-profile, short-while-staged = confirm OTA, long = erase network (HW-16) | 0 (BOOT button) |
 
 Per-module GPIO cost = **zero**; the sense side costs **three** pins regardless
 of chain length, and all three can come from one SPI peripheral (`SCLK`, `MISO`,

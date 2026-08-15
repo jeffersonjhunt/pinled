@@ -98,12 +98,51 @@ product SHALL be reachable with no internet connection.
 | ID | Req | Status |
 |---|---|---|
 | FR-OTA-1 | The device SHALL accept a firmware image by HTTP POST from the browser and apply it via the OTA API. It SHALL NOT fetch images itself. | v1 |
-| FR-OTA-2 | The OTA endpoint SHALL be armed by a **physical button press**, valid for ~60 s, with armed state readable from the API. Physical presence is the entire authorisation; open CORS otherwise leaves a bricking endpoint permanently exposed. | v1 |
+| FR-OTA-2 | An uploaded image SHALL be **staged into the inactive slot and not booted** until a **physical button press** confirms it, within ~30 s, with the pending state and its remaining time readable from the API. On expiry the staged image SHALL be discarded. Physical presence is the entire authorisation; open CORS otherwise leaves a bricking endpoint permanently exposed. *Confirming after the upload rather than arming before it is deliberate: writing an inactive slot is harmless, so the act worth gating is the boot-partition switch. The press then confirms a specific image the device has already verified, instead of opening a window in which anything on the LAN may be uploaded — and a truncated image can never reach the confirmation.* | v1 |
 | FR-OTA-3 | Image integrity SHALL be checked against a published SHA-256 before upload, and ESP-IDF's app-descriptor validation SHALL remain enabled. Signed images / secure boot are `future`. | v1 |
 | FR-OTA-4 | USB flashing SHALL remain a fully supported first-class update path, not a recovery hatch. | MVP |
 | FR-OTA-5 | The partition table SHALL provide two OTA app slots plus a filesystem partition (`WEBUI.md` §7). | v1 |
+| FR-OTA-6 | Rollback SHALL be enabled: a newly booted image SHALL mark itself valid only once it is serving the API, so a firmware that cannot reach that state is reverted by the bootloader without physical access. | v1 |
+| FR-OTA-7 | While an image is staged, a short press SHALL confirm it **instead of** re-arming the profiler (FR-PROF-2), and the indicator SHALL show that the button's meaning has changed (FR-IND-3). The long-hold rescue (FR-UI-7) SHALL remain available in every mode without exception. | v1 |
 | FR-REG-1 | Device identity SHALL derive from the factory eFuse MAC — no provisioning step and no stored secret. An optional author handle in NVS SHALL be stamped into exported profiles for attribution. Profile ownership itself is a cloud-side association and no device function SHALL depend on it. | v1 |
 | FR-REG-2 | A registered account SHALL have a **private** area holding the user's version library, distinct from the public registry, and it is the only version store in the system (FR-CFG-10). The registry SHALL accept only machine profiles; install configs and versions are private. As with everything else, the browser mediates and the device is not involved (FR-UI-2). | v1 |
+
+## 5c. Status indicator
+
+One RGB pixel, and it exists for two jobs: telling somebody across a dark room
+whether the machine is fine, and making the button's *current* meaning visible.
+The second matters most — GPIO 0 changes meaning while an image is staged
+(FR-OTA-7), and a modal control whose mode is invisible is a trap rather than a
+feature.
+
+| ID | Req | Status |
+|---|---|---|
+| FR-IND-1 | The board SHALL carry a status pixel on its own GPIO, distinct from the playfield string. It SHALL NOT consume a playfield LED: the string is the product, and a machine is commissioned by looking at it. | v1 |
+| FR-IND-2 | State SHALL be encoded by **rhythm as well as colour**, such that every state is distinguishable by pattern alone. Red/green is not a distinction for roughly 8% of men, and this indicator is the sole feedback on a device with no screen. | v1 |
+| FR-IND-3 | Solid SHALL mean a steady state and blinking SHALL mean the device wants something. A healthy machine is therefore still, and anything moving is a request. While an image is staged the indicator SHALL blink **faster as the confirmation window expires**, conveying the deadline without a display. | v1 |
+| FR-IND-4 | Faults SHALL be signalled as *N* red blinks followed by a pause, *N* identifying the class, so a fault is diagnosable by eye and over a telephone without a serial cable. | v1 |
+| FR-IND-5 | Brightness SHALL be configurable in the install config, including **off**. The board may be visible in a backbox, and the indicator must never compete with the playfield. | v1 |
+| FR-IND-6 | The indicator SHALL NOT be on the scan or render hot path: it is driven from a low-priority task and a dropped update is of no consequence. | v1 |
+
+States, in the order they are reached:
+
+| State | Colour | Rhythm |
+|---|---|---|
+| Booting | white | solid |
+| Running, network up | green | solid, dim |
+| Running, no network | green | slow breathe (~0.5 Hz) — works, not reachable |
+| SoftAP / unprovisioned | blue | fast blink |
+| Profiler pass running | white | one brief flash |
+| **Image staged, press to confirm** | amber | blink, accelerating as the window expires |
+| Writing / applying firmware | amber | solid — do not remove power |
+| Fault | red | *N* blinks, pause, repeat |
+
+Blue for SoftAP rather than green: it is a *mode awaiting action*, not a
+degraded run, and it keeps the two states a person must tell apart off the
+red/green axis entirely.
+
+Fault classes for FR-IND-4 are assigned where the fault is raised; the mapping
+belongs in `BRINGUP.md` beside the other things read off a board by eye.
 
 ## 6. Diagnostics
 
@@ -151,6 +190,8 @@ firmware change, not just a hardware change — see `TIMING.md` for derivations.
 | HW-12 | Each module's serial output SHALL be taken from `QH`, never `/QH`. Inverting the serial output would make an absent module's pull-down read as every channel *on*, defeating HW-11. | MVP |
 | HW-13 | `J1` (upstream, `DATA` = output) and `J2` (downstream, `DATA` = input) SHALL be keyed or gendered so a module cannot be fitted backwards, which would tie two push-pull outputs together. | MVP |
 | HW-14 | The `CLK` bus SHALL be routed so it propagates *along* the harness, master to downstream, rather than star-wired. This keeps each module clocked before the one feeding it, so harness skew adds to the inter-device hold margin instead of eroding it (`CHAINING.md`). | MVP |
+| HW-15 | The mainboard SHALL carry a **status pixel** (one WS2812-class RGB LED) on its own GPIO, with its own decoupling, sited so it is visible with the board installed. It SHALL NOT be the first pixel of the playfield string: the string is the product and is routed to the playfield, whereas this has to be readable at the board (FR-IND-1). On the QT Py bench board the onboard pixel serves, on GPIO 39 with power-enable on 38. | v1 |
+| HW-16 | GPIO 0 (the BOOT button, or its equivalent on the mainboard) SHALL be the sole physical control, carrying three meanings distinguished by duration and context: short press re-profiles (FR-PROF-2), short press **while an image is staged** confirms it (FR-OTA-7), long hold erases the network (FR-UI-7). No second button is required, and the indicator is what makes the modal meaning legible (FR-IND-3). | v1 |
 
 ## 9. Out of scope (first cut)
 - Any device-initiated call to a cloud service (FR-UI-2) — including
