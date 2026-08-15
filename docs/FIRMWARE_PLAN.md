@@ -309,14 +309,29 @@ instead of quietly corrupting every time constant:
    hardware dependency come first and the risky part comes before the visible
    one — see §5.1 below.
 
-   **M3 does not need the 8 MB board.** OTA is what needs two 3 MB slots; M3
-   needs one app partition and one filesystem, and both fit in 4 MB with room
-   to spare (§5.1 step 0). Only M4 waits on new hardware.
+   **M3 did not need the 8 MB board.** OTA is what needs two 3 MB slots; M3
+   needed one app partition and one filesystem, and both fit in 4 MB with room
+   to spare (§5.1 step 0). *(**Done, steps 0–8**, and verified on the 8 MB
+   board after the swap: 169 host cases, and 11/11 on the bench checklist
+   including the destructive rescue step.)*
 8. **M4 — UI and updates.** SPA shell served from the device, bundle in S3
    (FR-UI-1/2), API versioning (FR-UI-4), standalone offline bundle (FR-UI-8),
    browser-mediated OTA with button arming (FR-OTA-1/2/3), device identity and
    author attribution (FR-REG-1). The mapping flow is the acceptance test:
    fire a lamp from the test card and bind it by clicking.
+
+   **No longer waiting on hardware.** The FN8C0 went in 2026-08-15, so `ota_1`
+   exists — 3 MB of empty second slot, which is what FR-OTA-1 needs and what
+   nothing before now could provide. What M4 adds to the firmware is small: one
+   endpoint (`POST /ota`), its arming, and an author handle in NVS. The rest is
+   a web application.
+
+   Two things to settle *before* writing much of it, because both can reach
+   back into the schema: how lamps are numbered across manufacturers, and what
+   an imported profile that does not fit the install should do (`WEBUI.md` §8).
+   And one mechanical snag: FR-OTA-2 wants a physical arming press, but GPIO 0
+   already has both durations spoken for — short re-profiles, long erases the
+   network — so arming needs a third gesture or a second pin.
 9. **M5 — polish.** Gamma/dither tuning, docs, release BOM.
 
 ### 5.1 M3, in order
@@ -336,9 +351,12 @@ factory,  app,  factory, 0x10000,  2M
 storage,  data, spiffs,  0x210000, 1536K     → ends 0x390000, inside 4 MB
 ```
 
-`CONFIG_ESPTOOLPY_FLASHSIZE_4MB` stays as it is. The 8 MB table in `WEBUI.md`
-§7 replaces this at M4. Reflashing the table erases NVS, which currently holds
-nothing.
+*(**Superseded 2026-08-15.** The `WEBUI.md` §7 8 MB table replaced this when
+the FN8C0 went in: `ota_0`/`ota_1` at 3 M each plus 1920K of storage, and
+`CONFIG_ESPTOOLPY_FLASHSIZE_8MB`. The prediction above that reflashing the
+table "erases NVS, which currently holds nothing" had expired by then — NVS
+held the Wi-Fi credentials, so it cost a re-provision through the portal.
+`BRINGUP.md` §5c has the procedure.)*
 
 **Step 1 — the `.proto` and the host test rig. *(Done, 2026-08-10.)*** No
 target, no board, no IDF.
@@ -910,20 +928,36 @@ five seconds exercises neither the threshold nor the click path.
 
 ## 6. Test strategy
 
-**None of this exists yet** — there is not a single test file in the repo. It
-is the first thing M3 builds (§5.1 step 1), because the schema layer is pure
-logic and there is no excuse for it to be verified by hand on a board.
+Written when the repo had no tests at all. As of 2026-08-15 there are
+**169 cases across 10 suites**, host-only, plain CMake + CTest with no IDF and
+no board (`test/host/README.md`).
 
-- **Host unit tests** for `filament` (step response → verify tau), the profiler
-  classifier (synthetic waveforms → expected class), and schema round-trips
-  (document → protobuf → document, and proto3 JSON both ways). Pure logic with
-  no IDF dependency, so plain CMake + CTest, runnable in CI without a target.
-  Unity ships with IDF for the on-target cases that genuinely need hardware.
-- **On-target** smoke tests: scan a known pattern injected on the mux inputs;
-  confirm channel→LED mapping; scope the LED refresh vs. sample rate for
-  aliasing.
-- **Signal-capture harness** (bench): feed recorded matrix/GI waveforms into the
-  front end, confirm reconstruction matches the bulb.
+- **Host unit tests** — *built.* CRC-32, stored-document framing, the config
+  ⇄ document projections against golden bytes from Google's protobuf, the
+  precedence rule between stored config and profiler, documents as real files
+  including corruption and atomic replace, colour-order packing, the scan →
+  push hand-off under thread contention, and the observation-window
+  arithmetic. ASan and UBSan on by default, warnings are errors, and **every
+  suite has been proved able to fail** by deliberate breakage rather than
+  assumed to work.
+
+  Still missing here: `filament` step response (tau from a synthetic step) and
+  the profiler classifier against synthetic waveforms. Both are pure logic and
+  both are the obvious next host suites — the classifier especially, since it
+  is currently verified only by pressing a button and watching a class change.
+
+- **On-target** — *partly built, and not as unit tests.* The four bring-up
+  diagnostics (FR-DIAG-1..4) cover "scan a known pattern and confirm the
+  mapping" better than a Unity case would, because they are what a person uses
+  on real hardware; `tools/rearm_check.py` is a scripted acceptance test that
+  drives the API and prompts for the presses only a person can make. What does
+  not exist is anything automated that runs unattended on a target.
+
+- **Signal-capture harness** (bench) — *not built.* Feed recorded matrix/GI
+  waveforms into the front end and confirm reconstruction matches the bulb.
+  This is the one that would let the filament model and the classifier be
+  judged against reality rather than against synthetic input, and nothing
+  substitutes for it.
 
 ## 7. Notes carried from the POC
 - Keeps `ooe::pinled` namespace, `Main` class, Doxygen headers, `TAG` logging,
