@@ -72,7 +72,7 @@ menu "pinled configuration"
         config PINLED_SPI_HZ
             int "Chain clock rate (Hz)"
             default 4000000
-            range 100000 10000000
+            range 100000 40000000
             help
                 SCLK rate for the scan burst. A frame is 16*N bits plus ~17 us
                 of fixed per-transaction overhead (measured, docs/TIMING.md
@@ -91,6 +91,23 @@ menu "pinled configuration"
                 2 MHz to 4 MHz to match. That ceiling is about the device; what
                 limits a long chain is multi-drop CLK integrity across 800 mm,
                 governed separately by HW-14 and TIMING.md section 4.3.
+
+                The range now allows up to 40 MHz, which is the ESP32-S3's
+                ceiling through the GPIO matrix -- SCLK and MISO are routed
+                through it here, neither being an IOMUX SPI pin. That is a
+                bound on what you may ASK for, not a qualified rate. On
+                SN74LVC165 parts the 2026-08-14 sweep matched its reference at
+                every rate to 40 MHz, but with a SPARSE bus pattern; see
+                BRINGUP.md section 4b before believing it.
+
+                Raising the clock also buys less than it looks like, because
+                the driver's fixed ~19 us per transaction dominates. At 32
+                channels a 4 MHz burst is 8 us of a 26.8 us frame, so even
+                40 MHz saves 7 us of 27. It matters at 128 channels, where the
+                burst is 32 us at 4 MHz and 6 us at 20 MHz: a 51 us frame
+                becomes 25 us and the 10 kHz duty halves. Past ~20 MHz the
+                overhead dominates again, so that is where the curve flattens
+                and the margin is still large.
 
         config PINLED_SPI_MODE
             int "SPI mode (0..3)"

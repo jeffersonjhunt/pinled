@@ -160,6 +160,47 @@ are actually holding. Both conditions matter: above the ceiling the reads stay
 fully stable and simply shift by one, so stability alone will happily certify a
 broken rate.
 
+The sweep enforces both itself now rather than leaving them to the reader. The
+slowest working rate becomes the **reference** and every faster rate is judged
+against it, and a rate whose union is empty is reported as `ALL ZEROS —
+proves nothing` instead of a perfect score. The first version did neither, so
+a rig with nothing held printed `stable 256/256` from 1 to 40 MHz and read as
+a clean bus at 40 MHz.
+
+### SN74LVC165 result, 2026-08-14
+
+The rev D rig rebuilt with SN74LVC165 in place of 74HC165, 4 chips / 2 modules
+/ 32 channels at 3.3 V, `U4.D` tied high as a steady far-end test bit:
+
+**Every rate matched the reference, 1 MHz through 40 MHz** — 8 passes, 96 rate
+measurements, 24 576 frames, one identical pattern throughout, no unstable
+rates and no mismatches. 40 MHz is the top of the ladder because it is the
+**ESP32-S3's** limit through the GPIO matrix (`SCLK`=18, `MISO`=9, neither an
+IOMUX SPI pin), so this found the MCU's ceiling and not the part's. The HC
+parts were qualified at 4 MHz.
+
+**What it does not show, and the reason to be careful with it.** 28 of the 32
+inputs are hard-grounded and one is tied high, so `DATA` carries 31 zeros and a
+single 1 — **two transitions in a 32-bit frame**, the sparsest pattern the bus
+will ever carry. That is a real result for what it covers: clock generation,
+the CPHA=0 capture instant, `/PL`, traversal of all four chips, and no frame
+slip, since a dropped or doubled bit would move that 1. It is **not** a
+signal-integrity qualification. The stress case is maximum transition density —
+`10101010`, where `DATA` toggles at half the clock rate through the 33 Ω series
+resistor on a breadboard — and nothing here exercises it.
+
+To close that gap, tie `H`, `F`, `D`, `B` high on **U4** (lifting `F` and `B`
+off ground), giving `10101010` on channels 24–31 at the far end of the chain,
+and re-run. That is four wires on one chip, and it does something else worth
+having: `F` (pin 4) and `B` (pin 12) are on the list of inputs this rig has
+never exercised, so the same rework closes part of §7's outstanding item 1.
+
+**Do not raise HW-3's 4 MHz default on this evidence.** It is a 4-chip
+breadboard, and `TIMING.md` §4.3 says multi-drop `CLK` integrity across 800 mm
+is the binding constraint — a different measurement on hardware that does not
+exist yet. What this establishes is that the **chips** have stopped being the
+limit.
+
 ## 5. Building the rev D bench rig
 
 Two '165s prove one module; **four prove the design**, because the open question
