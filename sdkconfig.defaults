@@ -1,8 +1,19 @@
 # pinled v2 build defaults (ESP-IDF 5.5.x, target esp32s3)
 #
-# Board: Adafruit QT Py ESP32-S3. Two variants ship under the same silkscreen
-# and the same USB VID/PID (239a:8143) — tell them apart by the chip marking or
-# the USB descriptor string:
+# Board: Adafruit QT Py ESP32-S3. Two variants ship under the same silkscreen,
+# and the USB identity depends on which firmware is running rather than on the
+# board — so it tells you the variant only while Adafruit's factory firmware is
+# still on it:
+#
+#   239a:8119  "Adafruit QT Py ESP32-S3 No PSRAM"  (measured, the FN8C0)
+#   303a:1001  "Espressif USB JTAG/serial debug unit"  <- once OUR firmware or
+#              ROM download mode is running. Says nothing about the variant.
+#
+# An earlier note here claimed both variants share 239a:8143. That is wrong:
+# the FN8C0 reports 8119 with its factory firmware, and after the first flash
+# neither variant is distinguishable over USB at all. Read the chip marking, or
+# ask esptool — `flash_id` reports "Embedded Flash 8MB" and whether PSRAM is in
+# Features, which is the only check that works on a flashed board.
 #
 #   FN8C0 -> 8 MB flash, no PSRAM     <- the bench board from 2026-08-15
 #   FH4R2 -> 4 MB flash, 2 MB PSRAM   <- the 2026-08-07 bench board, retired
