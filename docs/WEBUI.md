@@ -438,21 +438,33 @@ storage,  data, spiffs,   0x620000, 0x1E0000
 3 MB per app slot, 1.875 MB filesystem, exactly filling 8 MB. App partitions
 are 64 KB aligned as required. (`spiffs` is the subtype LittleFS uses too.)
 
-> **Not yet applied.** `sdkconfig.defaults` still pins
-> `CONFIG_ESPTOOLPY_FLASHSIZE_4MB`, because the bench QT Py is a 4 MB FH4R2 and
-> this table does not fit on it. Both change together when the 8 MB board
-> arrives.
+> **Applied 2026-08-15**, exactly as written above. `partitions.csv` and
+> `sdkconfig.defaults` (`CONFIG_ESPTOOLPY_FLASHSIZE_8MB`) both carry it, and the
+> bench runs an FN8C0. The bootloader confirms the layout on every boot, and the
+> image sits at ~955 KB — **70% of a slot free**.
 >
-> `partitions.csv` is now the interim 4 MB table from `FIRMWARE_PLAN.md` §5.1
-> step 0 — `factory` 2M plus a 1536K `storage` partition, flashed 2026-08-10.
-> It carries no OTA slots, so replacing it with the table above is still a
-> partition-table flash and still erases NVS. Doing that before NVS holds Wi-Fi
-> credentials costs nothing; afterwards it costs a re-provision (FR-CFG-12).
+> It cost a re-provision, as this note predicted it would: the table change
+> erases NVS and the filesystem, and the build-time Wi-Fi credentials were
+> removed in M3 step 7, so recovery is the captive portal (FR-UI-6). That turned
+> out to be worth having — it is the only cheap way to exercise the portal on a
+> device that has genuinely never been provisioned, which is the one state it
+> exists for. See `BRINGUP.md` §5c for the procedure and its traps.
+>
+> **This build no longer fits a 4 MB FH4R2** and must not be flashed to one.
 
 > **Bench trap:** the 8 MB no-PSRAM QT Py (FN8C0) is **visually identical** to
-> the 4 MB FH4R2 — same silkscreen, same USB VID/PID `239a:8143`. Label them
-> physically. `esptool … chip_id` reports embedded flash and PSRAM size and is
-> the only reliable discriminator.
+> the 4 MB FH4R2 — same silkscreen. Label them physically.
+>
+> **USB VID/PID does not tell them apart, and an earlier version of this note
+> was wrong to say it did.** Measured 2026-08-15: the FN8C0 enumerates as
+> `239a:8119` "Adafruit QT Py ESP32-S3 No PSRAM" *while Adafruit's factory
+> firmware is still on it*, and as `303a:1001` "Espressif USB JTAG/serial" once
+> ours is — as does every other ESP32-S3, including one in ROM download mode. So
+> the USB identity describes the running firmware, not the board, and stops
+> discriminating the moment you flash it.
+>
+> `esptool … flash_id` is the check that keeps working: it reports
+> `Embedded Flash 8MB` and whether PSRAM appears in `Features`.
 
 ## 8. Open questions
 
