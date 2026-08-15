@@ -21,7 +21,8 @@ connection at all.
 > Two things in it are placeholder rather than designed: the install screen is
 > read-only, because editing pins and geometry from a web page needs a guard
 > rail nobody has specified yet; and lamp numbering is faked as a clean 1–60,
-> which open question 1 in §8 may invalidate.
+> which is fine as a mockup — §8 question 1 is closed and the numbers are
+> opaque, so any machine's own numbering drops straight in.
 
 ## 1. Where the code lives
 
@@ -490,11 +491,31 @@ are 64 KB aligned as required. (`spiffs` is the subtype LittleFS uses too.)
 
 ## 8. Open questions
 
-1. **Lamp numbering across manufacturers.** The profile is keyed by "lamp
-   number in the machine's matrix". Bally/Stern number lamps in the manual;
-   whether that generalises cleanly to Williams, Gottlieb and EM games is
-   unverified. If it does not, the registry needs a per-manufacturer
-   addressing convention, and that affects the schema.
+1. ~~**Lamp numbering across manufacturers.**~~ **Closed 2026-08-15: it was
+   never a schema question.** The indirection already handles it — a private
+   `WiringEntry` maps channel to lamp number, a shared `LampEntry` maps lamp
+   number to name and colour, and `MachineIdentity` says which machine those
+   numbers belong to. `lamp` is an **opaque key**: the firmware only ever tests
+   it for zero and for equality, and nothing anywhere parses structure out of
+   it. Bally's 1–60, a flattened Williams row/column, and an EM game numbered
+   however its manual does it are all just integers.
+
+   Two constraints exist and are already enforced: **0 is reserved for
+   "unbound"**, so numbering starts at 1; and **65535 is the ceiling**, because
+   the runtime record stores it as `uint16_t` and `resolve()` refuses anything
+   larger.
+
+   What made this look urgent was "it affects the schema". It does not: the
+   only plausible change is *adding an optional descriptor* recording where a
+   numbering came from, and protobuf absorbs an added optional field without
+   breaking any document already in the wild. A schema question is only urgent
+   when the change would be destructive, and this one cannot be.
+
+   The residual risk is **curation, not structure**: two authors could number
+   the same machine differently and their profiles would not transfer. That is
+   a registry problem. It is also self-announcing — the learn-wiring flow binds
+   against lamps you can watch firing, and a mis-numbered profile shows wrong
+   names against the wrong lamps within seconds of being applied.
 2. **Profile fit checking.** Nothing yet validates that an imported profile's
    `lamp_count` is consistent with the install's `wiring[]`. Decide whether a
    partial match imports partially or is refused.
