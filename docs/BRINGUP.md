@@ -304,9 +304,69 @@ does**: that rig needed a 74HC14 in the `CLK` path to make its counter advance
 on the falling edge, and rev D needs no inverter anywhere because the phase is
 handled by the SPI mode instead.
 
+## 5b. Verifying the profiler re-arm
+
+Everything about the re-arm except the one claim that matters can be checked
+from a wired build host. The claim that cannot is **that classification tracks
+what the machine is doing** — which needs a channel physically held while a
+pass runs, and therefore needs a person at the rig.
+
+It takes about a minute. Watch the classes in one terminal:
+
+```sh
+tools/pbtool.py live ws://pinled.local/api/v1/live --classes --seconds 120
+```
+
+That prints one letter per channel — `.` off, `S` steady, `M` matrix,
+`A` ac_steady, `D` ac_dimmed — and only when the row **changes**, so a
+completed pass is one new line in an otherwise still terminal.
+
+| # | Do | Expect |
+|---|---|---|
+| 1 | Nothing. Read the first row. | Mostly `.`: the boot pass saw a dark playfield. |
+| 2 | **Hold** a wired input down (`U1.D` is channel 4). | Row unchanged. The class is stale by design — this is the bug being fixed. |
+| 3 | Still holding, `curl -X POST http://pinled.local/api/v1/profiler` | ~0.8 s later, one new row: that channel becomes `S`. |
+| 4 | Release. POST again. | ~0.8 s later, back to `.`. |
+| 5 | Click the BOOT button — a normal press, anything under 5 s — while holding an input. | Same as 3, from the button. The log says `auto-profiling: window 750 ms` with no `re-armed by API request` beside it, which is how you tell the two apart. A press under 150 ms is ignored and logs `press … was too short`. |
+| 6 | Repeat 3 on **`U3.D`, channel 20**, while holding it. | Stays `A`. That channel is `class_lock: AC_STEADY` in `fs_seed/profile.pb.json`, and the profiler is not allowed to touch it (FR-PROF-4, FR-CFG-8). |
+| 7 | POST twice in quick succession. | Second returns **409** with the in-flight status as its body. |
+| 8 | Hold BOOT the full 5 s. | Still erases the network and reboots into SoftAP — the split by duration did not break the rescue. |
+
+Step 4 is the half that makes this a test rather than a demonstration: a class
+that only ever moves one way would pass steps 1–3 while being a latch rather
+than a classifier.
+
+Step 6 is the other half. Steps 3 and 4 only show that the classifier *can*
+change a channel; a re-arm that ignored the lock table would pass both while
+quietly overwriting every hand-set lamp on the playfield. Channel 20 standing
+at `A` through a pass that is actively reclassifying its neighbours is the
+evidence that it does not — and it is free, because the bench profile already
+locks it.
+
+Note which channel is which before reading a row: on this rig the wired inputs
+are the `D` button (pin 14) of each '165, which are channels **4, 12, 20 and
+28** — plus `U1.H`, channel 0. `U3.D` is channel 20 because module 1 starts at
+channel 16 and `D` is the fifth input in `H G F E D C B A` order.
+
+If step 3 does nothing, check `GET /api/v1/profiler` first — `state` and
+`passes` tell you whether the pass ran at all, which separates "the profiler
+did not re-arm" from "it re-armed and decided the same thing".
+
 ## 6. Tooling traps
 
 These are not hardware faults, but they present as one.
+
+**The IDF is not at `~/esp/esp-idf` on the build host.** It is installed by the
+Espressif IDE with per-version roots, and `export.sh` from the version
+directory **fails** — it looks for a Python venv at a path the installer does
+not use. The activation scripts are the supported entry point:
+
+```sh
+. ~/.espressif/tools/activate_idf_v5.5.sh     # v6.0 is also installed
+```
+
+Sourcing the wrong one, or `export.sh`, leaves `idf.py` undefined and the error
+names a missing venv rather than the actual mistake.
 
 **Opening the serial port resets the board.** On the DevKitC-1's native `USB`
 port, RTS drives `EN`. `cat /dev/ttyACM0`, `idf.py monitor`, and pyserial all
@@ -394,6 +454,58 @@ Settled on that rig:
   hard zero across ~4.9 M frames, including while the surviving module was
   actively switching. `num_modules` is a performance setting, not a correctness
   one.
+
+Added 2026-08-14, when the rig was rebuilt with **SN74LVC165** parts and a real
+front end:
+
+- **Clock ceiling** — every rate from 1 to 40 MHz matched its reference, with
+  the caveats in §4b. The chips have stopped being the limit; 40 MHz is the
+  ESP32-S3's own ceiling through the GPIO matrix.
+- **HW-1, the front end** — and this is the first time it has existed on a
+  bench at all. The earlier rig wired buttons straight to 3V3 with pull-downs
+  and had no front end, so the shipping topology was design-only. Now: a 2N7000
+  common-source level shift (inverting) into a 74LVC14 inverting Schmitt,
+  non-inverting overall, on `U1.H`, `U1.D`, `U2.D`, `U3.D` and `U4.D`.
+
+  Measured with hands clear: idle reads all zeros, and each of the five
+  presses lands on channels 0, 4, 12, 20 and 28 — **one channel per press, no
+  neighbours**. `active_low` stays off, the 27 tie-offs stay at GND and the
+  DATA bias resistor stays a pull-down, which is the three-way consistency the
+  `PINLED_ACTIVE_LOW` help describes.
+
+  The FET alone is inverting, and wiring it without the Schmitt is a
+  believable shortcut: the symptom is those five channels reading permanently
+  *on* while the other 27 read correctly. Do not reach for `active_low` to fix
+  it — it is one global XOR, so it would correct five channels and invert
+  twenty-seven, and it also flips the sense of HW-11's self-termination.
+
+  **Still not exercised: the level shift itself.** The Schmitt and the
+  inversion are proven; driving the FET gate from a real 5–20 V lamp rail
+  through the divider is a separate test and the trip point has never been
+  measured.
+
+- **Long-run frame loss, first measurement, 2026-08-15.** 4.2 hours of uptime
+  produced **6000 scan overruns — 0.004%, about 1 frame in 25 000** — at a
+  steady rate (1000 per 2100–2470 s, not accelerating, so not a leak). One
+  missed 100 µs frame against a 30 ms attack constant is 0.3% of a time
+  constant, which is nothing in brightness terms. No watchdog trips, no heap
+  warnings, no reboots.
+
+  Worth having because every previous capture was seconds to minutes, so the
+  counter had never had a chance to say anything. Not attributed: `SCAN_DEBUG`
+  was on, and its three array writes per channel per frame inside the scan
+  loop are a plausible contributor, as are Wi-Fi interrupts. Separating them
+  needs an A/B nobody has run.
+
+> **Sticky flags set during live wiring are not evidence.** The first capture
+> after fitting the '14 showed `T` on channels 3 and 27 as well as the five
+> real ones. Both are input `E` (pin 3), both on chips being handled, and both
+> are hard-grounded and so cannot legitimately toggle. The tell is that
+> **neither ever appeared in a logged `raw` frame** — `tog` is set from every
+> frame at 10 kHz while `raw` prints twice a second, so a brush lasting a few
+> frames sets the flag permanently and is essentially never caught in a
+> snapshot. Reset with hands clear and both were gone. When the two disagree,
+> believe `raw`.
 
 **Every rev D correctness claim is measured, and all four diagnostics
 (FR-DIAG-1..4) are exercised on real hardware.** What remains needs either a

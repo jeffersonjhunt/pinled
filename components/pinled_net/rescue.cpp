@@ -27,9 +27,22 @@ namespace ooe::pinled
         {
             gpio_num_t pin;
             uint32_t hold_ms;
+            void (*on_short_press)(void *);
+            void *arg;
         };
 
-        constexpr TickType_t kPoll = pdMS_TO_TICKS(100);
+        /// 20 Hz. A person pressing a button thinks in tens of milliseconds,
+        /// and at the original 10 Hz an ordinary click could land entirely
+        /// between two samples — which it did on the bench, invisibly.
+        constexpr uint32_t kPollMs = 50;
+        constexpr TickType_t kPoll = pdMS_TO_TICKS(kPollMs);
+
+        /// Below this a press is contact bounce or a knock rather than an
+        /// intent. Three samples, and deliberately chosen to sit BELOW an
+        /// ordinary click rather than above it: the first value was 300 ms,
+        /// which is longer than most people press a button for, so the
+        /// re-arm ignored every normal press and said nothing about it.
+        constexpr uint32_t kShortPressMinMs = 150;
 
         void rescue_task(void *arg)
         {
@@ -45,19 +58,41 @@ namespace ooe::pinled
 
                 if (gpio_get_level(cfg.pin) != 0) // active low
                 {
-                    // A release before the threshold is a SHORT press, which
-                    // this deliberately does nothing with — it belongs to the
-                    // profiler re-arm. Saying so out loud beats leaving
-                    // someone to wonder whether the button works.
-                    if (held >= 300 && held < cfg.hold_ms)
-                        ESP_LOGI(TAG, "short press ignored; hold %u s to reset the network",
-                                 (unsigned)(cfg.hold_ms / 1000));
+                    // A release before the threshold is a SHORT press: the
+                    // profiler re-arm. Acting on RELEASE rather than at 300 ms
+                    // is what keeps the two jobs on one button honest — at the
+                    // moment the threshold passes there is no way to know
+                    // whether this is a short press or the first third of a
+                    // long hold, and re-profiling on the way to erasing the
+                    // network would be a surprise every time.
+                    if (held >= kShortPressMinMs && held < cfg.hold_ms)
+                    {
+                        if (cfg.on_short_press)
+                            cfg.on_short_press(cfg.arg);
+                        else
+                            ESP_LOGI(TAG, "short press ignored; hold %u s to reset the network",
+                                     (unsigned)(cfg.hold_ms / 1000));
+                    }
+                    else if (held > 0)
+                    {
+                        // Detected, and too brief to act on. Saying so is the
+                        // whole point: a press under the threshold produced no
+                        // countdown, no callback and no log line, so "pressed
+                        // it too quickly" and "the button is dead" were the
+                        // same observation. That cost a bench session.
+                        ESP_LOGI(TAG, "press of %u ms was too short; hold it for %u ms",
+                                 (unsigned)held, (unsigned)kShortPressMinMs);
+                    }
                     held = 0;
                     announced = 0;
                     continue;
                 }
 
-                held += 100;
+                // Derived from the poll period rather than restated. These
+                // were two independent constants that happened to agree, so
+                // changing the poll rate silently rescaled every threshold
+                // measured against `held`.
+                held += kPollMs;
 
                 // Counted down out loud, because the only other feedback is a
                 // reboot and there is no way to tell "holding it long enough"
@@ -78,7 +113,8 @@ namespace ooe::pinled
         }
     } // namespace
 
-    esp_err_t rescue_button_start(int gpio, uint32_t hold_ms)
+    esp_err_t rescue_button_start(int gpio, uint32_t hold_ms,
+                                  void (*on_short_press)(void *), void *arg)
     {
         if (gpio < 0)
             return ESP_ERR_INVALID_ARG;
@@ -91,7 +127,8 @@ namespace ooe::pinled
         if (err != ESP_OK)
             return err;
 
-        auto *args = new (std::nothrow) Args{static_cast<gpio_num_t>(gpio), hold_ms};
+        auto *args = new (std::nothrow) Args{static_cast<gpio_num_t>(gpio), hold_ms,
+                                             on_short_press, arg};
         if (args == nullptr)
             return ESP_ERR_NO_MEM;
 
@@ -104,8 +141,9 @@ namespace ooe::pinled
             delete args;
             return ESP_FAIL;
         }
-        ESP_LOGI(TAG, "rescue: hold GPIO %d for %u s to clear the network",
-                 gpio, (unsigned)(hold_ms / 1000));
+        ESP_LOGI(TAG, "button on GPIO %d: short press %s, hold %u s clears the network",
+                 gpio, on_short_press ? "re-profiles" : "ignored",
+                 (unsigned)(hold_ms / 1000));
         return ESP_OK;
     }
 } // namespace ooe::pinled

@@ -149,16 +149,19 @@ channel's class (FR-PROF-4). *Stubbed with this algorithm documented in the
 first cut; full DSP in v1.*
 
 The observation window is specified in **milliseconds, not frames** (FR-PROF-5).
-The first cut observes a fixed 512 frames, which at 10 kHz is 51 ms — about
-three AC cycles, far too short to classify AC drive. Budget 500 ms–1 s and
-derive the frame count from the measured Fs.
+*(**Done, 2026-08-13**, §5.1 step 8. `PINLED_PROFILE_WINDOW_MS`, default 750,
+frames derived from the measured Fs. The first cut observed a fixed 512
+frames, which was worse than the 51 ms this paragraph assumed: boot profiling
+ran free-run rather than paced, so it was nearer **14 ms** — under two mains
+half-cycles.)*
 
 The profiler is also the one part of the pipeline that is *not* robust to
 solenoid-induced ground bounce (FR-PROF-6). The filament model absorbs a 1 ms
 false-on glitch as a ~3% brightness bump; the classifier sees it as correlated
 false edges across every channel at once and will push steady lamps into the
 MATRIX bucket. Hence robust statistics, and an easy re-arm path — GPIO 0 (the
-QT Py BOOT button) satisfies FR-PROF-2 with no extra hardware.
+QT Py BOOT button) satisfies FR-PROF-2 with no extra hardware. *(The re-arm
+landed in §5.1 step 8; the robust statistics have not.)*
 
 ### 3.4 Mapping + render (`lamp_map`)
 
@@ -792,6 +795,118 @@ known-good diagnostic build, and the step-0 table is deliberately compatible
 with it — the 2 MB `factory` partition holds the current app with room to
 spare, so the table is flashed once and thereafter switching between the two
 builds is an ordinary app flash.
+
+**Step 8 — the profiler re-arm (FR-PROF-2, FR-PROF-5).**
+
+Step 6 closed with an open problem: the live monitor reported `DriveClass =
+OFF` for every channel, forever, because classification happened once at boot
+on a playfield that was switched off. The class field was honest and useless,
+and a UI built on it would paint a working machine as dead. This closes it.
+
+**The structural point is that there is now one way to produce a
+classification instead of two.** At runtime the scan task owns the chain, so a
+re-arm cannot read frames of its own — two readers on one SPI device is not a
+thing that works. It has to be fed from that task. Boot now goes the same way,
+which is why tasks start *before* the boot pass rather than after it. Two
+paths that classify would have drifted, and the one that mattered is the one
+that did not exist yet.
+
+Three tasks share it and none of them takes a lock, because each owns a phase
+and the state is the baton:
+
+| task | transition |
+|---|---|
+| requester (httpd or button) | `IDLE → OBSERVING`, by compare-exchange |
+| scan | arms, feeds every frame, then `OBSERVING → CLASSIFYING` and notifies |
+| main | classifies, applies, `CLASSIFYING → IDLE` |
+
+The compare-exchange makes a second request during a pass a **refusal** rather
+than a restart of the window — two people, one pressing the button and one
+clicking a UI, should not silently extend how long either waits. And
+`Profiler::observe()` ignores frames past the window, which is what lets the
+main task read the accumulators without a lock and without stopping the writer:
+the counters stop moving on their own.
+
+**The window is milliseconds now** (FR-PROF-5), `PINLED_PROFILE_WINDOW_MS`,
+default 750, with the frame count derived from the **measured** Fs like every
+other time constant. The old fixed 512 frames was about 14 ms at the boot
+free-run rate, which is under two mains half-cycles — it classified
+confidently having seen essentially nothing.
+
+`POST /api/v1/profiler` re-arms and `GET` reports progress; a short press of
+the button does the same thing. One pin, one task, two jobs split by duration
+— and the short press fires on *release*, because at the moment the 300 ms
+threshold passes there is no way to tell a short press from the first third of
+a long hold, and re-profiling on the way to erasing the network would be a
+surprise every time.
+
+**Measured on the bench:** the window runs at a clean 10 kHz throughout
+(9.7–10.3 kHz sampled every 70 ms across a full pass) and classification is
+**applied 1 ms after the window closes** — request at 18195 ms, classified at
+18945, applied at 18946 — so the end-to-end cost of a re-arm is the window
+plus nothing.
+
+Two earlier figures for that were both artefacts of how it was measured, and
+both are worth recording because they are the same mistake twice.
+
+A reading of 1.1 s was *the measurement*: polling status at 20 Hz starves the
+priority-1 main task on core 0, where httpd also lives. A UI polling at 1 Hz
+will not see it, and the cost is a late classification rather than a wrong one.
+
+A reading of ~830 ms was **the wrong half of a Kconfig fork**. `SCAN_DEBUG`
+had a run loop of its own that slept for 500 ms rather than waiting on the
+notification, so a re-arm landed up to half a second after its window. It
+defaults to `y` and the bench runs it, so every measurement came from the poll
+path while the notification path — the one the design comment described — had
+never executed on hardware. The loops are now one loop; `SCAN_DEBUG` sets the
+idle timeout and picks the log line and touches the hand-off not at all.
+
+**Also fixed on the way past**, two things neither of which was this step:
+
+The button was started *after* the two early returns in `start_network()`, so
+a board that failed to join a network had no rescue button and no re-arm
+button — the exact case both exist for. It starts first now, before anything
+that can give up.
+
+And **the live monitor's sticky bits accumulated between clients.** The push
+task skipped `snapshot()` when nobody was connected, while the scan kept
+publishing regardless, so "sticky since the last push" quietly meant "sticky
+since the last *reader*" and the first frame of a new session reported
+activity that could be minutes old. Found while explaining why an LED was
+dark: channel 20 arrived `active` on frame one and quiet on every frame of
+the twenty seconds measured afterwards. The push task drains while idle now.
+A ghost lamp is a bad first impression and a worse thing to debug — and it
+would have put a phantom in step 1 of the bench checklist.
+
+**Verified on the bench, 2026-08-15 — 11/11** (`tools/rearm_check.py`, the
+`BRINGUP.md` §5b checklist as a script). Everything above is mechanism; the
+claim that *classification tracks what the machine is doing* needs a channel
+physically held while a pass runs, so it needs a person at the rig. It holds:
+a held channel reclassifies `off` → `steady`, returns to `off` on release, the
+locked channel is untouched through the same pass, a button click re-arms as
+the API does, and a second request during a pass is refused. Corroborated from
+the serial side, where a button-originated pass is the one `auto-profiling:
+window` with no `re-armed by API request` beside it.
+
+**What the checklist actually caught was not the classifier.** The concurrency,
+the three-task hand-off and the lock precedence all worked first time. The two
+bugs were in the parts that looked trivial:
+
+- `SCAN_DEBUG` selected a **second `run()` loop** that polled at 500 ms instead
+  of waiting on the notification. It defaults to `y` and the bench runs it, so
+  every latency measurement came from the poll path and the notification path
+  had never executed. The loops are one loop now, and classification is applied
+  1 ms after the window closes rather than up to 500.
+- The button's short press required **300 ms — longer than a person clicks
+  for** — and a press below that produced no countdown, no callback and no log
+  line, so "too quick" and "dead button" were the same observation. Three
+  graded presses settled it: a tap logged nothing, ~0.7 s re-armed, ~2.2 s
+  counted down then re-armed on release. Now 20 Hz polling, a 150 ms threshold,
+  and a short press that reports its own duration.
+
+Both are the same mistake, and it is the one worth remembering from this step:
+a feature verified in the state convenient to reach. Holding the button for
+five seconds exercises neither the threshold nor the click path.
 
 ## 6. Test strategy
 

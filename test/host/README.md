@@ -28,6 +28,7 @@ Run a single suite directly to see per-case output:
 | `test_doc_file` | documents as real files: round trip, corruption, bounds, atomic replace |
 | `test_color_order` | packing a colour for the strip's byte order, in transmitted order |
 | `test_live` | the scan → push hand-off: sticky activity, clear-on-read, and a two-thread contention case |
+| `test_profiling` | the observation window: milliseconds → frames against a measured Fs, and every degenerate input |
 | `test_resolve` | the projection: profile + install → per-channel records, and every case it refuses *(needs nanopb)* |
 | `test_install` | the install document → the device-wide record; what a zero means, field by field *(needs nanopb)* |
 

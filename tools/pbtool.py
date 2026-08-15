@@ -341,6 +341,20 @@ def _ws_frames(sock, initial: bytes = b""):
         yield opcode, payload
 
 
+# Bits 2..4 of each channel's flag byte, as DriveClass. The letters are
+# chosen to be told apart at a glance in a 128-character row: '.' for a
+# channel the profiler called OFF, so a row of mostly-dots reads as a
+# playfield that was dark when it was last classified.
+#
+# EIGHT entries for a three-bit field, not six for the six classes that
+# exist. A newer firmware with a seventh class -- or one flipped bit -- would
+# otherwise index past the end and kill the watcher with an IndexError, which
+# is a rotten way to find out you are talking to a device you do not know.
+_CLASS_LETTERS = "?.SMAD!!"
+_CLASS_NAMES = {"?": "unknown", ".": "off", "S": "steady", "M": "matrix",
+                "A": "ac_steady", "D": "ac_dimmed", "!": "unrecognised"}
+
+
 def cmd_live(args) -> int:
     """Watch the live monitor and print one line per push."""
     import time
@@ -352,6 +366,7 @@ def cmd_live(args) -> int:
     count = 0
     last_seq = None
     gaps = 0
+    last_row = None
 
     try:
         for opcode, payload in _ws_frames(sock, extra):
@@ -380,7 +395,24 @@ def cmd_live(args) -> int:
                 if flags & 0x02:
                     bound += 1
 
-            if args.verbose or active:
+            if args.classes:
+                # One row per push, one letter per channel. This is the view
+                # that makes a profiler re-arm visible: activity comes and
+                # goes at 30 Hz and is hard to read, whereas the class is a
+                # standing answer that only changes when a pass completes.
+                # Printed only when it CHANGES, so a re-arm is one new line
+                # in an otherwise still terminal.
+                row = "".join(
+                    _CLASS_LETTERS[(samples[ch * 2 + 1] >> 2) & 0x07]
+                    if ch * 2 + 1 < len(samples) else "?"
+                    for ch in range(msg.channel_count))
+                if row != last_row:
+                    counts = {c: row.count(c) for c in sorted(set(row))}
+                    tally = " ".join(f"{_CLASS_NAMES.get(c, c)}={n}"
+                                     for c, n in counts.items())
+                    print(f"seq {msg.seq:6d}  [{row}]  {tally}")
+                    last_row = row
+            elif args.verbose or active:
                 shown = " ".join(f"ch{c}:lvl{l}:cls{k}" for c, l, k in active[:8])
                 print(f"seq {msg.seq:6d}  {len(payload):4d}B  "
                       f"{msg.channel_count} ch, {bound} bound  {shown}")
@@ -437,7 +469,12 @@ def main(argv: list[str] | None = None) -> int:
     lv.add_argument("--seconds", type=float, default=5.0,
                     help="stop after this long (0 = run until interrupted)")
     lv.add_argument("--verbose", action="store_true",
-                    help="print every frame, not only those with activity")
+                    help="print every frame, not only those with activity "
+                         "(ignored with --classes, which prints on change)")
+    lv.add_argument("--classes", action="store_true",
+                    help="one letter per channel's DriveClass, printed only "
+                         "when it changes -- the view for watching a "
+                         "POST /api/v1/profiler land")
     lv.set_defaults(func=cmd_live)
 
     r = sub.add_parser("roundtrip", help="check a JSON document survives a round trip")

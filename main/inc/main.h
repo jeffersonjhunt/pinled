@@ -36,28 +36,80 @@
 #include "pinled_apply.h"
 #include "pinled_channel_config.h"
 #include "pinled_live.h"
+#include "pinled_profiling.h"
 
 #include "version.h"
+
+#include <atomic>
 
 namespace ooe::pinled
 {
     /// Top-level application. Owns the config, scan driver, filament bank,
     /// profiler, and LED map, and wires up the scan/render tasks.
-    class Main
+    ///
+    /// Implements ProfilerControl so the API can ask for a fresh
+    /// classification without knowing anything else about the application.
+    class Main : public ProfilerControl
     {
     public:
         esp_err_t init();
         void run();
 
+        // --- ProfilerControl -------------------------------------------------
+        //
+        // Called from the httpd task and from the button task. Both do nothing
+        // but post a request and read atomics; the work happens on the scan
+        // task and the main task.
+
+        bool rearm_profiler() override;
+        ProfilerStatus profiler_status() const override;
+
     private:
         void version();
         esp_err_t start_tasks();
-        void profile_boot(); ///< run the boot-time auto-profiler pass
+
+        /**
+         * @brief Request a pass and wait for it to land.
+         *
+         * Boot only. Everywhere else a re-arm is asynchronous — the caller is
+         * a web request or a button press and has nothing useful to do while
+         * the window fills. Boot does: it wants the machine classified before
+         * the API can be asked about it.
+         */
+        void profile_and_wait(const char *reason);
+
+        /**
+         * @brief Classify a completed window and push the result into the
+         *        filament bank and the live monitor.
+         *
+         * Runs on the main task, never the scan task: it allocates, it does
+         * floating point, and it must not sit in front of a 10 kHz frame.
+         * Safe without a lock only because the scan task stops feeding the
+         * profiler the moment its window is full — see Profiler::observe().
+         */
+        void apply_classification();
+
+        /// Finish any completed window, and abandon any overdue one. Called
+        /// from the main loop on every wake-up, notification or timeout alike.
+        void service_profile();
+
+        /// How long a pass may take before `service_profile()` gives up on it.
+        /// Generous: it exists to stop a dead scan from wedging the profiler
+        /// into a state no later request can leave, not to police timing.
+        uint32_t profile_budget_ms() const
+        {
+            return 4 * CONFIG_PINLED_PROFILE_WINDOW_MS + 1000;
+        }
 
         /// Bring up Wi-Fi and the HTTP API. Last, and deliberately not fatal:
         /// the lamps are the product and they must work on a bench with no
         /// network at all.
         void start_network();
+
+        /// The rescue / re-arm button. Not a network feature, despite where it
+        /// is started from: a short press re-profiles (FR-PROF-2), a long hold
+        /// erases the stored network (FR-UI-7).
+        void start_button();
 
         /// FR-SCAN-9: measure what the scan hardware actually sustains and
         /// clamp the configured sample rate to it. The clamped value becomes
@@ -136,8 +188,62 @@ namespace ooe::pinled
 
         TaskHandle_t scan_task_{nullptr};
         TaskHandle_t render_task_{nullptr};
+        /// Notified by the scan task when an observation window completes.
+        TaskHandle_t main_task_{nullptr};
+
+        // --- auto-profiler hand-off (FR-PROF-2) ------------------------------
+        //
+        // Three tasks touch this and none of them takes a lock, which works
+        // because each owns a distinct phase and the word below is the baton:
+        //
+        //   requester (httpd / button)  IDLE -> OBSERVING, pass + 1
+        //   scan task                   arms on a pass it has not seen, feeds,
+        //                               then OBSERVING -> CLASSIFYING + notify
+        //   main task                   classifies, applies, -> IDLE
+        //                               ...or abandons an overdue window
+        //
+        // **Phase and pass number live in ONE word** — low three bits the
+        // phase, the rest a counter — and every transition is a
+        // compare-exchange on the whole thing. That is not decoration. The
+        // scan task decides whether to arm by asking "is this a pass I have
+        // not seen?", so if the phase could change without the pass number
+        // changing in the same instant, two requests microseconds apart could
+        // leave it feeding a window it never reset, and a classification would
+        // be made from whatever the previous pass had accumulated.
+        //
+        // The compare-exchange is also what makes a second request during a
+        // pass a refusal rather than a restart — two people, one pressing the
+        // button and one clicking a UI, should not silently extend how long
+        // either waits.
+        static constexpr uint32_t kProfileStateBits = 3;
+        static constexpr uint32_t kProfileStateMask = (1u << kProfileStateBits) - 1;
+
+        static uint32_t profile_pack(ProfilerState s, uint32_t pass)
+        {
+            return (pass << kProfileStateBits) | static_cast<uint32_t>(s);
+        }
+        static ProfilerState profile_phase(uint32_t w)
+        {
+            return static_cast<ProfilerState>(w & kProfileStateMask);
+        }
+        static uint32_t profile_pass(uint32_t w) { return w >> kProfileStateBits; }
+
+        std::atomic<uint32_t> profile_word_{profile_pack(ProfilerState::IDLE, 0)};
+        std::atomic<uint32_t> profile_passes_{0}; ///< completed, not requested
+
+        /// When the current window was requested, for the overdue check.
+        /// Milliseconds, and unsigned subtraction, so the 49-day wrap is a
+        /// non-event rather than a false abandon.
+        std::atomic<uint32_t> profile_started_ms_{0};
+
+        /// Scan task only: the pass number it last armed for.
+        uint32_t profile_pass_seen_{0};
+
+        /// Window length in frames, derived from the MEASURED Fs (FR-PROF-5).
+        uint32_t profile_window_frames_{0};
 
         gptimer_handle_t sample_timer_{nullptr};
+
         float fs_actual_{0.0f};      ///< Fs after the boot clamp; the real one
         uint32_t overruns_{0};       ///< frames the scan task failed to keep up with
         uint32_t overrun_logged_{0}; ///< rate-limits the overrun warning

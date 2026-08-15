@@ -146,6 +146,43 @@ menu "pinled configuration"
             int "LED frame rate (Hz)"
             range 30 240
             default 90
+
+    endmenu
+
+    menu "Auto-profiler"
+        config PINLED_PROFILE_WINDOW_MS
+            int "Observation window (ms)"
+            range 50 5000
+            default 750
+            help
+                How long the classifier watches before deciding what each
+                channel is (FR-PROF-5). Milliseconds, not frames: every
+                pattern it looks for is a wall-clock one -- a 60 Hz mains
+                half-cycle is 8.3 ms and a matrix strobe is under 5 -- so the
+                frame count is derived from the MEASURED sample rate.
+
+                750 ms is about ninety mains half-cycles, which is enough to
+                separate a dimmed GI from a steady one. Shorter is not cheaper
+                in any way that matters: the pass runs once at boot and
+                whenever it is re-armed, never continuously.
+
+        config PINLED_PROFILE_REARM_BUTTON
+            bool "Re-arm the profiler on a short button press"
+            default y
+            depends on PINLED_RESCUE_GPIO >= 0
+            help
+                A SHORT press of the rescue button re-runs the classifier on a
+                running machine (FR-PROF-2). Boot classification sees a dark
+                playfield and calls every channel OFF, so the pass that
+                matters is the one run with the game turned on.
+
+                One pin, one task, two jobs split by duration: a short press
+                profiles, a long hold erases the network. There is no separate
+                GPIO option because a second task polling the same pin would
+                be a second answer to "was it pressed".
+
+                Turning this off leaves the short press logged and ignored;
+                POST /api/v1/profiler still works.
     endmenu
 
     menu "Filament model defaults"

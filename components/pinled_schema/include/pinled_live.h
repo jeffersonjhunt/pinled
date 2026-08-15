@@ -115,5 +115,25 @@ namespace ooe::pinled
          *       reports activity once, which is the point.
          */
         size_t snapshot(uint8_t *out, size_t cap);
+
+        /**
+         * @brief Clear the sticky bits without reporting them.
+         *
+         * For the push task while nobody is connected. "Sticky since the last
+         * push" quietly becomes "sticky since the last *reader*" if nothing
+         * drains it, because the scan publishes whether or not anyone is
+         * listening — so the first frame a connecting client receives would
+         * carry every blip since the previous client left. Observed on the
+         * bench: one transient on channel 20 survived several minutes between
+         * sessions and arrived looking live.
+         *
+         * The window is meant to be one push long. This keeps it that way when
+         * there is nobody to push to.
+         */
+        void drain()
+        {
+            for (size_t i = 0; i < kWords; ++i)
+                active[i].store(0, std::memory_order_relaxed);
+        }
     };
 } // namespace ooe::pinled

@@ -25,5 +25,6 @@ idf_component_register(
              "src/pinled_live.cpp"
              "src/pinled_drive_class.cpp"
              "src/pinled_apply.cpp"
+             "src/pinled_profiling.cpp"
         INCLUDE_DIRS "include"
 )

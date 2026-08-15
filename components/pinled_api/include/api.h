@@ -20,6 +20,14 @@
  * | GET | `/api/v1/profile` | `MachineProfile` |
  * | PUT | `/api/v1/profile` | `MachineProfile` → stored, then restart |
  * | DELETE | `/api/v1/profile` | none → revert to unstyled |
+ * | GET | `/api/v1/profiler` | `ProfilerStatus` |
+ * | POST | `/api/v1/profiler` | none → re-arm, `ProfilerStatus` |
+ *
+ * @par `profile` and `profiler` are different things
+ * `/profile` is the stored `MachineProfile` document — which lamps are named
+ * and styled. `/profiler` is the drive-scheme classifier, which touches no
+ * stored bytes at all. They are one letter apart and share nothing, which is
+ * worth knowing before reading either handler.
  *
  * Bodies are protobuf (`application/x-protobuf`); the firmware contains no
  * JSON parser (FR-CFG-13). `tools/pbtool.py` is the `curl` equivalent.
@@ -73,9 +81,37 @@
 #include "machine_config.h"
 #include "net.h"
 #include "pinled_live.h"
+#include "pinled_profiling.h"
 
 namespace ooe::pinled
 {
+    /**
+     * @brief What the API is allowed to ask of the auto-profiler.
+     *
+     * An interface rather than a pointer to `Main` because the dependency
+     * would otherwise run the wrong way: the application knows about the API,
+     * and the API knowing about the application in return makes both
+     * untestable and neither replaceable. Two methods is the whole surface.
+     */
+    class ProfilerControl
+    {
+    public:
+        virtual ~ProfilerControl() = default;
+
+        /**
+         * @brief Request a fresh classification pass.
+         * @return false if one is already running, or if nothing can run one.
+         *
+         * Returns as soon as the request is posted — the pass itself takes the
+         * observation window, and the caller watches `status()` or the live
+         * socket to see it land.
+         */
+        virtual bool rearm_profiler() = 0;
+
+        /// Sampled without a lock; see the note on ProfilerStatus.
+        virtual ProfilerStatus profiler_status() const = 0;
+    };
+
     /**
      * @brief API version, distinct from the firmware version (FR-UI-4).
      *
@@ -98,12 +134,18 @@ namespace ooe::pinled
          * @param channels the running per-channel records; may be null
          * @param count   entries in @p channels
          * @param net     for reporting how the device was reached
+         * @param live    the scan → push hand-off the monitor reads
+         * @param profiler re-arm and status; may be null, in which case
+         *                 `/api/v1/profiler` reports UNAVAILABLE rather than
+         *                 404 — the endpoint existing and saying "not on this
+         *                 build" is a better answer to a UI than absence
          */
         esp_err_t start(MachineConfigStore &store,
                         const MachineConfig &running,
                         const ChannelConfig *channels, size_t count,
                         const Net &net,
-                        LiveState &live);
+                        LiveState &live,
+                        ProfilerControl *profiler);
 
         void stop();
 
