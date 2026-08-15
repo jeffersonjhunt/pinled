@@ -484,6 +484,19 @@ front end:
   through the divider is a separate test and the trip point has never been
   measured.
 
+- **Long-run frame loss, first measurement, 2026-08-15.** 4.2 hours of uptime
+  produced **6000 scan overruns — 0.004%, about 1 frame in 25 000** — at a
+  steady rate (1000 per 2100–2470 s, not accelerating, so not a leak). One
+  missed 100 µs frame against a 30 ms attack constant is 0.3% of a time
+  constant, which is nothing in brightness terms. No watchdog trips, no heap
+  warnings, no reboots.
+
+  Worth having because every previous capture was seconds to minutes, so the
+  counter had never had a chance to say anything. Not attributed: `SCAN_DEBUG`
+  was on, and its three array writes per channel per frame inside the scan
+  loop are a plausible contributor, as are Wi-Fi interrupts. Separating them
+  needs an A/B nobody has run.
+
 > **Sticky flags set during live wiring are not evidence.** The first capture
 > after fitting the '14 showed `T` on channels 3 and 27 as well as the five
 > real ones. Both are input `E` (pin 3), both on chips being handled, and both
