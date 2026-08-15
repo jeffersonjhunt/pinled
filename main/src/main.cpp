@@ -34,10 +34,83 @@ namespace ooe::pinled
                  PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
     }
 
+    void Main::log_build_options()
+    {
+        // Every option here changes behaviour, and none of them is visible in
+        // the source: `sdkconfig` is gitignored and lives only on the build
+        // host, so anyone reading a capture — including me, reading one from
+        // another machine — cannot otherwise tell which build produced it.
+        //
+        // That is not hypothetical. CONFIG_PINLED_SCAN_DEBUG selects a
+        // different run loop, and being unable to see it set meant two rounds
+        // of latency figures measured on a code path the design comment did
+        // not describe. One line at boot would have caught it immediately.
+        // Each #ifdef reduced to a bool once, so the log line and the warning
+        // below cannot disagree about what is enabled.
+#ifdef CONFIG_PINLED_SCAN_DEBUG
+        constexpr bool kScanDebug = true;
+#else
+        constexpr bool kScanDebug = false;
+#endif
+#ifdef CONFIG_PINLED_PROFILE_REARM_BUTTON
+        constexpr bool kRearmButton = true;
+#else
+        constexpr bool kRearmButton = false;
+#endif
+#ifdef CONFIG_PINLED_STARTUP_WALK
+        constexpr bool kWalk = true;
+#else
+        constexpr bool kWalk = false;
+#endif
+#ifdef CONFIG_PINLED_SPI_SWEEP
+        constexpr bool kSweep = true;
+#else
+        constexpr bool kSweep = false;
+#endif
+#ifdef CONFIG_PINLED_STORE_SELFTEST
+        constexpr bool kSelftest = true;
+#else
+        constexpr bool kSelftest = false;
+#endif
+#ifdef CONFIG_PINLED_LED_LOAD_TEST
+        constexpr bool kLoadTest = true;
+#else
+        constexpr bool kLoadTest = false;
+#endif
+#ifdef CONFIG_PINLED_SEED_FS
+        constexpr bool kSeedFs = true;
+#else
+        constexpr bool kSeedFs = false;
+#endif
+        auto yn = [](bool b) { return b ? "on" : "off"; };
+
+        ESP_LOGI(TAG, "build: profiler window %d ms, re-arm button %s, "
+                      "rescue GPIO %d @ %d ms, startup walk %s",
+                 CONFIG_PINLED_PROFILE_WINDOW_MS, yn(kRearmButton),
+                 CONFIG_PINLED_RESCUE_GPIO, CONFIG_PINLED_RESCUE_HOLD_MS, yn(kWalk));
+
+        // Every option named even when it is off. A banner that listed only
+        // what was enabled would read identically to one from a build where
+        // the option did not exist at all.
+        ESP_LOGI(TAG, "build: diagnostics scan_debug=%s step_ms=%d hold_ch=%d "
+                      "spi_sweep=%s selftest=%s load_test=%s seed_fs=%s",
+                 yn(kScanDebug), CONFIG_PINLED_SCAN_STEP_MS, CONFIG_PINLED_SCAN_HOLD_CH,
+                 yn(kSweep), yn(kSelftest), yn(kLoadTest), yn(kSeedFs));
+
+        // Loud, because each of these changes what the board *is*: the first
+        // three take the scan hardware away from scan_task, and seed_fs
+        // overwrites the stored configuration on every flash.
+        if (CONFIG_PINLED_SCAN_STEP_MS > 0 || CONFIG_PINLED_SCAN_HOLD_CH >= 0 ||
+            kSweep || kSeedFs)
+            ESP_LOGW(TAG, "build: a bring-up option is active — this is NOT a "
+                          "normal-operation build");
+    }
+
     esp_err_t Main::init()
     {
         esp_log_level_set("*", ESP_LOG_DEBUG);
         version();
+        log_build_options();
         ESP_LOGI(TAG, "Initializing...");
 
 #ifdef CONFIG_PINLED_STORE_SELFTEST

@@ -66,6 +66,12 @@ namespace ooe::pinled
 
     private:
         void version();
+
+        /// Log which build options are actually compiled in. `sdkconfig` is
+        /// gitignored and lives on the build host, so a capture is otherwise
+        /// the only artefact of a run and says nothing about the build that
+        /// produced it.
+        void log_build_options();
         esp_err_t start_tasks();
 
         /**
