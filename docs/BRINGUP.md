@@ -445,6 +445,25 @@ found and de-duplicated three networks, the page popped by itself, and
 logs both documents loading — which also verifies the useful half: an app flash
 leaves the filesystem alone.
 
+### What the swap verified, 2026-08-15
+
+Everything M3 and M3+ claim, re-run on the new silicon: **11/11 on
+`tools/rearm_check.py --include-rescue`**, which is the §5b checklist plus the
+destructive step it normally skips.
+
+The one that had never been re-tested is `FR-UI-7`, the long-hold rescue —
+`rescue.cpp` had changed twice since it last ran (the short-press callback,
+then the 20 Hz poll and 150 ms threshold). The full trail is in the log: the
+countdown at 4, 3, 2, 1 seconds, `erasing credentials and restarting into
+SoftAP`, the AP coming up, a phone joining, `provisioned for "…"`, and the
+rejoin. Splitting one button between two jobs by duration did not break either
+job.
+
+Also confirmed here rather than assumed: the profiler and the live monitor
+behave identically on the FN8C0 as on the FH4R2 — same 750 ms window, same
+7500 frames, 30.2 Hz push with no sequence gaps, the locked channel still
+locked. The MCU swap changed the flash size and the MAC and nothing else.
+
 ## 6. Tooling traps
 
 These are not hardware faults, but they present as one.
