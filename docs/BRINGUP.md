@@ -327,7 +327,7 @@ completed pass is one new line in an otherwise still terminal.
 | 2 | **Hold** a wired input down (`U1.D` is channel 4). | Row unchanged. The class is stale by design — this is the bug being fixed. |
 | 3 | Still holding, `curl -X POST http://pinled.local/api/v1/profiler` | ~0.8 s later, one new row: that channel becomes `S`. |
 | 4 | Release. POST again. | ~0.8 s later, back to `.`. |
-| 5 | Short-press the BOOT button (under 5 s) while holding an input. | Same as 3, from the button. The log says `auto-profiling: window 750 ms`. |
+| 5 | Click the BOOT button — a normal press, anything under 5 s — while holding an input. | Same as 3, from the button. The log says `auto-profiling: window 750 ms` with no `re-armed by API request` beside it, which is how you tell the two apart. A press under 150 ms is ignored and logs `press … was too short`. |
 | 6 | Repeat 3 on **`U3.D`, channel 20**, while holding it. | Stays `A`. That channel is `class_lock: AC_STEADY` in `fs_seed/profile.pb.json`, and the profiler is not allowed to touch it (FR-PROF-4, FR-CFG-8). |
 | 7 | POST twice in quick succession. | Second returns **409** with the in-flight status as its body. |
 | 8 | Hold BOOT the full 5 s. | Still erases the network and reboots into SoftAP — the split by duration did not break the rescue. |

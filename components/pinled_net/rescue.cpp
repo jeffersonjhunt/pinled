@@ -31,13 +31,18 @@ namespace ooe::pinled
             void *arg;
         };
 
-        constexpr TickType_t kPoll = pdMS_TO_TICKS(100);
+        /// 20 Hz. A person pressing a button thinks in tens of milliseconds,
+        /// and at the original 10 Hz an ordinary click could land entirely
+        /// between two samples — which it did on the bench, invisibly.
+        constexpr uint32_t kPollMs = 50;
+        constexpr TickType_t kPoll = pdMS_TO_TICKS(kPollMs);
 
-        /// Below this a press is contact bounce or a knock, not an intent.
-        /// The button is mechanical and unfiltered, and the action on the
-        /// other side re-runs classification on a live machine — cheap, but
-        /// not something to do because someone set the board down.
-        constexpr uint32_t kShortPressMinMs = 300;
+        /// Below this a press is contact bounce or a knock rather than an
+        /// intent. Three samples, and deliberately chosen to sit BELOW an
+        /// ordinary click rather than above it: the first value was 300 ms,
+        /// which is longer than most people press a button for, so the
+        /// re-arm ignored every normal press and said nothing about it.
+        constexpr uint32_t kShortPressMinMs = 150;
 
         void rescue_task(void *arg)
         {
@@ -68,12 +73,26 @@ namespace ooe::pinled
                             ESP_LOGI(TAG, "short press ignored; hold %u s to reset the network",
                                      (unsigned)(cfg.hold_ms / 1000));
                     }
+                    else if (held > 0)
+                    {
+                        // Detected, and too brief to act on. Saying so is the
+                        // whole point: a press under the threshold produced no
+                        // countdown, no callback and no log line, so "pressed
+                        // it too quickly" and "the button is dead" were the
+                        // same observation. That cost a bench session.
+                        ESP_LOGI(TAG, "press of %u ms was too short; hold it for %u ms",
+                                 (unsigned)held, (unsigned)kShortPressMinMs);
+                    }
                     held = 0;
                     announced = 0;
                     continue;
                 }
 
-                held += 100;
+                // Derived from the poll period rather than restated. These
+                // were two independent constants that happened to agree, so
+                // changing the poll rate silently rescaled every threshold
+                // measured against `held`.
+                held += kPollMs;
 
                 // Counted down out loud, because the only other feedback is a
                 // reboot and there is no way to tell "holding it long enough"

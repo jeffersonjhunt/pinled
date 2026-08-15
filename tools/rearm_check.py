@@ -170,8 +170,8 @@ def main():
     check(f"4b. ch{free} returns to off once released", ok, f"got {seen}")
 
     # 5 -- the same thing from the button rather than the API.
-    ask(f"HOLD channel {free} again, SHORT-PRESS the BOOT button (under 5 s), "
-        f"then keep holding channel {free}")
+    ask(f"HOLD channel {free} again, CLICK the BOOT button (a normal press; "
+        f"anything under 5 s), and KEEP HOLDING channel {free}")
     ok, seen = b.await_class(free, "steady", timeout=6.0)
     check("5. a short button press re-arms too", ok, f"got {seen}")
 
