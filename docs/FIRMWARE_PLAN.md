@@ -878,11 +878,35 @@ the twenty seconds measured afterwards. The push task drains while idle now.
 A ghost lamp is a bad first impression and a worse thing to debug — and it
 would have put a phantom in step 1 of the bench checklist.
 
-**Still needs the bench, and it is one button-press:** everything above is
-mechanism. The claim that *classification tracks what the machine is doing* —
-a held channel reading `OFF` before a re-arm and `STEADY` after — cannot be
-made from a wired build host, because the inputs are physical. See the
-checklist in `BRINGUP.md`.
+**Verified on the bench, 2026-08-15 — 11/11** (`tools/rearm_check.py`, the
+`BRINGUP.md` §5b checklist as a script). Everything above is mechanism; the
+claim that *classification tracks what the machine is doing* needs a channel
+physically held while a pass runs, so it needs a person at the rig. It holds:
+a held channel reclassifies `off` → `steady`, returns to `off` on release, the
+locked channel is untouched through the same pass, a button click re-arms as
+the API does, and a second request during a pass is refused. Corroborated from
+the serial side, where a button-originated pass is the one `auto-profiling:
+window` with no `re-armed by API request` beside it.
+
+**What the checklist actually caught was not the classifier.** The concurrency,
+the three-task hand-off and the lock precedence all worked first time. The two
+bugs were in the parts that looked trivial:
+
+- `SCAN_DEBUG` selected a **second `run()` loop** that polled at 500 ms instead
+  of waiting on the notification. It defaults to `y` and the bench runs it, so
+  every latency measurement came from the poll path and the notification path
+  had never executed. The loops are one loop now, and classification is applied
+  1 ms after the window closes rather than up to 500.
+- The button's short press required **300 ms — longer than a person clicks
+  for** — and a press below that produced no countdown, no callback and no log
+  line, so "too quick" and "dead button" were the same observation. Three
+  graded presses settled it: a tap logged nothing, ~0.7 s re-armed, ~2.2 s
+  counted down then re-armed on release. Now 20 Hz polling, a 150 ms threshold,
+  and a short press that reports its own duration.
+
+Both are the same mistake, and it is the one worth remembering from this step:
+a feature verified in the state convenient to reach. Holding the button for
+five seconds exercises neither the threshold nor the click path.
 
 ## 6. Test strategy
 
