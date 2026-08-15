@@ -1,26 +1,44 @@
-# pinled partition table — 4 MB, no OTA slots yet.
+# pinled partition table — 8 MB, two OTA slots.
 #
-# M3 needs a filesystem for the two configuration documents (FR-CFG-7) and
-# nothing else, so there is no otadata and no second app slot; those arrive
-# with M4 on the 8 MB board (docs/WEBUI.md §7).
+# Replaces the 4 MB single-`factory` table M3 used. OTA needs two app slots that
+# can each hold a whole firmware (FR-OTA-1), and 4 MB cannot carry two of those
+# plus a filesystem, which is the entire reason M4 waited on this board.
 #
-# The `factory` partition is 2M rather than the 1M it was, which is deliberately
-# more than the app needs today: the point of the extra room is that this table
-# is flashed ONCE. Thereafter the known-good diagnostic build on `main` and any
-# M3 branch build are both ordinary app flashes into the same slot, and the
-# bench rig never has to have its partition table rewritten to switch between
-# them.
+#   0x9000   + 0x6000   = 0xf000     nvs
+#   0xf000   + 0x2000   = 0x11000    otadata (two sectors, and it must be two)
+#   0x11000  + 0x1000   = 0x12000    phy_init
+#   0x20000  + 3M       = 0x320000   ota_0     <- app partitions align to 64K
+#   0x320000 + 3M       = 0x620000   ota_1
+#   0x620000 + 0x1E0000 = 0x800000   storage, and exactly the end of 8 MB
+#
+# 3 MB a slot against a current image of ~955 KB is deliberately generous. The
+# slots are what cannot be resized later without erasing everything, so they get
+# the slack: the SPA bundle, TLS if it is ever wanted, and a decade of drift all
+# come out of this number. 1.875 MB of filesystem is more than the two
+# configuration documents will ever need (FR-CFG-7) and leaves room for the
+# offline bundle (FR-UI-8).
 #
 # `spiffs` is the subtype LittleFS uses as well — there is no separate one.
 #
-#   0x10000  + 2M      = 0x210000   end of factory
-#   0x210000 + 1536K   = 0x390000   end of storage, inside the 4 MB part
+# THIS TABLE REQUIRES THE 8 MB PART. The QT Py ESP32-S3 ships as FN8C0 (8 MB, no
+# PSRAM) and FH4R2 (4 MB, 2 MB PSRAM) under the same silkscreen and the same USB
+# VID/PID. On an FH4R2 this table addresses flash that is not there. See the note
+# in sdkconfig.defaults; the 4 MB bench board cannot run this build.
 #
-# Reflashing this table erases NVS. Today NVS holds nothing; once it holds Wi-Fi
-# credentials (FR-CFG-12) that stops being free.
+# No `factory` partition: with none present and otadata blank, the bootloader
+# runs ota_0, which is also where `idf.py flash` writes. So an ordinary flash
+# behaves exactly as it did before, and OTA becomes possible without the table
+# changing again.
 #
-# Name,   Type, SubType,  Offset,   Size,   Flags
-nvs,      data, nvs,      0x9000,   0x6000,
-phy_init, data, phy,      0xf000,   0x1000,
-factory,  app,  factory,  0x10000,  2M,
-storage,  data, spiffs,   0x210000, 1536K,
+# Flashing this table ERASES NVS AND THE FILESYSTEM. NVS now holds the Wi-Fi
+# credentials (FR-CFG-12), so the device comes back unprovisioned and has to be
+# set up through the captive portal — that is a real cost now, where under the
+# M3 table it was free.
+#
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x6000,
+otadata,    data, ota,      0xf000,   0x2000,
+phy_init,   data, phy,      0x11000,  0x1000,
+ota_0,      app,  ota_0,    0x20000,  3M,
+ota_1,      app,  ota_1,    0x320000, 3M,
+storage,    data, spiffs,   0x620000, 0x1E0000,

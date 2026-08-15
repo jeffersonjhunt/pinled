@@ -393,6 +393,77 @@ If step 3 does nothing, check `GET /api/v1/profiler` first — `state` and
 `passes` tell you whether the pass ran at all, which separates "the profiler
 did not re-arm" from "it re-armed and decided the same thing".
 
+## 5c. Swapping in a board with a different flash size
+
+Done once, 2026-08-15, from the 4 MB FH4R2 to the 8 MB FN8C0 for M4. The table
+change is the easy half; the traps are around it.
+
+**A factory-fresh Adafruit board cannot be flashed without touching it.** It
+runs Adafruit's firmware, whose USB CDC refuses the DTR/RTS toggling esptool
+uses to enter download mode — every attempt, including a plain port open, fails
+with `OSError: [Errno 71] Protocol error`. Nothing is wrong; there is simply no
+software path in. Hold **BOOT**, press and release **RESET**, release BOOT.
+
+**Then it will not come back out.** Entering download mode by hand latches a
+force-download flag that survives the `Hard resetting via RTS pin` at the end of
+a flash, so the board reboots straight back into `boot:0x0 (DOWNLOAD)` and looks
+like firmware that never started. **Unplug and replug the USB cable** — that is
+the only thing that clears it. §6 has the signature.
+
+Order that worked, once it was in download mode:
+
+```sh
+python -m esptool --port /dev/ttyACM0 --before no_reset --after no_reset flash_id   # confirm the part
+python -m esptool --port /dev/ttyACM0 --before no_reset --after no_reset erase_flash
+# CONFIG_PINLED_SEED_FS=y for this one flash only
+idf.py -p /dev/ttyACM0 flash        # bootloader + table + app + storage image
+# replug, verify, then CONFIG_PINLED_SEED_FS back off and flash again
+```
+
+`flash_id` is the check that matters and the only one that keeps working: it
+reports `Embedded Flash 8MB` and whether PSRAM appears in `Features`. USB
+VID/PID does **not** identify the variant once our firmware is on — everything
+reports `303a:1001` from then on.
+
+**Budget for being unprovisioned.** The new table erases NVS and the
+filesystem, and the build-time Wi-Fi credentials were deleted in M3 step 7, so
+the board comes up in SoftAP and the only way back is the captive portal. A new
+board also means a new MAC, hence a new `device_id`, a new
+`pinled-XXXXXX` and a new address. The AP name uses the *AP interface* MAC,
+which is the base MAC **plus one** — a board whose chip MAC ends `7E:54`
+advertises `pinled-6E7E55`, and that is correct rather than a typo.
+
+That erase is worth treating as an opportunity: it is the only cheap chance to
+exercise the portal on a device that has genuinely never been provisioned,
+which is the one state it exists for. It worked first time here — scan at boot
+found and de-duplicated three networks, the page popped by itself, and
+`credentials: provisioned for "…"` names the SSID and never the password.
+
+**Turn `PINLED_SEED_FS` back off afterwards, and confirm it.** With it on every
+`idf.py flash` overwrites the stored configuration. The check is that
+`build/flash_args` stops mentioning `storage.bin` and that the next boot still
+logs both documents loading — which also verifies the useful half: an app flash
+leaves the filesystem alone.
+
+### What the swap verified, 2026-08-15
+
+Everything M3 and M3+ claim, re-run on the new silicon: **11/11 on
+`tools/rearm_check.py --include-rescue`**, which is the §5b checklist plus the
+destructive step it normally skips.
+
+The one that had never been re-tested is `FR-UI-7`, the long-hold rescue —
+`rescue.cpp` had changed twice since it last ran (the short-press callback,
+then the 20 Hz poll and 150 ms threshold). The full trail is in the log: the
+countdown at 4, 3, 2, 1 seconds, `erasing credentials and restarting into
+SoftAP`, the AP coming up, a phone joining, `provisioned for "…"`, and the
+rejoin. Splitting one button between two jobs by duration did not break either
+job.
+
+Also confirmed here rather than assumed: the profiler and the live monitor
+behave identically on the FN8C0 as on the FH4R2 — same 750 ms window, same
+7500 frames, 30.2 Hz push with no sequence gaps, the locked channel still
+locked. The MCU swap changed the flash size and the MAC and nothing else.
+
 ## 6. Tooling traps
 
 These are not hardware faults, but they present as one.
