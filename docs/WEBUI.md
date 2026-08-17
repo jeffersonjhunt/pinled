@@ -516,9 +516,40 @@ are 64 KB aligned as required. (`spiffs` is the subtype LittleFS uses too.)
    a registry problem. It is also self-announcing — the learn-wiring flow binds
    against lamps you can watch firing, and a mis-numbered profile shows wrong
    names against the wrong lamps within seconds of being applied.
-2. **Profile fit checking.** Nothing yet validates that an imported profile's
-   `lamp_count` is consistent with the install's `wiring[]`. Decide whether a
-   partial match imports partially or is refused.
+2. ~~**Profile fit checking.**~~ **Closed 2026-08-15: partial import, and the
+   device already does it.** The framing — "partial or refused" — put the
+   decision in the wrong layer. `resolve()` iterates *channels*, not profile
+   entries, and its policy is already stated in `pinled_resolve.h`: **lenient
+   where a half-finished install is normal, strict where a value is ambiguous
+   or impossible.**
+
+   | Case | Behaviour |
+   |---|---|
+   | channel absent from `wiring[]` | allowed — unbound and dark |
+   | wired lamp has no profile entry | allowed — bound but unstyled |
+   | profile entry for an unwired lamp | ignored — a 60-lamp profile on a 40-lamp install |
+   | same channel twice in `wiring[]` | **rejected** |
+   | channel or `led_index` out of range | **rejected** |
+   | colour > 255, tau or gain > 65535 | **rejected** |
+
+   So the device refuses what it **cannot represent** and honours what it can
+   **partially apply**, which is the right split. Refusing an incomplete
+   profile would block the case that matters most: someone halfway through
+   wiring a playfield who wants the lamp names to help them finish. And
+   `lamp_count` is not consulted by the firmware at all — it is metadata for
+   the UI, which is the only layer that can do anything useful with it.
+
+   **What is left is therefore a UI reporting decision, not a validation one.**
+   Applying a profile SHOULD report the shortfall — "48 of 60 lamps in this
+   profile match your wiring; 12 unbound" — non-blocking, because partial is
+   the normal state during commissioning and the number is exactly what tells
+   you how far along you are. Silence is the one unacceptable option: "I
+   applied the profile and half my lamps are white" is otherwise a support
+   call.
+
+   The asymmetry that makes this safe: an unmatched *profile* entry is inert,
+   while an unmatched *wiring* entry lights a lamp with default styling —
+   visibly wrong, and fixed by binding it. The failure mode announces itself.
 3. **Multi-machine users.** A device ID exists, but there is no stated model
    for one account owning several devices.
 4. **Signed firmware** — deferred, see §5.
