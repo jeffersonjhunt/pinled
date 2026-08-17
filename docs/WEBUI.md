@@ -539,13 +539,18 @@ are 64 KB aligned as required. (`spiffs` is the subtype LittleFS uses too.)
    `lamp_count` is not consulted by the firmware at all — it is metadata for
    the UI, which is the only layer that can do anything useful with it.
 
-   **What is left is therefore a UI reporting decision, not a validation one.**
-   Applying a profile SHOULD report the shortfall — "48 of 60 lamps in this
-   profile match your wiring; 12 unbound" — non-blocking, because partial is
-   the normal state during commissioning and the number is exactly what tells
-   you how far along you are. Silence is the one unacceptable option: "I
-   applied the profile and half my lamps are white" is otherwise a support
-   call.
+   **What is left is therefore a UI reporting decision, not a validation one,
+   and it is settled: report the shortfall.** Applying a profile SHALL show how
+   much of it landed — "48 of 60 lamps in this profile match your wiring; 12
+   unbound" — and SHALL NOT block on it. Partial is the normal state during
+   commissioning, and that number is exactly what tells you how far along you
+   are, so it doubles as a progress readout rather than a warning. Silence is
+   the one unacceptable option, because "I applied the profile and half my
+   lamps are white" is otherwise a support call.
+
+   The device is not involved: it has already applied what it could, and the UI
+   holds both documents, so the count is arithmetic the browser does. Nothing
+   needs adding to the API.
 
    The asymmetry that makes this safe: an unmatched *profile* entry is inert,
    while an unmatched *wiring* entry lights a lamp with default styling —

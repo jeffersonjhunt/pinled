@@ -120,7 +120,9 @@ feature.
 | FR-IND-1 | The board SHALL carry a status pixel on its own GPIO, distinct from the playfield string. It SHALL NOT consume a playfield LED: the string is the product, and a machine is commissioned by looking at it. | v1 |
 | FR-IND-2 | State SHALL be encoded by **rhythm as well as colour**, such that every state is distinguishable by pattern alone. Red/green is not a distinction for roughly 8% of men, and this indicator is the sole feedback on a device with no screen. | v1 |
 | FR-IND-3 | Solid SHALL mean a steady state and blinking SHALL mean the device wants something. A healthy machine is therefore still, and anything moving is a request. While an image is staged the indicator SHALL blink **faster as the confirmation window expires**, conveying the deadline without a display. | v1 |
-| FR-IND-4 | Faults SHALL be signalled as *N* red blinks followed by a pause, *N* identifying the class, so a fault is diagnosable by eye and over a telephone without a serial cable. | v1 |
+| FR-IND-4 | Faults SHALL be signalled as *N* red blinks followed by a pause, *N* identifying the class per the table below, so a fault is diagnosable by eye and over a telephone without a serial cable. Counting SHALL start at **2**, because one blink and a pause reads as a heartbeat rather than a count. Where several faults are active the **lowest** number SHALL be shown; the API reports all of them. Red SHALL NOT imply the device is dark — it keeps running wherever it can, so red means *not doing what you asked*. | v1 |
+| FR-IND-7 | Every press past the debounce threshold SHALL be acknowledged **immediately and identically**, before and independently of whatever it goes on to do, so that "did it register" is never a question. A press too short to count SHALL produce no acknowledgement, making the absence itself the answer. | v1 |
+| FR-IND-8 | While the button is held past one second the indicator SHALL show progress toward the erase threshold, accelerating as it approaches, and SHALL return to the previous state if released early. The rescue countdown is otherwise visible only in a log nobody standing at a machine can read. | v1 |
 | FR-IND-5 | Brightness SHALL be configurable in the install config, including **off**. The board may be visible in a backbox, and the indicator must never compete with the playfield. | v1 |
 | FR-IND-6 | The indicator SHALL NOT be on the scan or render hot path: it is driven from a low-priority task and a dropped update is of no consequence. | v1 |
 
@@ -140,6 +142,44 @@ States, in the order they are reached:
 Blue for SoftAP rather than green: it is a *mode awaiting action*, not a
 degraded run, and it keeps the two states a person must tell apart off the
 red/green axis entirely.
+
+### Fault classes (FR-IND-4)
+
+Grouped by **the subsystem someone can act on**, not by where the error was
+raised, and ordered by expected frequency — a count is only useful if it is
+easy to read, and the common ones get read most.
+
+| Blinks | Class | Check |
+|---|---|---|
+| 2 | Sense bus | scan init failed, or no usable sample rate. The harness: `CLK INH` floating and a missing `QH`→`SER` are the top rev D faults |
+| 3 | Configuration | a stored document was rejected — CRC, decode, or a value out of range. Running on defaults; re-apply from the UI |
+| 4 | LED string | strip init failed or the geometry is impossible. Data line and LED count |
+| 5 | Storage | the filesystem would not mount or would not write. Run the store self-test |
+| 6 | Internal | out of memory, a task or the HTTP server would not start. A firmware bug, not a wiring fault |
+
+Rate: 200 ms on, 200 ms off per blink, then a 1.2 s pause — so two blinks is a
+2 s cycle, countable without being frantic.
+
+### Press feedback (FR-IND-7, FR-IND-8)
+
+| Moment | Indicator |
+|---|---|
+| press accepted (past debounce) | one **80 ms white blip**, whatever it will go on to do |
+| press too short to count | **nothing** — the absence is the answer, and the log gives the duration |
+| held ≥ 1 s | **red**, blinking faster each second toward the 5 s erase |
+| released before 5 s | back to the previous state |
+| after release | the action's own state — white flash for a profiler pass, solid amber for applying firmware |
+
+Acknowledging the *press* rather than its *consequence* is the point. A profiler
+pass cannot be the acknowledgement, because during a staged image the button
+means something else and amber is already blinking — and because a press whose
+only feedback is its outcome is indistinguishable from a press that never
+registered. That exact ambiguity cost a bench session on 2026-08-14.
+
+Red for the erase countdown overlaps the fault colour deliberately: it is a
+destructive action one second away and red is what that deserves. It is
+distinguishable because it happens only while the button is held, and because
+it accelerates.
 
 Fault classes for FR-IND-4 are assigned where the fault is raised; the mapping
 belongs in `BRINGUP.md` beside the other things read off a board by eye.
