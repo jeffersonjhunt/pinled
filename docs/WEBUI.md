@@ -21,7 +21,8 @@ connection at all.
 > Two things in it are placeholder rather than designed: the install screen is
 > read-only, because editing pins and geometry from a web page needs a guard
 > rail nobody has specified yet; and lamp numbering is faked as a clean 1–60,
-> which open question 1 in §8 may invalidate.
+> which is fine as a mockup — §8 question 1 is closed and the numbers are
+> opaque, so any machine's own numbering drops straight in.
 
 ## 1. Where the code lives
 
@@ -360,8 +361,30 @@ The flow, with the device never contacting the cloud:
 2. SPA asks the cloud API for the latest version.
 3. If newer, the browser `fetch()`es the image from S3 into memory (bucket
    CORS permitting) and verifies a published SHA-256.
-4. User presses the device button to arm.
-5. Browser `POST`s the image to `ota`, streamed to `esp_ota_ops`.
+4. Browser `POST`s the image to `ota`, streamed straight into the **inactive
+   slot**. No arming is needed to upload, because an inactive slot boots
+   nothing; the device verifies the app descriptor and computes the SHA-256
+   itself as it writes.
+5. The device holds the image **staged** and reports `ota_armed` with
+   `ota_arm_seconds_left` counting down from ~30. The status pixel blinks
+   amber, faster as the window closes.
+6. **The user presses the button**, which switches the boot partition and
+   reboots. No press, and the staged image is discarded.
+7. The new firmware marks itself valid only once it is serving the API; if it
+   cannot get that far the bootloader reverts to the previous slot on its own.
+
+**Confirming after the upload rather than arming before it** is the one place
+this departs from the obvious design, and it is deliberate (FR-OTA-2). Writing
+an inactive slot cannot hurt anything, so the act worth gating is the
+boot-partition switch. Arming first would instead open a window during which
+*anything* on the LAN may be uploaded, and would happily accept a truncated
+image that then has to be rejected at boot. Confirming afterwards binds the
+press to one specific image the device has already checked.
+
+That press is the same short press that re-arms the profiler the rest of the
+time (FR-OTA-7). One button, three meanings, and the only reason that is safe
+rather than a trap is that the indicator says which meaning is live
+(FR-IND-3). The long-hold rescue is never modal and works in every state.
 
 Fetching into the browser rather than making the user save and re-select a file
 is the same number of moving parts and better UX; the manual save/upload path
@@ -468,14 +491,70 @@ are 64 KB aligned as required. (`spiffs` is the subtype LittleFS uses too.)
 
 ## 8. Open questions
 
-1. **Lamp numbering across manufacturers.** The profile is keyed by "lamp
-   number in the machine's matrix". Bally/Stern number lamps in the manual;
-   whether that generalises cleanly to Williams, Gottlieb and EM games is
-   unverified. If it does not, the registry needs a per-manufacturer
-   addressing convention, and that affects the schema.
-2. **Profile fit checking.** Nothing yet validates that an imported profile's
-   `lamp_count` is consistent with the install's `wiring[]`. Decide whether a
-   partial match imports partially or is refused.
+1. ~~**Lamp numbering across manufacturers.**~~ **Closed 2026-08-15: it was
+   never a schema question.** The indirection already handles it — a private
+   `WiringEntry` maps channel to lamp number, a shared `LampEntry` maps lamp
+   number to name and colour, and `MachineIdentity` says which machine those
+   numbers belong to. `lamp` is an **opaque key**: the firmware only ever tests
+   it for zero and for equality, and nothing anywhere parses structure out of
+   it. Bally's 1–60, a flattened Williams row/column, and an EM game numbered
+   however its manual does it are all just integers.
+
+   Two constraints exist and are already enforced: **0 is reserved for
+   "unbound"**, so numbering starts at 1; and **65535 is the ceiling**, because
+   the runtime record stores it as `uint16_t` and `resolve()` refuses anything
+   larger.
+
+   What made this look urgent was "it affects the schema". It does not: the
+   only plausible change is *adding an optional descriptor* recording where a
+   numbering came from, and protobuf absorbs an added optional field without
+   breaking any document already in the wild. A schema question is only urgent
+   when the change would be destructive, and this one cannot be.
+
+   The residual risk is **curation, not structure**: two authors could number
+   the same machine differently and their profiles would not transfer. That is
+   a registry problem. It is also self-announcing — the learn-wiring flow binds
+   against lamps you can watch firing, and a mis-numbered profile shows wrong
+   names against the wrong lamps within seconds of being applied.
+2. ~~**Profile fit checking.**~~ **Closed 2026-08-15: partial import, and the
+   device already does it.** The framing — "partial or refused" — put the
+   decision in the wrong layer. `resolve()` iterates *channels*, not profile
+   entries, and its policy is already stated in `pinled_resolve.h`: **lenient
+   where a half-finished install is normal, strict where a value is ambiguous
+   or impossible.**
+
+   | Case | Behaviour |
+   |---|---|
+   | channel absent from `wiring[]` | allowed — unbound and dark |
+   | wired lamp has no profile entry | allowed — bound but unstyled |
+   | profile entry for an unwired lamp | ignored — a 60-lamp profile on a 40-lamp install |
+   | same channel twice in `wiring[]` | **rejected** |
+   | channel or `led_index` out of range | **rejected** |
+   | colour > 255, tau or gain > 65535 | **rejected** |
+
+   So the device refuses what it **cannot represent** and honours what it can
+   **partially apply**, which is the right split. Refusing an incomplete
+   profile would block the case that matters most: someone halfway through
+   wiring a playfield who wants the lamp names to help them finish. And
+   `lamp_count` is not consulted by the firmware at all — it is metadata for
+   the UI, which is the only layer that can do anything useful with it.
+
+   **What is left is therefore a UI reporting decision, not a validation one,
+   and it is settled: report the shortfall.** Applying a profile SHALL show how
+   much of it landed — "48 of 60 lamps in this profile match your wiring; 12
+   unbound" — and SHALL NOT block on it. Partial is the normal state during
+   commissioning, and that number is exactly what tells you how far along you
+   are, so it doubles as a progress readout rather than a warning. Silence is
+   the one unacceptable option, because "I applied the profile and half my
+   lamps are white" is otherwise a support call.
+
+   The device is not involved: it has already applied what it could, and the UI
+   holds both documents, so the count is arithmetic the browser does. Nothing
+   needs adding to the API.
+
+   The asymmetry that makes this safe: an unmatched *profile* entry is inert,
+   while an unmatched *wiring* entry lights a lamp with default styling —
+   visibly wrong, and fixed by binding it. The failure mode announces itself.
 3. **Multi-machine users.** A device ID exists, but there is no stated model
    for one account owning several devices.
 4. **Signed firmware** — deferred, see §5.
