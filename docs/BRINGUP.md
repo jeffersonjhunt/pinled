@@ -497,7 +497,7 @@ back, something has moved the status pixel back onto the strip's driver.
 | 5 | Click BOOT — a normal press. | An **80 ms white blip the instant the press registers**, then the profiler pass's own brief white flash. |
 | 6 | Tap BOOT faster than 150 ms. | **Nothing.** The absence is the answer (FR-IND-7); the log gives the duration. |
 | 7 | Hold BOOT and watch, releasing at ~4 s. | From 1 s: **red, blinking faster each second.** Release and it returns to whatever it was showing, with no trace of the ramp. |
-| 8 | `PINLED_STATUS_BRIGHTNESS=0`, rebuild, boot. | **Dark, in every state including a fault.** A backbox the owner asked to be dark stays dark; the API still reports the fault. |
+| 8 | `PINLED_STATUS_BRIGHTNESS=0`, rebuild, boot — or set `indicator.brightness: 0` in the install config, no rebuild needed (FR-IND-5). | **Dark, in every state including a fault.** A backbox the owner asked to be dark stays dark; the API still reports the fault. The Kconfig value is only the build default; a stored install overrides it a moment after the store loads, so with both set the stored one wins. |
 
 Step 5 and step 6 are the pair that matters, and they have to be run together.
 Either alone is meaningless: a blip that fires on every press including the

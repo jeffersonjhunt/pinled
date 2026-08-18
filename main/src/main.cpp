@@ -145,6 +145,11 @@ namespace ooe::pinled
                               st.install_rejected || st.profile_rejected);
         }
 
+        // The pixel started at step 0 on the Kconfig default because it had
+        // to exist before the store could fail; the stored setting takes over
+        // the moment it is known (FR-IND-5). 0 here is off, and stays off.
+        status_.set_brightness(cfg_.status_brightness);
+
         // 2. Scan driver.
         LampScanConfig sc{};
         sc.clk_pin = static_cast<gpio_num_t>(cfg_.clk_pin);

@@ -200,6 +200,7 @@ and restorable onto a replacement device.
   "pins":     { "clk": 18, "pl": 17, "data": 9, "led": 8 },
   "scan":     { "sample_rate_hz": 10000, "spi_hz": 4000000, "spi_mode": 2, "active_low": false },
   "render":   { "refresh_hz": 90, "gamma": 2.2, "brightness_cap": 180 },
+  "indicator": { "brightness": 64 },
   "wiring":   [ { "channel": 0, "lamp": 17, "led_index": 0 } ]
 }
 ```

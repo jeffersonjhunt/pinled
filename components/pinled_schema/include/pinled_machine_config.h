@@ -69,6 +69,12 @@ namespace ooe::pinled
         /// what every install behaved as before the field existed.
         ColorOrder color_order{ColorOrder::UNSPECIFIED};
 
+        // --- status pixel ---
+        /// FR-IND-5, and LITERAL: 0 is "off", not "inherit". The inherit case
+        /// is a document without the StatusIndicator message, which leaves
+        /// this holding the build default the store's defaults() wrote here.
+        uint8_t status_brightness{64};
+
         size_t total_channels() const { return num_modules * channels_per_module; }
     };
 } // namespace ooe::pinled

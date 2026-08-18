@@ -174,6 +174,20 @@ message FilamentDefaults {
   uint32 gain_permille = 3;
 }
 
+// The status pixel (FR-IND-5). Belongs to the install: how bright the board
+// may glow is a property of where THIS board is mounted — a backbox, a bench —
+// not of how the machine's lamps should look.
+//
+// Its own message rather than a RenderConfig field, because presence is the
+// encoding. FR-IND-5 requires "off" to be configurable, so brightness here is
+// LITERAL: 0 means dark. The append-only rule ("a zero value must mean as
+// before") is carried by the message instead of the field — a document
+// without it inherits the build default, exactly as every document written
+// before the field existed must.
+message StatusIndicator {
+  uint32 brightness = 1;   // 0..255, literal; 0 = off
+}
+
 // The join between the two documents: channel -> lamp number -> profile entry.
 // led_index lives here and not in the profile because the physical order of
 // the LED string is a property of how THIS install was built (FR-CFG-6).
@@ -196,6 +210,9 @@ message InstallConfig {
   // Added 2026-08-10. Additive, so documents written before it decode
   // unchanged and re-encode byte-identically — which the fixtures assert.
   FilamentDefaults filament = 7;
+
+  // Added 2026-08-18, same additive rule. Absent = inherit the build default.
+  StatusIndicator indicator = 8;
 }
 
 // --------------------------------------------------------------- version --

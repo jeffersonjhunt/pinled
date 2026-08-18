@@ -259,6 +259,18 @@ namespace ooe::pinled
             // like a feature.
         }
 
+        // --- status indicator ---
+        if (install.has_indicator)
+        {
+            // Literal, including zero: FR-IND-5 says off is a setting, so
+            // the presence of the message is what carries "this document has
+            // an opinion" and the value is taken exactly as written.
+            if (install.indicator.brightness > kMaxByte)
+                return InstallStatus::ValueOutOfRange;
+            m.status_brightness =
+                static_cast<uint8_t>(install.indicator.brightness);
+        }
+
         // --- filament defaults ---
         if (install.has_filament)
         {
@@ -307,6 +319,12 @@ namespace ooe::pinled
         out.render.gamma_x100 = static_cast<uint32_t>(m.gamma * 100.0f + 0.5f);
         out.render.brightness_cap = 0; // not honoured by the render path yet
         out.render.color_order = drive_color_order_to_proto(m.color_order);
+
+        // Settled value, message always present: once a configuration has
+        // been exported the brightness it was running is a fact, and 0 is a
+        // value here rather than an absence.
+        out.has_indicator = true;
+        out.indicator.brightness = m.status_brightness;
 
         out.has_filament = true;
         out.filament.attack_ms = static_cast<uint32_t>(m.attack_ms);

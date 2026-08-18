@@ -94,6 +94,8 @@ namespace ooe::pinled
         c.attack_ms = static_cast<float>(CONFIG_PINLED_ATTACK_MS);
         c.decay_ms = static_cast<float>(CONFIG_PINLED_DECAY_MS);
         c.led_count = CONFIG_PINLED_LED_COUNT;
+        c.status_brightness =
+            static_cast<uint8_t>(CONFIG_PINLED_STATUS_BRIGHTNESS);
         return c;
     }
 
