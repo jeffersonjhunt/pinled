@@ -113,6 +113,11 @@ namespace ooe::pinled
         log_build_options();
         ESP_LOGI(TAG, "Initializing...");
 
+        // 0. The indicator, before anything that can fail. It needs nothing
+        //    but a GPIO and an RMT channel, and every fault below it has
+        //    somewhere to go only because it is already running (FR-IND-1).
+        start_indicator();
+
 #ifdef CONFIG_PINLED_STORE_SELFTEST
         // Before anything is loaded, so it cannot disturb a real configuration.
         store_.selftest();
@@ -127,6 +132,17 @@ namespace ooe::pinled
         {
             ESP_LOGE(TAG, "bad channel count: %u", (unsigned)num_channels_);
             return ESP_ERR_INVALID_SIZE;
+        }
+
+        // The store reports its troubles in state() rather than as an error,
+        // because both are survivable and it falls back to defaults. That is
+        // exactly the shape FR-IND-4 wants: the device keeps doing what it
+        // can, and red means "not doing what you asked" rather than "dead".
+        {
+            const StoreState &st = store_.state();
+            status_.set_fault(FaultClass::STORAGE, !st.mounted);
+            status_.set_fault(FaultClass::CONFIG,
+                              st.install_rejected || st.profile_rejected);
         }
 
         // 2. Scan driver.
@@ -214,6 +230,7 @@ namespace ooe::pinled
 
         // 9. Network and API, last. Nothing above depends on it.
         start_network();
+        indicator_settle();
 
         // M4 puts Wi-Fi, lwIP and httpd on top of whatever is left here, and
         // nothing has ever measured it. The minimum is the useful half: the
@@ -255,7 +272,41 @@ namespace ooe::pinled
         live_.count = num_channels_;
 
         if (api_.start(store_, cfg_, channels_, num_channels_, net_, live_, this) != ESP_OK)
+        {
             ESP_LOGE(TAG, "API did not start");
+            status_.set_fault(FaultClass::INTERNAL, true);
+        }
+    }
+
+    void Main::start_indicator()
+    {
+#if CONFIG_PINLED_STATUS_GPIO >= 0
+        IndicatorConfig ic{};
+        ic.pin = static_cast<gpio_num_t>(CONFIG_PINLED_STATUS_GPIO);
+        ic.power_pin = CONFIG_PINLED_STATUS_POWER_GPIO >= 0
+                           ? static_cast<gpio_num_t>(CONFIG_PINLED_STATUS_POWER_GPIO)
+                           : GPIO_NUM_NC;
+        ic.brightness = static_cast<uint8_t>(CONFIG_PINLED_STATUS_BRIGHTNESS);
+        ic.hold_erase_ms = CONFIG_PINLED_RESCUE_HOLD_MS;
+        if (status_.init(ic) != ESP_OK)
+            ESP_LOGW(TAG, "status pixel unavailable; the board still runs, it "
+                          "just cannot say so");
+#else
+        ESP_LOGW(TAG, "status pixel not fitted (PINLED_STATUS_GPIO = -1)");
+#endif
+    }
+
+    void Main::indicator_settle()
+    {
+        // Three outcomes, and start_network() survives all of them, so the
+        // resting state is read back from what happened rather than assumed
+        // from what was attempted.
+        if (net_.awaiting_provisioning())
+            status_.set_state(IndicatorState::SOFTAP);
+        else if (net_.up())
+            status_.set_state(IndicatorState::RUNNING);
+        else
+            status_.set_state(IndicatorState::RUNNING_OFFLINE);
     }
 
     void Main::start_button()
@@ -265,15 +316,27 @@ namespace ooe::pinled
         // (FR-PROF-2). The callback runs on the button's own task, so it does
         // nothing but post the request — the observation window belongs to the
         // scan task and the classification to the main task.
+        // Live press reporting, independent of what the press turns out to
+        // mean (FR-IND-7/8). Wired even when the re-arm is compiled out: the
+        // long hold still exists, and "is this button doing anything" is
+        // exactly the question a person asks while holding it.
+        ButtonFeedback fb{};
+        fb.arg = this;
+        fb.accepted = [](void *self) { static_cast<Main *>(self)->status_.note_press(); };
+        fb.held = [](void *self, uint32_t ms) {
+            static_cast<Main *>(self)->status_.set_hold(ms);
+        };
+
 #ifdef CONFIG_PINLED_PROFILE_REARM_BUTTON
         auto on_short_press = [](void *self) {
             if (!static_cast<Main *>(self)->rearm_profiler())
                 ESP_LOGI(TAG, "button re-arm ignored: a pass is already running");
         };
         rescue_button_start(CONFIG_PINLED_RESCUE_GPIO, CONFIG_PINLED_RESCUE_HOLD_MS,
-                            on_short_press, this);
+                            on_short_press, this, &fb);
 #else
-        rescue_button_start(CONFIG_PINLED_RESCUE_GPIO, CONFIG_PINLED_RESCUE_HOLD_MS);
+        rescue_button_start(CONFIG_PINLED_RESCUE_GPIO, CONFIG_PINLED_RESCUE_HOLD_MS,
+                            nullptr, nullptr, &fb);
 #endif
     }
 
@@ -322,6 +385,12 @@ namespace ooe::pinled
         }
         profile_started_ms_.store(static_cast<uint32_t>(esp_timer_get_time() / 1000),
                                   std::memory_order_relaxed);
+
+        // One brief white flash. Deliberately NOT the press acknowledgement:
+        // a pass only starts if the request was accepted, so using it as the
+        // acknowledgement would make a refused re-arm indistinguishable from
+        // a button that did nothing (FR-IND-7).
+        status_.note_profiling();
 
         ESP_LOGI(TAG, "auto-profiling: window %u ms (%u frames at %.0f Hz)",
                  (unsigned)CONFIG_PINLED_PROFILE_WINDOW_MS,

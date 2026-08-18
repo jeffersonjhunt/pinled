@@ -30,11 +30,13 @@
 #include "machine_config.h"
 
 #include "api.h"
+#include "indicator.h"
 #include "net.h"
 #include "rescue.h"
 
 #include "pinled_apply.h"
 #include "pinled_channel_config.h"
+#include "pinled_indicator.h"
 #include "pinled_live.h"
 #include "pinled_profiling.h"
 
@@ -117,6 +119,15 @@ namespace ooe::pinled
         /// erases the stored network (FR-UI-7).
         void start_button();
 
+        /// The status pixel (FR-IND-1..8). First thing up and last thing
+        /// configured: a fault raised before it exists has nowhere to go.
+        void start_indicator();
+
+        /// Settle on the base state the pixel should rest in, from what the
+        /// network actually ended up doing. Called after start_network(),
+        /// which has three outcomes and survives all of them.
+        void indicator_settle();
+
         /// FR-SCAN-9: measure what the scan hardware actually sustains and
         /// clamp the configured sample rate to it. The clamped value becomes
         /// the authoritative Fs for every downstream time constant.
@@ -170,6 +181,7 @@ namespace ooe::pinled
         MachineConfigStore store_{};
         Net net_{};
         Api api_{};
+        Indicator status_{};
         LampScan scan_{};
         Filament filament_{};
         Profiler profiler_{};
