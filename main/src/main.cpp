@@ -149,6 +149,14 @@ namespace ooe::pinled
         // to exist before the store could fail; the stored setting takes over
         // the moment it is known (FR-IND-5). 0 here is off, and stays off.
         status_.set_brightness(cfg_.status_brightness);
+#if CONFIG_PINLED_STATUS_GPIO >= 0
+        // Logged only when it changes something: the takeover is otherwise
+        // invisible in a log, and the bench checklist needs a line to look for.
+        if (cfg_.status_brightness != CONFIG_PINLED_STATUS_BRIGHTNESS)
+            ESP_LOGI(TAG, "status pixel brightness %u/255 (stored, overrides build default %u)",
+                     (unsigned)cfg_.status_brightness,
+                     (unsigned)CONFIG_PINLED_STATUS_BRIGHTNESS);
+#endif
 
         // 2. Scan driver.
         LampScanConfig sc{};
