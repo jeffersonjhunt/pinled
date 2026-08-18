@@ -84,10 +84,13 @@ namespace ooe::pinled
                         ESP_LOGI(TAG, "press of %u ms was too short; hold it for %u ms",
                                  (unsigned)held, (unsigned)kShortPressMinMs);
                     }
+                    // Only on an actual release: while the button sits idle
+                    // this branch runs every poll, and the contract is one
+                    // zero per release, not twenty a second forever.
+                    if (held > 0 && cfg.feedback.held)
+                        cfg.feedback.held(cfg.feedback.arg, 0);
                     held = 0;
                     announced = 0;
-                    if (cfg.feedback.held)
-                        cfg.feedback.held(cfg.feedback.arg, 0);
                     continue;
                 }
 

@@ -128,6 +128,7 @@ namespace ooe::pinled
         encoder_ = encoder;
 
         running_.store(true, std::memory_order_relaxed);
+        exited_.store(false, std::memory_order_relaxed);
 
         // Lowest useful priority, and on core 0 -- the core the scan does not
         // own (FR-IND-6). The stack is small because the task allocates
@@ -136,6 +137,7 @@ namespace ooe::pinled
         if (xTaskCreatePinnedToCore(task, "pinled_status", 2560, this, 2, nullptr, 0) != pdPASS)
         {
             running_.store(false, std::memory_order_relaxed);
+            exited_.store(true, std::memory_order_relaxed);
             rmt_disable(chan);
             rmt_del_encoder(encoder);
             rmt_del_channel(chan);
@@ -156,9 +158,13 @@ namespace ooe::pinled
         running_.store(false, std::memory_order_relaxed);
         if (channel_)
         {
-            // The task notices `running_` within one tick and returns; give it
-            // that long before the handles it is using go away.
-            vTaskDelay(kTick * 2);
+            // Free nothing until the task says it is out: it may be inside a
+            // transmit whose completion wait is bounded at 100 ms, so a fixed
+            // grace shorter than that is a use-after-free with good timing.
+            // The 500 ms ceiling only matters if the task died without
+            // reporting, at which point leaking beats freeing under it.
+            for (int i = 0; i < 50 && !exited_.load(std::memory_order_acquire); ++i)
+                vTaskDelay(kTick);
             rmt_disable(static_cast<rmt_channel_handle_t>(channel_));
             rmt_del_encoder(static_cast<rmt_encoder_handle_t>(encoder_));
             rmt_del_channel(static_cast<rmt_channel_handle_t>(channel_));
@@ -289,6 +295,9 @@ namespace ooe::pinled
 
             vTaskDelayUntil(&last, kTick);
         }
+        // Last act while the handles are still safe to use: after this store
+        // deinit() may free them at any instant.
+        exited_.store(true, std::memory_order_release);
         vTaskDelete(nullptr);
     }
 } // namespace ooe::pinled

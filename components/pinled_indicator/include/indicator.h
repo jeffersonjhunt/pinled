@@ -128,6 +128,9 @@ namespace ooe::pinled
         void *encoder_{nullptr}; ///< rmt_encoder_handle_t
 
         std::atomic<bool> running_{false};
+        /// True whenever no task holds the RMT handles: set by the task as
+        /// its last act, so deinit() can free them without racing a transmit.
+        std::atomic<bool> exited_{true};
 
         std::atomic<uint8_t> state_{static_cast<uint8_t>(IndicatorState::BOOTING)};
         std::atomic<uint32_t> state_at_{0};
