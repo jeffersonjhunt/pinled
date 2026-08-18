@@ -121,7 +121,12 @@ namespace ooe::pinled
         static uint32_t now_ms();
 
         IndicatorConfig cfg_{};
-        void *neopixel_{nullptr};
+
+        // Opaque so the header does not drag driver/rmt_tx.h into everything
+        // that includes it -- which is main.h, and from there the whole app.
+        void *channel_{nullptr}; ///< rmt_channel_handle_t
+        void *encoder_{nullptr}; ///< rmt_encoder_handle_t
+
         std::atomic<bool> running_{false};
 
         std::atomic<uint8_t> state_{static_cast<uint8_t>(IndicatorState::BOOTING)};

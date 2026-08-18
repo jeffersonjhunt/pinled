@@ -1,6 +1,0 @@
-dependencies:
-  idf: '>=5.5'
-  # The same driver the playfield string uses. One pixel rather than a
-  # hundred, but sharing it means the status pixel and the strip cannot
-  # disagree about WS2812 timing.
-  zorxx/neopixel: '*'

@@ -128,4 +128,44 @@ TEST(packing_is_usable_at_compile_time)
     CHECK(true);
 }
 
+TEST(wire_bytes_agree_with_the_packed_word)
+{
+    // The tie that stops the two presentations drifting. pack_for_order()
+    // encodes the neopixel component's convention -- first transmitted byte
+    // in bits 15:8, second in 23:16, third in 7:0 -- so reading those three
+    // slots out of the word must reproduce the wire order exactly.
+    const ColorOrder all[] = {ColorOrder::UNSPECIFIED, ColorOrder::GRB,
+                              ColorOrder::RGB, ColorOrder::BGR, ColorOrder::BRG,
+                              ColorOrder::RBG, ColorOrder::GBR};
+    const uint8_t r = 0x11, g = 0x22, b = 0x33; // distinct, so a swap shows
+    for (ColorOrder o : all)
+    {
+        uint8_t w[3]{};
+        bytes_for_order(o, r, g, b, w);
+        const uint32_t packed = pack_for_order(o, r, g, b);
+        CHECK_EQ(w[0], static_cast<uint8_t>((packed >> 8) & 0xFF));
+        CHECK_EQ(w[1], static_cast<uint8_t>((packed >> 16) & 0xFF));
+        CHECK_EQ(w[2], static_cast<uint8_t>(packed & 0xFF));
+    }
+}
+
+TEST(wire_bytes_are_a_permutation_of_the_colour)
+{
+    // Whatever the order, all three components go out exactly once. A table
+    // that dropped one would still look plausible on greys.
+    const ColorOrder all[] = {ColorOrder::UNSPECIFIED, ColorOrder::GRB,
+                              ColorOrder::RGB, ColorOrder::BGR, ColorOrder::BRG,
+                              ColorOrder::RBG, ColorOrder::GBR};
+    for (ColorOrder o : all)
+    {
+        uint8_t w[3]{};
+        bytes_for_order(o, 0x11, 0x22, 0x33, w);
+        int seen = 0;
+        for (uint8_t v : w)
+            seen += (v == 0x11) + (v == 0x22) + (v == 0x33);
+        CHECK_EQ(seen, 3);
+        CHECK(w[0] != w[1] && w[1] != w[2] && w[0] != w[2]);
+    }
+}
+
 int main() { return ooe::test::run_all(); }

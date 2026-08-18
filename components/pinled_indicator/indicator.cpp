@@ -12,7 +12,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
-#include "neopixel.h"
+#include "driver/rmt_tx.h"
 
 namespace ooe::pinled
 {
@@ -25,6 +25,27 @@ namespace ooe::pinled
         /// and a 50 ms tick could swallow it -- and slow enough to be
         /// invisible on a core that also runs the renderer.
         constexpr TickType_t kTick = pdMS_TO_TICKS(10);
+
+        // WS2812B over RMT, and NOT through the zorxx/neopixel component the
+        // playfield string uses -- which is an I2S driver, not an RMT one.
+        //
+        // The ESP32-S3 has two I2S controllers and four RMT TX channels. The
+        // first version of this file took the second I2S controller for one
+        // pixel updated a few times a second, which cost the scarcer
+        // peripheral to save thirty lines and left nothing for anything else
+        // that might want I2S. The board said so on the first boot:
+        //
+        //   W i2s_platform: i2s controller 0 has been occupied by i2s_driver
+        //
+        // It worked. It was still the wrong half of the budget to spend.
+        //
+        // 10 MHz resolution, so one tick is 100 ns and the WS2812B bit
+        // timings fall on whole ticks with margin either side.
+        constexpr uint32_t kRmtHz = 10 * 1000 * 1000;
+        constexpr uint16_t kT0H = 3; ///< 0.3 us
+        constexpr uint16_t kT0L = 9; ///< 0.9 us
+        constexpr uint16_t kT1H = 9; ///< 0.9 us
+        constexpr uint16_t kT1L = 3; ///< 0.3 us
     } // namespace
 
     uint32_t Indicator::now_ms()
@@ -56,13 +77,55 @@ namespace ooe::pinled
             vTaskDelay(pdMS_TO_TICKS(2));
         }
 
-        tNeopixelContext ctx = neopixel_Init(1, cfg_.pin);
-        if (ctx == nullptr)
+        rmt_tx_channel_config_t tx{};
+        tx.gpio_num = cfg_.pin;
+        tx.clk_src = RMT_CLK_SRC_DEFAULT;
+        tx.resolution_hz = kRmtHz;
+        // The smallest block the hardware allocates. One pixel is 24 bits and
+        // the encoder streams, so nothing here needs more.
+        tx.mem_block_symbols = 64;
+        tx.trans_queue_depth = 2;
+
+        rmt_channel_handle_t chan = nullptr;
+        esp_err_t err = rmt_new_tx_channel(&tx, &chan);
+        if (err != ESP_OK)
         {
-            ESP_LOGE(TAG, "neopixel_Init failed (pin %d)", (int)cfg_.pin);
-            return ESP_FAIL;
+            ESP_LOGE(TAG, "rmt_new_tx_channel on GPIO %d: %s",
+                     (int)cfg_.pin, esp_err_to_name(err));
+            return err;
         }
-        neopixel_ = ctx;
+
+        rmt_bytes_encoder_config_t enc{};
+        enc.bit0.level0 = 1;
+        enc.bit0.duration0 = kT0H;
+        enc.bit0.level1 = 0;
+        enc.bit0.duration1 = kT0L;
+        enc.bit1.level0 = 1;
+        enc.bit1.duration0 = kT1H;
+        enc.bit1.level1 = 0;
+        enc.bit1.duration1 = kT1L;
+        enc.flags.msb_first = 1; // WS2812B takes the high bit of each byte first
+
+        rmt_encoder_handle_t encoder = nullptr;
+        err = rmt_new_bytes_encoder(&enc, &encoder);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "rmt_new_bytes_encoder: %s", esp_err_to_name(err));
+            rmt_del_channel(chan);
+            return err;
+        }
+
+        err = rmt_enable(chan);
+        if (err != ESP_OK)
+        {
+            ESP_LOGE(TAG, "rmt_enable: %s", esp_err_to_name(err));
+            rmt_del_encoder(encoder);
+            rmt_del_channel(chan);
+            return err;
+        }
+
+        channel_ = chan;
+        encoder_ = encoder;
 
         running_.store(true, std::memory_order_relaxed);
 
@@ -73,12 +136,15 @@ namespace ooe::pinled
         if (xTaskCreatePinnedToCore(task, "pinled_status", 2560, this, 2, nullptr, 0) != pdPASS)
         {
             running_.store(false, std::memory_order_relaxed);
-            neopixel_Deinit(ctx);
-            neopixel_ = nullptr;
+            rmt_disable(chan);
+            rmt_del_encoder(encoder);
+            rmt_del_channel(chan);
+            channel_ = nullptr;
+            encoder_ = nullptr;
             return ESP_FAIL;
         }
 
-        ESP_LOGI(TAG, "status pixel on GPIO %d%s, brightness %u/255, byte order %s",
+        ESP_LOGI(TAG, "status pixel on GPIO %d%s (RMT), brightness %u/255, byte order %s",
                  (int)cfg_.pin,
                  cfg_.power_pin == GPIO_NUM_NC ? "" : " (power enabled)",
                  (unsigned)cfg_.brightness, color_order_str(cfg_.color_order));
@@ -88,13 +154,16 @@ namespace ooe::pinled
     void Indicator::deinit()
     {
         running_.store(false, std::memory_order_relaxed);
-        if (neopixel_)
+        if (channel_)
         {
             // The task notices `running_` within one tick and returns; give it
-            // that long before the context it is using goes away.
+            // that long before the handles it is using go away.
             vTaskDelay(kTick * 2);
-            neopixel_Deinit(static_cast<tNeopixelContext>(neopixel_));
-            neopixel_ = nullptr;
+            rmt_disable(static_cast<rmt_channel_handle_t>(channel_));
+            rmt_del_encoder(static_cast<rmt_encoder_handle_t>(encoder_));
+            rmt_del_channel(static_cast<rmt_channel_handle_t>(channel_));
+            channel_ = nullptr;
+            encoder_ = nullptr;
         }
     }
 
@@ -182,19 +251,37 @@ namespace ooe::pinled
         TickType_t last = xTaskGetTickCount();
         uint32_t shown = 0xFFFFFFFFu; // impossible packed value: force a first write
 
+        rmt_transmit_config_t tx{};
+        tx.loop_count = 0;
+
         while (running_.load(std::memory_order_relaxed))
         {
             const IndicatorRgb c = indicator_render(snapshot());
-            const uint32_t rgb = pack_for_order(cfg_.color_order, c.r, c.g, c.b);
 
             // Only transmit on change. At 100 Hz an unconditional write would
-            // be 100 RMT transactions a second to say nothing, and a healthy
-            // machine is a steady colour for months at a time.
+            // be 100 transactions a second to say nothing, and a healthy
+            // machine is a steady colour for months at a time. Comparing the
+            // packed word rather than the struct keeps that check to one
+            // integer compare.
+            const uint32_t rgb = pack_for_order(cfg_.color_order, c.r, c.g, c.b);
             if (rgb != shown)
             {
-                tNeopixel px{0, rgb};
-                if (neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_), &px, 1))
+                uint8_t wire[3]{};
+                bytes_for_order(cfg_.color_order, c.r, c.g, c.b, wire);
+
+                const esp_err_t err =
+                    rmt_transmit(static_cast<rmt_channel_handle_t>(channel_),
+                                 static_cast<rmt_encoder_handle_t>(encoder_),
+                                 wire, sizeof(wire), &tx);
+                if (err == ESP_OK)
+                {
+                    // Wait, so the next tick cannot queue behind an in-flight
+                    // frame. 24 bits at 1.25 us is 30 us; the 100 ms bound is
+                    // there so a wedged peripheral cannot hang this task.
+                    rmt_tx_wait_all_done(static_cast<rmt_channel_handle_t>(channel_),
+                                         pdMS_TO_TICKS(100));
                     shown = rgb;
+                }
                 // A failed write is simply retried next tick. FR-IND-6: a
                 // dropped update is of no consequence, and there is nobody to
                 // report it to who is not already looking at this pixel.
