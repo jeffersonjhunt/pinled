@@ -543,10 +543,14 @@ Superseded by rev D — do not carry these forward:
 - Counter/address-decode results, `/MR` clearing, mux drive. No such parts.
 - **Mode 0 and the 74HC14 in the `CLK` path.** That inverter existed to make the
   rig's '161 advance on the falling edge. Rev D handles phase with the SPI mode
-  and needs no inverter — the expected mode is **2**, and it is unverified.
+  and needs no inverter — the mode is **2**, measured on the rev D rig
+  2026-08-06/07 and recorded below.
 - **The 1–16 MHz clock ceiling and the ~55–60 ns endpoint delay.** Measured on
-  HC parts in a counter+mux topology; says nothing about a '165 chain. Re-run
-  `PINLED_SPI_SWEEP` on the new rig.
+  HC parts in a counter+mux topology; says nothing about a '165 chain. The
+  sweep has since been re-run on the rev D rig: 4 MHz qualified on 74HC165,
+  and the SN74LVC165 rebuild matched its reference at every rate from 1 to
+  40 MHz (§4b). Neither result raises HW-3's 4 MHz default, for the reasons
+  §4b gives.
 
 ### Outstanding for rev D
 
