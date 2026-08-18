@@ -79,7 +79,10 @@ namespace ooe::pinled
         /// Enter a base state. Re-entering the current state does not restart
         /// its pattern; see the note above.
         void set_state(IndicatorState s);
-        IndicatorState state() const { return state_.load(std::memory_order_relaxed); }
+        IndicatorState state() const
+        {
+            return static_cast<IndicatorState>(state_.load(std::memory_order_relaxed));
+        }
 
         /// Raise or clear one fault class. A bitmap rather than a value
         /// because several can be true at once: the pixel shows the lowest,
