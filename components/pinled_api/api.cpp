@@ -873,9 +873,17 @@ namespace ooe::pinled
                     return fail(req, HTTPD_400_BAD_REQUEST, "truncated upload");
                 }
                 stalls = 0;
-                if (g_ctx.ota->write(buf.get(), static_cast<size_t>(n)) != ESP_OK)
+                const esp_err_t werr = g_ctx.ota->write(buf.get(), static_cast<size_t>(n));
+                if (werr != ESP_OK)
                 {
                     g_ctx.ota->abort_upload();
+                    // esp_ota_write checks the image magic on the first
+                    // chunk, so "you sent me a PDF" is a caller error, not a
+                    // flash failure, and it is caught kilobytes in rather
+                    // than megabytes.
+                    if (werr == ESP_ERR_OTA_VALIDATE_FAILED)
+                        return send_ota_result(req, "400 Bad Request", false,
+                                               "not a firmware image");
                     return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "flash write failed");
                 }
                 got_bytes += static_cast<size_t>(n);
