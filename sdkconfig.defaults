@@ -61,3 +61,18 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # absence also changes the shape of httpd_uri_t, which is why api.cpp assigns
 # that struct field by field rather than brace-initialising it.
 CONFIG_HTTPD_WS_SUPPORT=y
+
+# FR-OTA-6: an image that reboots while still pending-verify is reverted by
+# the bootloader. The app marks itself valid only once it is serving the API
+# (see start_network), so a firmware that cannot reach that state needs no
+# physical access to undo.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# OTA uploads are the one megabyte-scale transfer this device receives, and
+# lwIP's default 5.7 KB receive window turns them into a 4 KB-per-round-trip
+# drip feed (measured 2026-08-18: ~17 KB/s and a stalled-upload 408). 32 KB of
+# window is a cap, not a preallocation — pbufs are allocated on demand — and
+# the mbox has to be able to hold a full window of MSS-sized segments.
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=32
+

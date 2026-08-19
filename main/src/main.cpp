@@ -284,10 +284,22 @@ namespace ooe::pinled
         live_.classes = classes_;
         live_.count = num_channels_;
 
-        if (api_.start(store_, cfg_, channels_, num_channels_, net_, live_, this) != ESP_OK)
+        start_ota();
+
+        if (api_.start(store_, cfg_, channels_, num_channels_, net_, live_, this,
+                       &ota_) != ESP_OK)
         {
             ESP_LOGE(TAG, "API did not start");
             status_.set_fault(FaultClass::INTERNAL, true);
+        }
+        else
+        {
+            // FR-OTA-6, taken literally: a fresh image keeps itself only once
+            // it is SERVING THE API — not merely booted — because the API is
+            // the recovery path rollback exists to protect. An image that
+            // works but cannot be reached stays revertible on the next reset,
+            // and USB remains the first-class way in (FR-OTA-4).
+            OtaManager::mark_running_valid();
         }
     }
 
@@ -307,6 +319,33 @@ namespace ooe::pinled
 #else
         ESP_LOGW(TAG, "status pixel not fitted (PINLED_STATUS_GPIO = -1)");
 #endif
+    }
+
+    void Main::start_ota()
+    {
+        // The events run on whichever task drove the transition (httpd, the
+        // expiry timer, the button); they store atomics in the indicator and
+        // return. `cleared` re-settles rather than assuming RUNNING, because
+        // a window can expire while the network is in any of its three
+        // resting states.
+        OtaEvents ev{};
+        ev.arg = this;
+        ev.staged = [](void *self, uint32_t window_ms) {
+            static_cast<Main *>(self)->status_.set_staged(window_ms);
+        };
+        ev.cleared = [](void *self) {
+            Main *m = static_cast<Main *>(self);
+            m->status_.clear_staged();
+            m->indicator_settle();
+        };
+        ev.applying = [](void *self) {
+            Main *m = static_cast<Main *>(self);
+            m->status_.clear_staged();
+            m->status_.set_state(IndicatorState::APPLYING);
+        };
+        if (ota_.init(CONFIG_PINLED_OTA_CONFIRM_MS, &ev) != ESP_OK)
+            ESP_LOGW(TAG, "OTA unavailable this boot; USB flashing still works "
+                          "(FR-OTA-4)");
     }
 
     void Main::indicator_settle()
@@ -340,17 +379,26 @@ namespace ooe::pinled
             static_cast<Main *>(self)->status_.set_hold(ms);
         };
 
-#ifdef CONFIG_PINLED_PROFILE_REARM_BUTTON
+        // The short press is modal (FR-OTA-7, HW-16): while an image is
+        // staged it confirms the image INSTEAD OF re-arming the profiler, and
+        // the indicator's accelerating blink is what makes that legible
+        // (FR-IND-3). confirm() itself referees the race with expiry, so this
+        // callback needs no time awareness — a press that loses simply falls
+        // through to the press's ordinary meaning. Wired even when the re-arm
+        // is compiled out: confirmation must not depend on a profiler option.
         auto on_short_press = [](void *self) {
-            if (!static_cast<Main *>(self)->rearm_profiler())
+            Main *m = static_cast<Main *>(self);
+            if (m->ota_.confirm())
+                return;
+#ifdef CONFIG_PINLED_PROFILE_REARM_BUTTON
+            if (!m->rearm_profiler())
                 ESP_LOGI(TAG, "button re-arm ignored: a pass is already running");
+#else
+            ESP_LOGI(TAG, "short press: nothing staged, and no re-arm on this build");
+#endif
         };
         rescue_button_start(CONFIG_PINLED_RESCUE_GPIO, CONFIG_PINLED_RESCUE_HOLD_MS,
                             on_short_press, this, &fb);
-#else
-        rescue_button_start(CONFIG_PINLED_RESCUE_GPIO, CONFIG_PINLED_RESCUE_HOLD_MS,
-                            nullptr, nullptr, &fb);
-#endif
     }
 
     void Main::apply_channel_config()

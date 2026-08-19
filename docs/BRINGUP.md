@@ -540,6 +540,39 @@ FR-IND-4 asks for — "red means *not doing what you asked*", not "dead".
 Making those failures survivable is its own change, because each one needs the
 subsystems downstream of it to tolerate an uninitialised peer.
 
+## 5e. OTA on the bench
+
+Everything below the button was verified 2026-08-18 from the container: a
+990 KB image stages in ~2.5 s, the window expires at exactly +30 s, a second
+upload during a pending window gets a 409, a wrong SHA-256 and a non-image
+both get a 400, and a discard is a discard. What is left is the half that
+needs a hand at the board, which is the entire point of the design
+(FR-OTA-2): nothing I can type confirms an image.
+
+The upload path is `tools/pbtool.py`, which computes the SHA-256 the way the
+SPA will check the published one:
+
+```sh
+~/.venvs/pinled-tools/bin/python tools/pbtool.py ota http://pinled.local build/pinled.bin
+# -> "staged; press the button within 30 s to boot it"
+```
+
+| # | Do | Expect |
+|---|---|---|
+| 1 | Upload, then watch the pixel. | **Amber, blinking slow and then faster** as the 30 s window drains (FR-IND-3): the deadline readable with no display. `GET /info` counts down `ota_confirm_seconds_left` alongside it. |
+| 2 | Upload, press BOOT within the window. | The blink stops, a beat of solid amber (APPLYING), then a restart into **the other slot** — an upload always stages into the slot not currently running, so consecutive OTAs ping-pong between `ota_0` and `ota_1`. The boot log says which, and once the API is up: `ota: first boot of ota_N verified: rollback cancelled, image kept`. Verified twice on the bench 2026-08-19, once in each direction. |
+| 3 | While staged, press BOOT — note what does NOT happen. | **No profiler pass.** The short press is modal (FR-OTA-7, HW-16): while an image is staged it confirms, full stop. The re-arm is back the moment nothing is staged. |
+| 4 | Upload, let the 30 s lapse, then press BOOT. | The pixel re-settles when the window expires, and the press is an ordinary press again — it re-arms the profiler. A press that races the deadline by a millisecond loses by rule, not by luck. |
+| 5 | Hold BOOT the full 5 s while an image is staged. | The network erase still happens. The long-hold rescue outranks everything in every mode, without exception (FR-OTA-7). |
+| 6 | After a confirmed OTA, confirm the running slot. | `GET /info` reports `running_slot` (and `build_id`, the per-build ELF-hash identity — `firmware_version` only changes at release). Expect the slot the *previous* boot was not using, not `ota_1` specifically. Read the §6 trap below before the next `idf.py flash`. |
+
+Rollback (FR-OTA-6) is hard to stage honestly without a deliberately broken
+image, and a build with a `return ESP_FAIL;` planted in `api_.start()` is the
+clean way when it matters: it boots, cannot serve, never marks itself valid,
+and the next reset falls back to the previous slot. Until someone runs that,
+rollback rests on ESP-IDF's contract plus the `PENDING_VERIFY` check in
+`OtaManager::mark_running_valid()` — believed, not measured.
+
 ## 6. Tooling traps
 
 These are not hardware faults, but they present as one.
@@ -555,6 +588,15 @@ not use. The activation scripts are the supported entry point:
 
 Sourcing the wrong one, or `export.sh`, leaves `idf.py` undefined and the error
 names a missing venv rather than the actual mistake.
+
+**After a confirmed OTA, `idf.py flash` writes the slot the bootloader no
+longer boots.** `idf.py flash` always writes `ota_0`; a confirmed OTA points
+`otadata` at `ota_1`. The next USB flash then "succeeds", the board resets,
+and it boots the OLD image out of `ota_1` — new code apparently having no
+effect, which reads exactly like a build or caching problem. Run
+`idf.py erase-otadata` once after any confirmed OTA to point the bootloader
+back at `ota_0` (it does not touch NVS or the filesystem), or OTA the new
+build instead of USB-flashing it.
 
 **Opening the serial port resets the board.** On the DevKitC-1's native `USB`
 port, RTS drives `EN`. `cat /dev/ttyACM0`, `idf.py monitor`, and pyserial all

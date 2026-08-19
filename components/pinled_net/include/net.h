@@ -142,6 +142,10 @@ namespace ooe::pinled
         /// SoftAP mode, where the station interface exists only to make
         /// scanning legal.
         bool want_sta_connect_{false};
+        /// The WIFI_EVENT handler must be registered exactly once: the
+        /// join-failed fallback runs both start_station and start_softap in
+        /// one boot, and each registration is another callback per event.
+        bool wifi_events_hooked_{false};
         int retries_{0};
         void *connected_{nullptr}; ///< EventGroupHandle_t, opaque here
     };

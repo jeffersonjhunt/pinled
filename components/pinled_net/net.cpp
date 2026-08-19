@@ -142,6 +142,7 @@ namespace ooe::pinled
 
         ESP_ERROR_CHECK(esp_event_handler_instance_register(
             WIFI_EVENT, ESP_EVENT_ANY_ID, &Net::on_wifi_event, this, nullptr));
+        wifi_events_hooked_ = true;
         ESP_ERROR_CHECK(esp_event_handler_instance_register(
             IP_EVENT, IP_EVENT_STA_GOT_IP, &Net::on_ip_event, this, nullptr));
 
@@ -208,12 +209,24 @@ namespace ooe::pinled
         want_sta_connect_ = false;
 
         netif_ = esp_netif_create_default_wifi_ap();
-        esp_netif_create_default_wifi_sta();
+
+        // On the fallback path (a provisioned board whose join failed) the
+        // STA netif from the join attempt already exists, and creating the
+        // default a second time is an assert inside ESP-IDF — a boot loop,
+        // found on the bench 2026-08-19 by provisioning to an unreachable
+        // network. The portal only needs the interface for scanning, so any
+        // existing one serves.
+        if (esp_netif_get_handle_from_ifkey("WIFI_STA_DEF") == nullptr)
+            esp_netif_create_default_wifi_sta();
 
         wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
         ESP_ERROR_CHECK(esp_wifi_init(&init));
-        ESP_ERROR_CHECK(esp_event_handler_instance_register(
-            WIFI_EVENT, ESP_EVENT_ANY_ID, &Net::on_wifi_event, this, nullptr));
+        if (!wifi_events_hooked_)
+        {
+            ESP_ERROR_CHECK(esp_event_handler_instance_register(
+                WIFI_EVENT, ESP_EVENT_ANY_ID, &Net::on_wifi_event, this, nullptr));
+            wifi_events_hooked_ = true;
+        }
 
         // Name it after the MAC so two boards on a bench are distinguishable
         // without opening either of them.

@@ -28,6 +28,8 @@
 #include "pinled_doc_file.h"
 #include "credentials.h"
 #include "pinled_resolve.h"
+#include "ota_manager.h"
+#include "esp_ota_ops.h" // ESP_ERR_OTA_VALIDATE_FAILED, esp_ota_get_running_partition
 
 namespace ooe::pinled
 {
@@ -53,6 +55,7 @@ namespace ooe::pinled
             Net *net_mutable; ///< scanning is not a const operation
             LiveState *live;
             ProfilerControl *profiler; ///< null on a build with no scan task
+            OtaManager *ota;           ///< null on a build with no OTA slots
             httpd_handle_t server;
         };
 
@@ -146,7 +149,8 @@ namespace ooe::pinled
             // correct and looked like a bug every time anyone checked.
             httpd_resp_set_hdr(req, "Access-Control-Allow-Methods",
                                "GET, POST, PUT, DELETE, OPTIONS");
-            httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+            httpd_resp_set_hdr(req, "Access-Control-Allow-Headers",
+                               "Content-Type, X-Image-SHA256");
             httpd_resp_set_hdr(req, "Access-Control-Max-Age", "600");
         }
 
@@ -499,10 +503,28 @@ namespace ooe::pinled
                 static_cast<uint32_t>(g_ctx.running->channels_per_module);
             info.geometry.led_count = static_cast<uint32_t>(g_ctx.running->led_count);
 
-            // OTA is not in this step; reporting it plainly as unarmed is
-            // better than omitting the field and leaving the UI to guess.
-            info.ota_armed = false;
-            info.ota_arm_seconds_left = 0;
+            // Per-build identity. The ELF hash, not app->time: incremental
+            // builds keep a stale timestamp, but no two links share a hash.
+            esp_app_get_elf_sha256(info.build_id, sizeof(info.build_id));
+
+            // Which slot is actually executing, so a confirmed OTA is
+            // checkable from the API rather than the boot log (§5e step 6).
+            const esp_partition_t *slot = esp_ota_get_running_partition();
+            std::snprintf(info.running_slot, sizeof(info.running_slot),
+                          "%.*s", static_cast<int>(sizeof(info.running_slot)) - 1,
+                          slot ? slot->label : "?");
+
+            info.ota_pending = false;
+            info.ota_confirm_seconds_left = 0;
+            if (g_ctx.ota != nullptr && g_ctx.ota->phase() == OtaPhase::PENDING)
+            {
+                info.ota_pending = true;
+                // Rounded UP: an image with 1 ms left is still confirmable,
+                // and a countdown that reads 0 while the button still works
+                // would teach people the number lies.
+                info.ota_confirm_seconds_left =
+                    (g_ctx.ota->remaining_ms() + 999) / 1000;
+            }
 
             uint8_t buf[pinled_v1_DeviceInfo_size];
             pb_ostream_t os = pb_ostream_from_buffer(buf, sizeof(buf));
@@ -737,6 +759,177 @@ namespace ooe::pinled
             // restarted. The caller gets the window it is now waiting on.
             return send_profiler_status(req);
         }
+        // --- OTA (FR-OTA-1/2/3) ----------------------------------------------
+
+        /// Send an ApplyResult with @p status (null = 200). OTA's outcomes are
+        /// all "accepted or not, and why" — exactly what the config apply path
+        /// already answers with, so the SPA needs no new message type.
+        esp_err_t send_ota_result(httpd_req_t *req, const char *status,
+                                  bool accepted, const char *message)
+        {
+            pinled_v1_ApplyResult result = pinled_v1_ApplyResult_init_zero;
+            result.accepted = accepted;
+            result.restarted = false;
+            std::snprintf(result.message, sizeof(result.message), "%s", message);
+
+            uint8_t out[pinled_v1_ApplyResult_size];
+            pb_ostream_t os = pb_ostream_from_buffer(out, sizeof(out));
+            pb_encode(&os, pinled_v1_ApplyResult_fields, &result);
+
+            if (status)
+                httpd_resp_set_status(req, status);
+            return send_protobuf(req, out, os.bytes_written);
+        }
+
+        /// "aB" -> 0xAB, or -1. No sscanf: a 64-character header is parsed in
+        /// one pass with no locale and no surprises.
+        int hex_byte(char hi, char lo)
+        {
+            auto nib = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            const int h = nib(hi), l = nib(lo);
+            return (h < 0 || l < 0) ? -1 : (h << 4) | l;
+        }
+
+        /// Firmware upload (FR-OTA-1): raw image bytes streamed into the
+        /// inactive slot. The optional X-Image-SHA256 header (64 hex chars)
+        /// is the published hash the browser already verified (FR-OTA-3);
+        /// when present, the device independently checks what actually
+        /// arrived against it.
+        ///
+        /// Deliberately NOT the apply: success here means STAGED, and the
+        /// response says so. Only the physical button makes it boot
+        /// (FR-OTA-2), which is why open CORS on this endpoint is safe — the
+        /// worst the network can do is fill a slot nobody boots.
+        esp_err_t post_ota(httpd_req_t *req)
+        {
+            add_cors(req);
+            if (g_ctx.ota == nullptr)
+                return send_ota_result(req, "503 Service Unavailable", false,
+                                       "no OTA support on this build");
+
+            const size_t len = req->content_len;
+            if (len == 0)
+                return fail(req, HTTPD_400_BAD_REQUEST, "empty body");
+
+            // The header is read before begin() so a malformed request is
+            // refused before anything is erased.
+            uint8_t sha[32];
+            const uint8_t *expected = nullptr;
+            {
+                char hex[65];
+                const esp_err_t got =
+                    httpd_req_get_hdr_value_str(req, "X-Image-SHA256", hex, sizeof(hex));
+                if (got == ESP_OK)
+                {
+                    for (int i = 0; i < 32; ++i)
+                    {
+                        const int b = hex_byte(hex[2 * i], hex[2 * i + 1]);
+                        if (b < 0)
+                            return fail(req, HTTPD_400_BAD_REQUEST,
+                                        "X-Image-SHA256 is not 64 hex characters");
+                        sha[i] = static_cast<uint8_t>(b);
+                    }
+                    expected = sha;
+                }
+                else if (got != ESP_ERR_NOT_FOUND)
+                {
+                    return fail(req, HTTPD_400_BAD_REQUEST,
+                                "X-Image-SHA256 is not 64 hex characters");
+                }
+            }
+
+            esp_err_t err = g_ctx.ota->begin(len);
+            if (err == ESP_ERR_INVALID_STATE)
+                return send_ota_result(req, "409 Conflict", false,
+                                       "an upload or a staged image is already in progress");
+            if (err == ESP_ERR_INVALID_SIZE)
+                return send_ota_result(req, "413 Content Too Large", false,
+                                       "image larger than the OTA slot");
+            if (err != ESP_OK)
+                return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not open the slot");
+
+            // 4 KB: one flash write worth per recv, heap rather than the 6 KB
+            // httpd stack. The same shape as put_config's body loop.
+            constexpr size_t kChunk = 4096;
+            std::unique_ptr<uint8_t[]> buf(new (std::nothrow) uint8_t[kChunk]);
+            if (!buf)
+            {
+                g_ctx.ota->abort_upload();
+                return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "no memory");
+            }
+
+            size_t got_bytes = 0;
+            int stalls = 0;
+            while (got_bytes < len)
+            {
+                const size_t want = len - got_bytes < kChunk ? len - got_bytes : kChunk;
+                const int n = httpd_req_recv(req, reinterpret_cast<char *>(buf.get()),
+                                             want);
+                if (n == HTTPD_SOCK_ERR_TIMEOUT)
+                {
+                    if (++stalls > 4)
+                    {
+                        g_ctx.ota->abort_upload();
+                        return fail(req, HTTPD_408_REQ_TIMEOUT, "upload stalled");
+                    }
+                    continue;
+                }
+                if (n <= 0)
+                {
+                    g_ctx.ota->abort_upload();
+                    return fail(req, HTTPD_400_BAD_REQUEST, "truncated upload");
+                }
+                stalls = 0;
+                const esp_err_t werr = g_ctx.ota->write(buf.get(), static_cast<size_t>(n));
+                if (werr != ESP_OK)
+                {
+                    g_ctx.ota->abort_upload();
+                    // esp_ota_write checks the image magic on the first
+                    // chunk, so "you sent me a PDF" is a caller error, not a
+                    // flash failure, and it is caught kilobytes in rather
+                    // than megabytes.
+                    if (werr == ESP_ERR_OTA_VALIDATE_FAILED)
+                        return send_ota_result(req, "400 Bad Request", false,
+                                               "not a firmware image");
+                    return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "flash write failed");
+                }
+                got_bytes += static_cast<size_t>(n);
+            }
+
+            err = g_ctx.ota->finish(expected);
+            if (err == ESP_ERR_INVALID_CRC)
+                return send_ota_result(req, "400 Bad Request", false,
+                                       "SHA-256 mismatch: not the published image");
+            if (err != ESP_OK)
+                return send_ota_result(req, "400 Bad Request", false,
+                                       "not a bootable image");
+
+            char msg[64];
+            std::snprintf(msg, sizeof(msg),
+                          "staged; press the button within %u s to boot it",
+                          (unsigned)((g_ctx.ota->remaining_ms() + 999) / 1000));
+            return send_ota_result(req, nullptr, true, msg);
+        }
+
+        /// Discard a staged image — the safe direction, so the network may
+        /// take it (FR-OTA-2). There is intentionally no API counterpart for
+        /// confirm: that belongs to the button alone.
+        esp_err_t delete_ota(httpd_req_t *req)
+        {
+            add_cors(req);
+            if (g_ctx.ota == nullptr)
+                return send_ota_result(req, "503 Service Unavailable", false,
+                                       "no OTA support on this build");
+            if (!g_ctx.ota->discard())
+                return fail(req, HTTPD_404_NOT_FOUND, "nothing staged");
+            return send_ota_result(req, nullptr, true, "staged image discarded");
+        }
+
         /// The upgrade handshake. httpd performs it for us when the handler is
         /// registered as a websocket; this only runs for the GET that opens it
         /// and for subsequent frames from the client, which are ignored — the
@@ -861,7 +1054,8 @@ namespace ooe::pinled
                          const ChannelConfig *channels, size_t count,
                          const Net &net,
                          LiveState &live,
-                         ProfilerControl *profiler)
+                         ProfilerControl *profiler,
+                         OtaManager *ota)
     {
         g_ctx.store = &store;
         g_ctx.running = &running;
@@ -874,6 +1068,7 @@ namespace ooe::pinled
         g_ctx.net_mutable = const_cast<Net *>(&net);
         g_ctx.live = &live;
         g_ctx.profiler = profiler;
+        g_ctx.ota = ota;
         g_ctx.server = nullptr;
 
         httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -925,6 +1120,9 @@ namespace ooe::pinled
             {"/api/v1/profiler", HTTP_GET, get_profiler},
             {"/api/v1/profiler", HTTP_POST, post_profiler},
             {"/api/v1/profiler", HTTP_OPTIONS, handle_options},
+            {"/api/v1/ota", HTTP_POST, post_ota},
+            {"/api/v1/ota", HTTP_DELETE, delete_ota},
+            {"/api/v1/ota", HTTP_OPTIONS, handle_options},
             {"/api/v1/scan", HTTP_GET, get_scan},
             {"/api/v1/provision", HTTP_POST, post_provision},
             {"/api/v1/provision", HTTP_DELETE, delete_provision},

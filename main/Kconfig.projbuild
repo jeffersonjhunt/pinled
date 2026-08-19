@@ -323,6 +323,17 @@ menu "pinled configuration"
                 Long enough that nobody does it by accident while handling the
                 board, short enough that nobody gives up first.
 
+        config PINLED_OTA_CONFIRM_MS
+            int "OTA confirmation window (ms)"
+            default 30000
+            range 5000 300000
+            help
+                How long a staged image stays confirmable after upload
+                (FR-OTA-2). The press has to happen at the machine, so the
+                window is sized for walking to it, not for thinking it over:
+                long enough to cross a room, short enough that a forgotten
+                upload cannot sit armed all afternoon.
+
         config PINLED_HOSTNAME
             string "mDNS hostname"
             default "pinled"
