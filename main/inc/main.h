@@ -31,6 +31,7 @@
 
 #include "api.h"
 #include "indicator.h"
+#include "ota_manager.h"
 #include "net.h"
 #include "rescue.h"
 
@@ -122,6 +123,7 @@ namespace ooe::pinled
         /// The status pixel (FR-IND-1..8). First thing up and last thing
         /// configured: a fault raised before it exists has nowhere to go.
         void start_indicator();
+        void start_ota();
 
         /// Settle on the base state the pixel should rest in, from what the
         /// network actually ended up doing. Called after start_network(),
@@ -182,6 +184,7 @@ namespace ooe::pinled
         Net net_{};
         Api api_{};
         Indicator status_{};
+        OtaManager ota_{};
         LampScan scan_{};
         Filament filament_{};
         Profiler profiler_{};

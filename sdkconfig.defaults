@@ -61,3 +61,9 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # absence also changes the shape of httpd_uri_t, which is why api.cpp assigns
 # that struct field by field rather than brace-initialising it.
 CONFIG_HTTPD_WS_SUPPORT=y
+
+# FR-OTA-6: an image that reboots while still pending-verify is reverted by
+# the bootloader. The app marks itself valid only once it is serving the API
+# (see start_network), so a firmware that cannot reach that state needs no
+# physical access to undo.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
