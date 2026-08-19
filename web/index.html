@@ -1,0 +1,236 @@
+<!doctype html>
+<!--
+  The pinled configuration SPA (FR-UI-1/2/8, docs/WEBUI.md).
+
+  No build step and no network dependency: open this file from disk
+  (file://) and point it at a device, or let the cloud bundle serve it —
+  either way the only thing it ever talks to is the device API. The visual
+  design is docs/ui-mockup.html, which remains the argueable reference;
+  this is the same design against the real board.
+
+  Classic scripts, deliberately: file:// blocks ES modules and service
+  workers, and an http:// device origin has no crypto.subtle — the app is
+  built for the least capable origin it must run from (WEBUI.md §1).
+
+  Copyright (c) 2024-2026 Jefferson J. Hunt (MIT)
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pinled</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div class="connect" id="connect" hidden>
+  <div class="card">
+    <h3 class="card-title">Connect to a controller</h3>
+    <p class="prose">This copy of the app is running from a file, so it needs
+      the device's address — the setup page reported it, and it is printed in
+      the boot log. <code>http://pinled.local</code> works where mDNS does.</p>
+    <input class="input" id="connect-addr" type="text"
+           placeholder="http://192.168.1.57" autocomplete="off"
+           autocapitalize="none" spellcheck="false">
+    <button class="btn primary" id="connect-btn">Connect</button>
+    <div class="err" id="connect-err"></div>
+  </div>
+</div>
+
+<div class="app" id="app" hidden>
+  <header class="topbar">
+    <div class="brand"><i class="filament"></i>pinled<small id="brand-device">—</small></div>
+    <span class="badge" id="live-badge">connecting</span>
+    <span class="badge dirty" id="dirty-badge" hidden>unapplied edits</span>
+    <div style="flex:1"></div>
+    <button class="btn sm primary" id="apply-btn" disabled>Apply &amp; restart</button>
+  </header>
+
+  <nav class="rail">
+    <div class="rail-label">Configure</div>
+    <button class="navitem" data-nav="map" aria-current="true">Map<span class="k">1</span></button>
+    <button class="navitem" data-nav="lamps">Lamps<span class="k">2</span></button>
+    <button class="navitem" data-nav="install">Install<span class="k">3</span></button>
+    <div class="rail-label">Manage</div>
+    <button class="navitem" data-nav="versions">Versions<span class="k">4</span></button>
+    <button class="navitem" data-nav="device">Device<span class="k">5</span></button>
+    <div class="rail-foot" id="rail-foot">—</div>
+  </nav>
+
+  <div class="stage">
+
+    <!-- ===================================================== MAP ======= -->
+    <section class="panel" data-panel="map" data-active="true">
+      <div class="split">
+        <div class="work">
+          <div class="sec-head">
+            <div>
+              <h2 class="sec">Channel map</h2>
+              <p class="sec-note">Each channel is one lamp tap. Brightness is what the filament
+                model reconstructs from the drive it senses — pushed live from the board.</p>
+            </div>
+          </div>
+
+          <div class="learnbar" data-on="false" id="learnbar">
+            <label class="lb-title" for="learn-toggle">Learn wiring</label>
+            <input type="checkbox" class="switch" id="learn-toggle">
+            <div id="learn-controls" style="display:none; align-items:center; gap:10px; flex-wrap:wrap;">
+              <label class="lb-title" for="learn-lamp" style="margin:0;">Next lamp</label>
+              <input class="input" id="learn-lamp" type="number" min="1" max="65535" value="1" style="width:84px;">
+            </div>
+            <span class="lb-hint" id="learn-hint">Off — turn on, fire a lamp from the test card,
+              and click the channel that lit.</span>
+          </div>
+
+          <div id="modules"></div>
+
+          <div class="legend">
+            <span><i class="swatch" style="background:var(--ink-800)"></i>bound</span>
+            <span><i class="swatch dashed" style="background:var(--ink-800)"></i>not yet bound to a lamp</span>
+            <span><i class="swatch" style="background:var(--amber); border-color:var(--amber); border-radius:50%; width:9px; height:9px; margin:0 2px;"></i>active since last update</span>
+          </div>
+        </div>
+
+        <aside class="inspector" id="inspector"></aside>
+      </div>
+    </section>
+
+    <!-- =================================================== LAMPS ======= -->
+    <section class="panel" data-panel="lamps">
+      <div class="panel-scroll">
+        <div class="sec-head">
+          <div>
+            <h2 class="sec">Lamps</h2>
+            <p class="sec-note">Presentation for every bound lamp. These values travel with the
+              machine profile — colour, fade and class lock, keyed by lamp number so they land
+              correctly on someone else's build.</p>
+          </div>
+        </div>
+        <div class="btn-row" style="margin-bottom:12px;">
+          <button class="btn sm" id="profile-export">Export profile</button>
+          <button class="btn sm ghost" id="profile-import">Import profile</button>
+          <span class="lb-hint" id="profile-note"></span>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Lamp</th><th>Name</th><th>Ch</th><th>LED</th>
+                <th>Colour</th><th>Class</th><th>Attack</th><th>Decay</th>
+              </tr>
+            </thead>
+            <tbody id="lamps-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================= INSTALL ======= -->
+    <section class="panel" data-panel="install">
+      <div class="panel-scroll">
+        <div class="sec-head">
+          <div>
+            <h2 class="sec">Install</h2>
+            <p class="sec-note">How this particular build is wired. Private to you — it describes
+              one physical machine, so it is never published, though you can export it and restore
+              it onto a replacement board.</p>
+          </div>
+        </div>
+
+        <div class="grid-2" id="install-cards"></div>
+
+        <div class="storenote">
+          <span class="marker">!</span>
+          <div>Wi-Fi credentials are <b>not part of this document</b> and appear in no export, at
+            any privacy level (FR-CFG-12). Restoring a backup onto a new board therefore starts
+            with provisioning — which is correct, since the network is usually different too.</div>
+        </div>
+
+        <div class="btn-row" style="margin-top:18px;">
+          <button class="btn" id="config-export">Export</button>
+          <button class="btn ghost" id="config-import">Import</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================ VERSIONS ======= -->
+    <section class="panel" data-panel="versions">
+      <div class="panel-scroll">
+        <div class="sec-head">
+          <div>
+            <h2 class="sec">Versions</h2>
+            <p class="sec-note">A version pairs the install config with the machine profile,
+              because what you are comparing is a look — and a look spans both. These are plain
+              JSON files on your disk; the board keeps one active configuration and no history.</p>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn" id="version-save">Save current as a version file</button>
+          <button class="btn ghost" id="version-load">Load a version file…</button>
+        </div>
+        <div class="shortfall" id="version-note" hidden></div>
+      </div>
+    </section>
+
+    <!-- ================================================== DEVICE ======= -->
+    <section class="panel" data-panel="device">
+      <div class="panel-scroll">
+        <div class="sec-head">
+          <div>
+            <h2 class="sec">Device</h2>
+            <p class="sec-note">Identity, attribution, the profiler, and firmware. The device
+              never contacts the internet — everything below happens between this page and the
+              board (FR-UI-2).</p>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3 class="card-title">Identity</h3>
+            <div id="device-identity"></div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Author handle</h3>
+            <p class="prose" style="font-size:12px;">Stamped into exported profiles for
+              attribution (FR-REG-1). Optional; stored on the board.</p>
+            <input class="input" id="author-input" type="text" maxlength="31"
+                   autocomplete="off" style="width:100%; margin:8px 0;">
+            <div class="btn-row">
+              <button class="btn sm" id="author-save">Store</button>
+              <button class="btn sm ghost" id="author-clear">Clear</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Profiler</h3>
+            <div id="profiler-status"></div>
+            <div class="btn-row" style="margin-top:10px;">
+              <button class="btn sm" id="profiler-rearm">Run a classification pass</button>
+            </div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Firmware update</h3>
+            <div id="fw-status"></div>
+            <div class="btn-row" style="margin-top:10px;">
+              <button class="btn sm" id="fw-pick">Upload a .bin…</button>
+              <button class="btn sm ghost" id="fw-discard" hidden>Discard staged</button>
+            </div>
+            <div class="armbox" id="fw-armbox" data-armed="false" hidden>
+              <div class="armstate"><i class="dot"></i><span id="fw-armtext"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<input type="file" id="file-input" hidden>
+
+<script src="js/vendor/protobuf.min.js"></script>
+<script src="js/gen/proto.js"></script>
+<script src="js/api.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
