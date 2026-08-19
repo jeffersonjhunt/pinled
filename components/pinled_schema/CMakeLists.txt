@@ -27,5 +27,6 @@ idf_component_register(
              "src/pinled_apply.cpp"
              "src/pinled_profiling.cpp"
              "src/pinled_indicator.cpp"
+             "src/pinled_ota_state.cpp"
         INCLUDE_DIRS "include"
 )
