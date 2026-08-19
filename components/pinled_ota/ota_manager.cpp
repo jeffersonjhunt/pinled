@@ -127,6 +127,7 @@ namespace ooe::pinled
         mbedtls_sha256_init(sha);
         if (mbedtls_sha256_starts(sha, 0 /* SHA-256, not 224 */) != 0)
         {
+            mbedtls_sha256_free(sha);
             delete sha;
             esp_ota_abort(handle);
             abort_upload();
@@ -192,6 +193,9 @@ namespace ooe::pinled
         // confirmation (FR-OTA-2).
         const esp_err_t err = esp_ota_end(ota_handle_);
         ota_handle_ = 0;
+        // free() before delete: the default port only zeroises, but the
+        // contract allows a port to hold resources in the context.
+        mbedtls_sha256_free(static_cast<mbedtls_sha256_context *>(sha_));
         delete static_cast<mbedtls_sha256_context *>(sha_);
         sha_ = nullptr;
         if (err != ESP_OK)
@@ -242,6 +246,7 @@ namespace ooe::pinled
         }
         if (sha_ != nullptr)
         {
+            mbedtls_sha256_free(static_cast<mbedtls_sha256_context *>(sha_));
             delete static_cast<mbedtls_sha256_context *>(sha_);
             sha_ = nullptr;
         }
