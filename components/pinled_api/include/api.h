@@ -22,6 +22,8 @@
  * | DELETE | `/api/v1/profile` | none → revert to unstyled |
  * | GET | `/api/v1/profiler` | `ProfilerStatus` |
  * | POST | `/api/v1/profiler` | none → re-arm, `ProfilerStatus` |
+ * | POST | `/api/v1/ota` | raw image bytes → staged, `ApplyResult` |
+ * | DELETE | `/api/v1/ota` | none → discard staged, `ApplyResult` |
  *
  * @par `profile` and `profiler` are different things
  * `/profile` is the stored `MachineProfile` document — which lamps are named
@@ -56,9 +58,10 @@
  * FR-UI-3, deliberately. The SPA may be a standalone bundle opened from
  * `file://`, whose origin is `null`, so nothing narrower would work. There is
  * no secret on the device to protect (FR-REG-1) and no cloud account behind
- * it. The one endpoint where that would be dangerous is OTA, which is why
- * `FR-OTA-2` gates it behind a physical button press — and why it is not in
- * this step.
+ * it. The one endpoint where that would be dangerous is OTA, and FR-OTA-2
+ * gates it behind a physical button press instead: the API can stage an image
+ * and discard one — the harmless directions — but only the button can make
+ * the device boot it. Open CORS therefore costs a slot nobody boots, at worst.
  *
  * @par The live socket
  * `/api/v1/live` upgrades to a WebSocket carrying a `LiveFrame` about thirty
@@ -85,6 +88,11 @@
 
 namespace ooe::pinled
 {
+    /// Staging and discard, from components/pinled_ota. Forward-declared so
+    /// this header does not pull the OTA stack into every includer; only the
+    /// pointer crosses here.
+    class OtaManager;
+
     /**
      * @brief What the API is allowed to ask of the auto-profiler.
      *
@@ -139,13 +147,16 @@ namespace ooe::pinled
          *                 `/api/v1/profiler` reports UNAVAILABLE rather than
          *                 404 — the endpoint existing and saying "not on this
          *                 build" is a better answer to a UI than absence
+         * @param ota     staging and discard; may be null, in which case
+         *                 `/api/v1/ota` answers 503 for the same reason
          */
         esp_err_t start(MachineConfigStore &store,
                         const MachineConfig &running,
                         const ChannelConfig *channels, size_t count,
                         const Net &net,
                         LiveState &live,
-                        ProfilerControl *profiler);
+                        ProfilerControl *profiler,
+                        OtaManager *ota);
 
         void stop();
 

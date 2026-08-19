@@ -172,6 +172,62 @@ def cmd_info(args) -> int:
     return 0
 
 
+def cmd_ota(args) -> int:
+    """POST a firmware image; the device stages it and waits for the button.
+
+    The SHA-256 of the file is computed here and sent as X-Image-SHA256, so
+    the device can verify what actually arrived (FR-OTA-3). Success means
+    STAGED, not applied: the response says how long the button has.
+    """
+    import hashlib
+
+    url = args.url.rstrip("/")
+    if not url.endswith("/ota"):
+        url += "/api/v1/ota"
+
+    with open(args.file, "rb") as fh:
+        image = fh.read()
+    digest = hashlib.sha256(image).hexdigest()
+    print(f"pbtool: {len(image)} bytes, sha256 {digest}", file=sys.stderr)
+
+    req = urllib.request.Request(url, data=image, method="POST")
+    req.add_header("Accept", CONTENT_TYPE)
+    req.add_header("Content-Type", "application/octet-stream")
+    req.add_header("X-Image-SHA256", digest)
+    try:
+        # An upload over Wi-Fi to a flash-erasing device is slow; 120 s is
+        # generous without being infinite.
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            result = _message("ApplyResult")
+            result.ParseFromString(exc.read())
+            detail = f": {result.message}"
+        except Exception:
+            pass
+        _die(f"POST {url} -> HTTP {exc.code} {exc.reason}{detail}")
+    except urllib.error.URLError as exc:
+        _die(f"cannot reach {url}: {exc.reason}", "is the board on the network?")
+
+    result = _message("ApplyResult")
+    result.ParseFromString(body)
+    print(_to_json(result))
+    return 0
+
+
+def cmd_ota_discard(args) -> int:
+    url = args.url.rstrip("/")
+    if not url.endswith("/ota"):
+        url += "/api/v1/ota"
+    body = _http(url, method="DELETE")
+    result = _message("ApplyResult")
+    result.ParseFromString(body)
+    print(_to_json(result))
+    return 0
+
+
 # --- stored-document framing -------------------------------------------------
 #
 # The 16-byte header from components/pinled_schema/include/pinled_doc_frame.h,
@@ -451,6 +507,15 @@ def main(argv: list[str] | None = None) -> int:
     i = sub.add_parser("info", help="shorthand for GET /api/v1/info")
     i.add_argument("url")
     i.set_defaults(func=cmd_info)
+
+    o = sub.add_parser("ota", help="POST a firmware image; staged until the button confirms")
+    o.add_argument("url", help="device base URL, or .../api/v1/ota")
+    o.add_argument("file", help="the .bin image (build/pinled.bin)")
+    o.set_defaults(func=cmd_ota)
+
+    od = sub.add_parser("ota-discard", help="discard a staged image (DELETE /api/v1/ota)")
+    od.add_argument("url")
+    od.set_defaults(func=cmd_ota_discard)
 
     e = sub.add_parser("encode", help="JSON on stdin -> protobuf on stdout")
     e.add_argument("type")

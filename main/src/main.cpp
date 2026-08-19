@@ -284,7 +284,8 @@ namespace ooe::pinled
         live_.classes = classes_;
         live_.count = num_channels_;
 
-        if (api_.start(store_, cfg_, channels_, num_channels_, net_, live_, this) != ESP_OK)
+        if (api_.start(store_, cfg_, channels_, num_channels_, net_, live_, this,
+                       nullptr /* OTA wired in the next step */) != ESP_OK)
         {
             ESP_LOGE(TAG, "API did not start");
             status_.set_fault(FaultClass::INTERNAL, true);

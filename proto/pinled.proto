@@ -280,8 +280,14 @@ message DeviceInfo {
   string   author_handle = 4;
   Geometry geometry      = 5;
 
-  bool   ota_armed             = 6;
-  uint32 ota_arm_seconds_left  = 7;
+  // The OTA confirmation window (FR-OTA-2): an image is staged in the
+  // inactive slot and a press of the physical button within the window boots
+  // it. Renamed 2026-08-18 from ota_armed/ota_arm_seconds_left — same
+  // numbers, same types, so the wire is untouched; the old names described
+  // an arm-before-upload design that was rejected in favour of
+  // confirm-after-upload, and they were never once reported true.
+  bool   ota_pending               = 6;
+  uint32 ota_confirm_seconds_left  = 7;
 }
 
 // Result of applying a configuration. Applying is write-file-then-restart
