@@ -560,11 +560,11 @@ SPA will check the published one:
 | # | Do | Expect |
 |---|---|---|
 | 1 | Upload, then watch the pixel. | **Amber, blinking slow and then faster** as the 30 s window drains (FR-IND-3): the deadline readable with no display. `GET /info` counts down `ota_confirm_seconds_left` alongside it. |
-| 2 | Upload, press BOOT within the window. | The blink stops, a beat of solid amber (APPLYING), then a restart. The boot log says `boot: ... ota_1` and, once the API is up, `ota: first boot of ota_1 verified: rollback cancelled, image kept`. |
+| 2 | Upload, press BOOT within the window. | The blink stops, a beat of solid amber (APPLYING), then a restart into **the other slot** — an upload always stages into the slot not currently running, so consecutive OTAs ping-pong between `ota_0` and `ota_1`. The boot log says which, and once the API is up: `ota: first boot of ota_N verified: rollback cancelled, image kept`. Verified twice on the bench 2026-08-19, once in each direction. |
 | 3 | While staged, press BOOT — note what does NOT happen. | **No profiler pass.** The short press is modal (FR-OTA-7, HW-16): while an image is staged it confirms, full stop. The re-arm is back the moment nothing is staged. |
 | 4 | Upload, let the 30 s lapse, then press BOOT. | The pixel re-settles when the window expires, and the press is an ordinary press again — it re-arms the profiler. A press that races the deadline by a millisecond loses by rule, not by luck. |
 | 5 | Hold BOOT the full 5 s while an image is staged. | The network erase still happens. The long-hold rescue outranks everything in every mode, without exception (FR-OTA-7). |
-| 6 | After a confirmed OTA, confirm the running slot. | `esptool` says `boot: ... ota_1`, or `GET /info` — and read the §6 trap below before the next `idf.py flash`. |
+| 6 | After a confirmed OTA, confirm the running slot. | `GET /info` reports `running_slot` (and `build_id`, the per-build ELF-hash identity — `firmware_version` only changes at release). Expect the slot the *previous* boot was not using, not `ota_1` specifically. Read the §6 trap below before the next `idf.py flash`. |
 
 Rollback (FR-OTA-6) is hard to stage honestly without a deliberately broken
 image, and a build with a `return ESP_FAIL;` planted in `api_.start()` is the
