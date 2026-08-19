@@ -503,6 +503,10 @@ namespace ooe::pinled
                 static_cast<uint32_t>(g_ctx.running->channels_per_module);
             info.geometry.led_count = static_cast<uint32_t>(g_ctx.running->led_count);
 
+            // Per-build identity. The ELF hash, not app->time: incremental
+            // builds keep a stale timestamp, but no two links share a hash.
+            esp_app_get_elf_sha256(info.build_id, sizeof(info.build_id));
+
             // Which slot is actually executing, so a confirmed OTA is
             // checkable from the API rather than the boot log (§5e step 6).
             const esp_partition_t *slot = esp_ota_get_running_partition();

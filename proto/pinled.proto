@@ -293,6 +293,13 @@ message DeviceInfo {
   // Added 2026-08-19: it is how the bench (and later the SPA) confirms a
   // press actually switched slots, without reading the boot log.
   string running_slot = 8;
+
+  // First 16 hex chars of the app ELF SHA-256: a per-build identity that
+  // changes on every link, where firmware_version only bumps at release.
+  // The ELF hash and not the compile timestamp, because incremental builds
+  // do not recompile the timestamp's translation unit — two different
+  // binaries can (and on this bench, did) claim the same compile time.
+  string build_id = 9;
 }
 
 // Result of applying a configuration. Applying is write-file-then-restart

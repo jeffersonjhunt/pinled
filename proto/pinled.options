@@ -61,6 +61,7 @@ pinled.v1.DeviceInfo.firmware_version max_size:16
 pinled.v1.DeviceInfo.device_id        max_size:24
 pinled.v1.DeviceInfo.author_handle    max_size:32
 pinled.v1.DeviceInfo.running_slot     max_size:8
+pinled.v1.DeviceInfo.build_id         max_size:17
 pinled.v1.ApplyResult.message         max_size:96
 
 # The live frame is built and sent every ~33 ms, so it must not carry a
