@@ -29,6 +29,7 @@
 #include "credentials.h"
 #include "pinled_resolve.h"
 #include "ota_manager.h"
+#include "esp_ota_ops.h" // for ESP_ERR_OTA_VALIDATE_FAILED in post_ota
 
 namespace ooe::pinled
 {
