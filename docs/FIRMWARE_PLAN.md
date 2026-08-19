@@ -976,6 +976,14 @@ in one word, so a second upload during a pending window is a refusal and not a
 silent replacement — and the button task already knows how to ask "what does a
 short press mean right now".
 
+*Landed 2026-08-18 on `feat/ota`. The state machine is pure and host-tested
+(`pinled_ota_state.h`, 13 cases, mutation-checked); everything short of the
+button press is bench-verified, including the 409 during a pending window,
+expiry at exactly +30 s, and both 400s. One measured surprise: lwIP's default
+5.7 KB TCP window put a megabyte upload at ~17 KB/s — 32 KB of window
+(`sdkconfig.defaults`) makes it ~400 KB/s. The eye-and-hand half is
+BRINGUP.md §5e.*
+
 **Step 3 — identity and versioning (FR-UI-4, FR-REG-1).** API version in
 `/api/v1/info`, distinct from the firmware version; device ID from the eFuse
 MAC with no provisioning step; an optional author handle in NVS. Small, no
