@@ -30,6 +30,8 @@
 #include "pinled_resolve.h"
 #include "ota_manager.h"
 #include "esp_ota_ops.h" // ESP_ERR_OTA_VALIDATE_FAILED, esp_ota_get_running_partition
+#include "author_store.h"
+#include "pinled_identity.h"
 
 namespace ooe::pinled
 {
@@ -503,6 +505,10 @@ namespace ooe::pinled
                 static_cast<uint32_t>(g_ctx.running->channels_per_module);
             info.geometry.led_count = static_cast<uint32_t>(g_ctx.running->led_count);
 
+            // Attribution, not identity: empty on a device that never stored
+            // one, and that is a complete answer (FR-REG-1).
+            author_load(info.author_handle, sizeof(info.author_handle));
+
             // Per-build identity. The ELF hash, not app->time: incremental
             // builds keep a stale timestamp, but no two links share a hash.
             esp_app_get_elf_sha256(info.build_id, sizeof(info.build_id));
@@ -761,11 +767,12 @@ namespace ooe::pinled
         }
         // --- OTA (FR-OTA-1/2/3) ----------------------------------------------
 
-        /// Send an ApplyResult with @p status (null = 200). OTA's outcomes are
-        /// all "accepted or not, and why" — exactly what the config apply path
-        /// already answers with, so the SPA needs no new message type.
-        esp_err_t send_ota_result(httpd_req_t *req, const char *status,
-                                  bool accepted, const char *message)
+        /// Send an ApplyResult with @p status (null = 200). OTA's and the
+        /// author handle's outcomes are all "accepted or not, and why" —
+        /// exactly what the config apply path already answers with, so the
+        /// SPA needs no new message type.
+        esp_err_t send_apply_result(httpd_req_t *req, const char *status,
+                                    bool accepted, const char *message)
         {
             pinled_v1_ApplyResult result = pinled_v1_ApplyResult_init_zero;
             result.accepted = accepted;
@@ -809,7 +816,7 @@ namespace ooe::pinled
         {
             add_cors(req);
             if (g_ctx.ota == nullptr)
-                return send_ota_result(req, "503 Service Unavailable", false,
+                return send_apply_result(req, "503 Service Unavailable", false,
                                        "no OTA support on this build");
 
             const size_t len = req->content_len;
@@ -845,10 +852,10 @@ namespace ooe::pinled
 
             esp_err_t err = g_ctx.ota->begin(len);
             if (err == ESP_ERR_INVALID_STATE)
-                return send_ota_result(req, "409 Conflict", false,
+                return send_apply_result(req, "409 Conflict", false,
                                        "an upload or a staged image is already in progress");
             if (err == ESP_ERR_INVALID_SIZE)
-                return send_ota_result(req, "413 Content Too Large", false,
+                return send_apply_result(req, "413 Content Too Large", false,
                                        "image larger than the OTA slot");
             if (err != ESP_OK)
                 return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not open the slot");
@@ -894,7 +901,7 @@ namespace ooe::pinled
                     // flash failure, and it is caught kilobytes in rather
                     // than megabytes.
                     if (werr == ESP_ERR_OTA_VALIDATE_FAILED)
-                        return send_ota_result(req, "400 Bad Request", false,
+                        return send_apply_result(req, "400 Bad Request", false,
                                                "not a firmware image");
                     return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "flash write failed");
                 }
@@ -903,17 +910,17 @@ namespace ooe::pinled
 
             err = g_ctx.ota->finish(expected);
             if (err == ESP_ERR_INVALID_CRC)
-                return send_ota_result(req, "400 Bad Request", false,
+                return send_apply_result(req, "400 Bad Request", false,
                                        "SHA-256 mismatch: not the published image");
             if (err != ESP_OK)
-                return send_ota_result(req, "400 Bad Request", false,
+                return send_apply_result(req, "400 Bad Request", false,
                                        "not a bootable image");
 
             char msg[64];
             std::snprintf(msg, sizeof(msg),
                           "staged; press the button within %u s to boot it",
                           (unsigned)((g_ctx.ota->remaining_ms() + 999) / 1000));
-            return send_ota_result(req, nullptr, true, msg);
+            return send_apply_result(req, nullptr, true, msg);
         }
 
         /// Discard a staged image — the safe direction, so the network may
@@ -923,11 +930,84 @@ namespace ooe::pinled
         {
             add_cors(req);
             if (g_ctx.ota == nullptr)
-                return send_ota_result(req, "503 Service Unavailable", false,
+                return send_apply_result(req, "503 Service Unavailable", false,
                                        "no OTA support on this build");
             if (!g_ctx.ota->discard())
                 return fail(req, HTTPD_404_NOT_FOUND, "nothing staged");
-            return send_ota_result(req, nullptr, true, "staged image discarded");
+            return send_apply_result(req, nullptr, true, "staged image discarded");
+        }
+
+        // --- identity (FR-REG-1) -----------------------------------------
+
+        // The rule's bound (pinled_identity.h) and the schema's field size
+        // (pinled.options, both AuthorHandle.handle and DeviceInfo's
+        // author_handle) are the same number declared in different files;
+        // drift between them would truncate a stored handle or refuse a
+        // legal one, silently. Pinned here, where all three are visible.
+        static_assert(sizeof(pinled_v1_AuthorHandle::handle) == kAuthorHandleMax + 1,
+                      "pinled.options AuthorHandle.handle disagrees with kAuthorHandleMax");
+        static_assert(sizeof(pinled_v1_DeviceInfo::author_handle) == kAuthorHandleMax + 1,
+                      "pinled.options DeviceInfo.author_handle disagrees with kAuthorHandleMax");
+
+        /// Store the author handle. No restart: nothing running reads it —
+        /// it exists so the SPA can stamp exported profiles, and GET /info
+        /// reports it back. Ownership and verification are cloud-side.
+        esp_err_t put_author(httpd_req_t *req)
+        {
+            add_cors(req);
+
+            // An AuthorHandle at max_size encodes in ~34 bytes; 64 is
+            // implausibility, not a limit anyone hits legitimately.
+            const size_t len = static_cast<size_t>(req->content_len);
+            if (len == 0 || len > 64)
+                return fail(req, HTTPD_400_BAD_REQUEST, "implausible handle body");
+
+            uint8_t body[64];
+            size_t got = 0;
+            int stalls = 0;
+            while (got < len)
+            {
+                const int n = httpd_req_recv(req, reinterpret_cast<char *>(body) + got,
+                                             len - got);
+                if (n == HTTPD_SOCK_ERR_TIMEOUT)
+                {
+                    if (++stalls > 4)
+                        return fail(req, HTTPD_408_REQ_TIMEOUT, "body never arrived");
+                    continue;
+                }
+                if (n <= 0)
+                    return fail(req, HTTPD_400_BAD_REQUEST, "truncated body");
+                stalls = 0;
+                got += static_cast<size_t>(n);
+            }
+
+            pinled_v1_AuthorHandle msg = pinled_v1_AuthorHandle_init_zero;
+            pb_istream_t is = pb_istream_from_buffer(body, got);
+            if (!pb_decode(&is, pinled_v1_AuthorHandle_fields, &msg))
+                return fail(req, HTTPD_400_BAD_REQUEST, "not an AuthorHandle");
+
+            if (!author_handle_valid(msg.handle))
+                return send_apply_result(
+                    req, "400 Bad Request", false,
+                    "a handle is 1-31 bytes, printable, with no edge spaces; "
+                    "DELETE clears it");
+
+            if (author_store(msg.handle) != ESP_OK)
+                return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not store");
+
+            char out[96];
+            std::snprintf(out, sizeof(out), "author handle stored: %s", msg.handle);
+            return send_apply_result(req, nullptr, true, out);
+        }
+
+        /// Forget the handle. Idempotent: absence was the request, absence
+        /// is the result, so clearing a device that never had one is a 200.
+        esp_err_t delete_author(httpd_req_t *req)
+        {
+            add_cors(req);
+            if (author_erase() != ESP_OK)
+                return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not erase");
+            return send_apply_result(req, nullptr, true, "author handle cleared");
         }
 
         /// The upgrade handshake. httpd performs it for us when the handler is
@@ -1123,6 +1203,9 @@ namespace ooe::pinled
             {"/api/v1/ota", HTTP_POST, post_ota},
             {"/api/v1/ota", HTTP_DELETE, delete_ota},
             {"/api/v1/ota", HTTP_OPTIONS, handle_options},
+            {"/api/v1/author", HTTP_PUT, put_author},
+            {"/api/v1/author", HTTP_DELETE, delete_author},
+            {"/api/v1/author", HTTP_OPTIONS, handle_options},
             {"/api/v1/scan", HTTP_GET, get_scan},
             {"/api/v1/provision", HTTP_POST, post_provision},
             {"/api/v1/provision", HTTP_DELETE, delete_provision},

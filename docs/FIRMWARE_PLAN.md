@@ -990,6 +990,18 @@ MAC with no provisioning step; an optional author handle in NVS. Small, no
 hardware, no dependencies, and it wants doing before the SPA has to negotiate
 with it.
 
+*Landed 2026-08-19 on `feat/identity`. The version, device id, running slot
+and build id had already reached `/info` during step 2; this step added the
+handle: `PUT`/`DELETE /api/v1/author`, stored in its own NVS namespace so the
+network-forget rescue cannot take the attribution with it (that isolation is
+the NVS namespace contract; the reverse — clearing the handle leaves the
+network — was exercised live). The validity rule is host-tested in
+`pinled_schema` (1–31 bytes, printable, no edge spaces, UTF-8 passed through);
+store/report/persist-across-reset/reject/clear/idempotent-clear all verified
+against the board. No restart on either direction, because nothing running
+reads the handle — the SPA stamps it into exports (FR-REG-1) and `/info`
+serves it back.*
+
 **Step 4 — the SPA (FR-UI-1/2/8).** The bulk, and a web application rather than
 firmware. The acceptance test is the mapping flow: fire a lamp from the test
 card, bind it by clicking, watch the live view confirm it.

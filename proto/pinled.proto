@@ -304,6 +304,16 @@ message DeviceInfo {
   string build_id = 9;
 }
 
+// The author handle (FR-REG-1): optional attribution the SPA stamps into
+// exported profiles. Lives in NVS beside the Wi-Fi credentials — the two
+// small boot-time settings FR-CFG-7 keeps out of the filesystem — and no
+// device function depends on it. PUT stores it (no restart; nothing running
+// reads it), DELETE clears it, GET /info reports it. Ownership and
+// verification are cloud-side associations, deliberately not here.
+message AuthorHandle {
+  string handle = 1;
+}
+
 // Result of applying a configuration. Applying is write-file-then-restart
 // (FR-CFG-16), so in practice the SPA sees the connection drop and this
 // message is what it gets on reconnect.

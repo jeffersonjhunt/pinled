@@ -50,7 +50,8 @@ add_library(pinled_schema STATIC
         "${SCHEMA_DIR}/src/pinled_apply.cpp"
         "${SCHEMA_DIR}/src/pinled_profiling.cpp"
         "${SCHEMA_DIR}/src/pinled_indicator.cpp"
-        "${SCHEMA_DIR}/src/pinled_ota_state.cpp")
+        "${SCHEMA_DIR}/src/pinled_ota_state.cpp"
+        "${SCHEMA_DIR}/src/pinled_identity.cpp")
 target_include_directories(pinled_schema PUBLIC "${SCHEMA_DIR}/include")
 
 enable_testing()
@@ -76,6 +77,7 @@ target_link_libraries(test_live PRIVATE pthread)
 pinled_add_test(test_profiling)
 pinled_add_test(test_indicator)
 pinled_add_test(test_ota_state)
+pinled_add_test(test_identity)
 
 # --- nanopb-dependent tests --------------------------------------------------
 #

@@ -63,6 +63,8 @@ pinled.v1.DeviceInfo.author_handle    max_size:32
 pinled.v1.DeviceInfo.running_slot     max_size:8
 pinled.v1.DeviceInfo.build_id         max_size:17
 pinled.v1.ApplyResult.message         max_size:96
+# Same bound as DeviceInfo.author_handle, which reports it back.
+pinled.v1.AuthorHandle.handle         max_size:32
 
 # The live frame is built and sent every ~33 ms, so it must not carry a
 # 256-byte static buffer around in a struct. Encode it with a callback that
