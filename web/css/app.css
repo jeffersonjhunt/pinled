@@ -816,6 +816,11 @@
 /* ------------------------------------------------------------ ADDITIONS */
 /* Everything below exists only in the real app. */
 
+/* The app toggles visibility with the `hidden` attribute, and any author
+ * `display:` silently beats the UA's [hidden] rule — the connect overlay
+ * (display:flex) stayed covering a fully working app. Bench-found. */
+[hidden] { display: none !important; }
+
 .connect {
   position: fixed; inset: 0; z-index: 40;
   display: flex; align-items: center; justify-content: center;
