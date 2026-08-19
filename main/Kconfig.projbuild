@@ -334,6 +334,17 @@ menu "pinled configuration"
                 long enough to cross a room, short enough that a forgotten
                 upload cannot sit armed all afternoon.
 
+        config PINLED_BUNDLE_URL
+            string "SPA bundle base URL (empty = none)"
+            default ""
+            help
+                Where the device-served shell loads the application from
+                (FR-UI-1, WEBUI.md §1) — an https:// base URL whose
+                index.html is the SPA, typically an S3 bucket. The device
+                itself never fetches it (FR-UI-2); only the visitor's
+                browser does. Empty means no cloud bundle exists yet: the
+                shell explains the standalone path (FR-UI-8) instead.
+
         config PINLED_HOSTNAME
             string "mDNS hostname"
             default "pinled"

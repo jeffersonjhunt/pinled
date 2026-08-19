@@ -280,6 +280,62 @@ namespace ooe::pinled
             return httpd_resp_send(req, kPortalPage, HTTPD_RESP_USE_STRLEN);
         }
 
+        // --- the SPA shell (FR-UI-1) ---------------------------------------
+        //
+        // The one page the device serves in station mode, and the reason it
+        // serves any page at all: an https:// cloud page cannot call an
+        // http:// device (mixed content, unconditional), but an http:// page
+        // may pull https:// assets freely — so the ORIGIN must be the device
+        // and the weight may live in the cloud (WEBUI.md §1). The shell
+        // fetches the bundle's index and writes it into this origin with a
+        // <base> pointing back at the bundle, so every asset resolves there
+        // while every API call stays here.
+        //
+        // No bundle configured, or the fetch fails (offline, S3 gone, bucket
+        // CORS wrong): the shell says exactly that and points at the
+        // standalone path (FR-UI-8), which is the offline story working as
+        // designed rather than a degraded mode.
+        constexpr char kShellPage[] =
+            "<!doctype html><meta charset=utf-8>"
+            "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+            "<title>pinled</title>"
+            "<style>body{font:15px system-ui,sans-serif;margin:0;padding:32px;"
+            "background:#12100D;color:#EDE6DA}h1{font-size:20px}"
+            "a{color:#FFB23F}code{color:#A89C8E}p{max-width:34em}</style>"
+            "<h1>pinled</h1><div id=s>Loading the app\xE2\x80\xA6</div>"
+            "<script>"
+            "var B='" CONFIG_PINLED_BUNDLE_URL "';"
+            "function offline(msg){document.getElementById('s').innerHTML="
+            "'<p>'+msg+'</p>'"
+            "+'<p>The device API is up at <code>'+location.origin+'/api/v1/</code>'"
+            "+' \xE2\x80\x94 this page just could not fetch the app.</p>'"
+            "+'<p>Offline path (FR-UI-8): download the standalone app once,'"
+            "+' open its <code>index.html</code> from disk, and point it at'"
+            "+' <code>'+location.origin+'</code>.</p>'}"
+            "if(!B){offline('No cloud bundle is configured in this firmware.')}"
+            "else{fetch(B+'/index.html').then(function(r){"
+            "if(!r.ok)throw new Error('HTTP '+r.status);return r.text()})"
+            ".then(function(html){"
+            "document.open();"
+            "document.write(html.replace(/<head>/i,"
+            "'<head><base href=\"'+B+'/\">'));"
+            "document.close()})"
+            ".catch(function(e){offline('The app bundle at <code>'+B+"
+            "'</code> did not load ('+e.message+').')})}"
+            "</script>";
+
+        /// "/" is modal on the network state: a provisioned device serves
+        /// the app shell, an unprovisioned one (or a fallback SoftAP) serves
+        /// the setup portal — the page a person standing there needs next.
+        esp_err_t get_root(httpd_req_t *req)
+        {
+            if (g_ctx.net != nullptr && g_ctx.net->awaiting_provisioning())
+                return get_portal(req);
+            add_cors(req);
+            httpd_resp_set_type(req, "text/html");
+            return httpd_resp_send(req, kShellPage, HTTPD_RESP_USE_STRLEN);
+        }
+
         /// Every OS probes a different URL to decide whether a network is
         /// captive. Redirecting them all is what makes the phone pop the page
         /// by itself instead of the user being told to type an IP address.
@@ -1213,7 +1269,7 @@ namespace ooe::pinled
             // The portal itself, plus the URLs each OS probes to decide a
             // network is captive. Registering them explicitly rather than with
             // a wildcard keeps the API paths unambiguous.
-            {"/", HTTP_GET, get_portal},
+            {"/", HTTP_GET, get_root},
             {"/generate_204", HTTP_GET, redirect_to_portal},          // Android
             {"/gen_204", HTTP_GET, redirect_to_portal},               // Android, older
             {"/hotspot-detect.html", HTTP_GET, redirect_to_portal},   // iOS, macOS
