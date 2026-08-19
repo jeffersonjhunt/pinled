@@ -561,3 +561,29 @@ are 64 KB aligned as required. (`spiffs` is the subtype LittleFS uses too.)
 3. **Multi-machine users.** A device ID exists, but there is no stated model
    for one account owning several devices.
 4. **Signed firmware** — deferred, see §5.
+
+## 9. Recorded future features
+
+Stated by the project owner 2026-08-19, after the first live mapping session.
+Recorded as intent, not yet designed — each one touches the wiring model, so
+the schema thinking (§3) has to happen before any of them is built. None are
+destructive: `WiringEntry` and `LampEntry` grow by optional fields or by
+repetition, which protobuf absorbs.
+
+1. **Multiple LEDs per channel** — one lamp tap driving several pixels (a
+   pop bumper skirt, a backpanel flood). Today `wiring[]` is one channel →
+   one `led_index`; the natural shape is repeating the entry per LED, which
+   `resolve()` currently rejects ("same channel twice"), so the rule and its
+   reason both need revisiting.
+2. **One LED fed by multiple channels** — e.g. an RGB pixel standing in for
+   two adjacent inserts, or a fixture lit by whichever of two circuits is
+   active. Needs a mixing rule (max? additive?) before it means anything.
+3. **Colour-to-colour fades** — a lamp whose colour moves with reconstructed
+   level (dim = deep red, bright = amber), instead of one colour scaled by
+   brightness. Two colours and a curve per `LampEntry`.
+4. **Lamp and/or channel groups** — name a set once (GI strings are the
+   obvious case), style it as one thing, maybe bind it as one thing in the
+   learn flow.
+
+The first mapping session also showed the want ordering: get colour
+*correct* (§9 prelude: byte order, gamma) before making colour *expressive*.
