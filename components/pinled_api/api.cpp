@@ -939,6 +939,16 @@ namespace ooe::pinled
 
         // --- identity (FR-REG-1) -----------------------------------------
 
+        // The rule's bound (pinled_identity.h) and the schema's field size
+        // (pinled.options, both AuthorHandle.handle and DeviceInfo's
+        // author_handle) are the same number declared in different files;
+        // drift between them would truncate a stored handle or refuse a
+        // legal one, silently. Pinned here, where all three are visible.
+        static_assert(sizeof(pinled_v1_AuthorHandle::handle) == kAuthorHandleMax + 1,
+                      "pinled.options AuthorHandle.handle disagrees with kAuthorHandleMax");
+        static_assert(sizeof(pinled_v1_DeviceInfo::author_handle) == kAuthorHandleMax + 1,
+                      "pinled.options DeviceInfo.author_handle disagrees with kAuthorHandleMax");
+
         /// Store the author handle. No restart: nothing running reads it —
         /// it exists so the SPA can stamp exported profiles, and GET /info
         /// reports it back. Ownership and verification are cloud-side.
