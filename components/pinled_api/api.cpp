@@ -29,7 +29,7 @@
 #include "credentials.h"
 #include "pinled_resolve.h"
 #include "ota_manager.h"
-#include "esp_ota_ops.h" // for ESP_ERR_OTA_VALIDATE_FAILED in post_ota
+#include "esp_ota_ops.h" // ESP_ERR_OTA_VALIDATE_FAILED, esp_ota_get_running_partition
 
 namespace ooe::pinled
 {
@@ -502,6 +502,13 @@ namespace ooe::pinled
             info.geometry.channels_per_module =
                 static_cast<uint32_t>(g_ctx.running->channels_per_module);
             info.geometry.led_count = static_cast<uint32_t>(g_ctx.running->led_count);
+
+            // Which slot is actually executing, so a confirmed OTA is
+            // checkable from the API rather than the boot log (§5e step 6).
+            const esp_partition_t *slot = esp_ota_get_running_partition();
+            std::snprintf(info.running_slot, sizeof(info.running_slot),
+                          "%.*s", static_cast<int>(sizeof(info.running_slot)) - 1,
+                          slot ? slot->label : "?");
 
             info.ota_pending = false;
             info.ota_confirm_seconds_left = 0;

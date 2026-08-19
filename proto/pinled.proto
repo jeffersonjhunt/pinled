@@ -288,6 +288,11 @@ message DeviceInfo {
   // confirm-after-upload, and they were never once reported true.
   bool   ota_pending               = 6;
   uint32 ota_confirm_seconds_left  = 7;
+
+  // Which app partition this firmware is running from ("ota_0" or "ota_1").
+  // Added 2026-08-19: it is how the bench (and later the SPA) confirms a
+  // press actually switched slots, without reading the boot log.
+  string running_slot = 8;
 }
 
 // Result of applying a configuration. Applying is write-file-then-restart
