@@ -24,6 +24,8 @@
  * | POST | `/api/v1/profiler` | none → re-arm, `ProfilerStatus` |
  * | POST | `/api/v1/ota` | raw image bytes → staged, `ApplyResult` |
  * | DELETE | `/api/v1/ota` | none → discard staged, `ApplyResult` |
+ * | PUT | `/api/v1/author` | `AuthorHandle` → stored, no restart |
+ * | DELETE | `/api/v1/author` | none → cleared |
  *
  * @par `profile` and `profiler` are different things
  * `/profile` is the stored `MachineProfile` document — which lamps are named

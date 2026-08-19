@@ -76,18 +76,20 @@ and therefore sends `Origin: null`, which only a wildcard satisfies. There is
 no device-side auth to protect, because there is nothing on the device worth
 protecting — the machine is on the owner's LAN and the payload is lamp colours.
 
-`/api/v1/…`, JSON except where noted:
+`/api/v1/…`, protobuf bodies throughout (§2a). This table matches the shipped
+firmware as of 2026-08-19; `api.h` carries the authoritative copy.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `info` | device id, firmware version, **API version**, channel geometry, author handle |
-| `GET`/`PUT` | `config` | install config (§3) |
-| `GET`/`PUT` | `profile` | machine profile (§3) |
-| `GET` | `wifi/scan` | visible SSIDs |
-| `PUT` | `wifi` | credentials; device joins and reports its address |
+| `GET` | `info` | device id, firmware version + build id, **API version**, running slot, geometry, author handle, OTA window |
+| `GET`/`PUT`/`DELETE` | `config` | install config (§3); DELETE reverts to build defaults |
+| `GET`/`PUT`/`DELETE` | `profile` | machine profile (§3); DELETE reverts to unstyled |
+| `GET` | `scan` | visible SSIDs, cached at boot in SoftAP mode |
+| `POST`/`DELETE` | `provision` | credentials → join; forget → SoftAP (FR-UI-7) |
+| `GET`/`POST` | `profiler` | drive-scheme classifier: status / re-arm |
+| `PUT`/`DELETE` | `author` | attribution handle in NVS (FR-REG-1); no restart |
+| `POST`/`DELETE` | `ota` | stage firmware into the inactive slot / discard it; pending state and countdown in `info`; only the physical button boots it (FR-OTA-2) |
 | `WS` | `live` | live per-channel state, ~30 Hz (§4) |
-| `GET` | `ota/status` | armed / not armed, current version |
-| `POST` | `ota` | firmware image, `application/octet-stream` |
 
 ### API versioning is not optional here
 

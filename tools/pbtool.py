@@ -217,6 +217,25 @@ def cmd_ota(args) -> int:
     return 0
 
 
+def cmd_author(args) -> int:
+    """Store or clear the author handle (FR-REG-1). No restart either way."""
+    url = args.url.rstrip("/")
+    if not url.endswith("/author"):
+        url += "/api/v1/author"
+    if args.clear:
+        body = _http(url, method="DELETE")
+    else:
+        if args.handle is None:
+            _die("give a handle, or --clear")
+        msg = _message("AuthorHandle")
+        msg.handle = args.handle
+        body = _http(url, data=msg.SerializeToString(), method="PUT")
+    result = _message("ApplyResult")
+    result.ParseFromString(body)
+    print(_to_json(result))
+    return 0
+
+
 def cmd_ota_discard(args) -> int:
     url = args.url.rstrip("/")
     if not url.endswith("/ota"):
@@ -516,6 +535,12 @@ def main(argv: list[str] | None = None) -> int:
     od = sub.add_parser("ota-discard", help="discard a staged image (DELETE /api/v1/ota)")
     od.add_argument("url")
     od.set_defaults(func=cmd_ota_discard)
+
+    au = sub.add_parser("author", help="store or clear the author handle (FR-REG-1)")
+    au.add_argument("url", help="device base URL, or .../api/v1/author")
+    au.add_argument("handle", nargs="?", help="the handle to store")
+    au.add_argument("--clear", action="store_true", help="forget the stored handle")
+    au.set_defaults(func=cmd_author)
 
     e = sub.add_parser("encode", help="JSON on stdin -> protobuf on stdout")
     e.add_argument("type")
