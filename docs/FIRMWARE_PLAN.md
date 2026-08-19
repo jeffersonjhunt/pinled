@@ -1006,6 +1006,21 @@ serves it back.*
 firmware. The acceptance test is the mapping flow: fire a lamp from the test
 card, bind it by clicking, watch the live view confirm it.
 
+*Landed 2026-08-19 on `feat/webui`, pending the acceptance flow on the bench.
+`web/` holds the app — no build step, classic scripts, protobuf.js parsing
+the `.proto` at runtime, the mockup's approved design as the stylesheet. The
+firmware side is one page: `GET /` serves the setup portal while
+unprovisioned and the shell otherwise, which loads the bundle from
+`PINLED_BUNDLE_URL` (empty for now — no cloud exists — so it explains the
+standalone `file://` path, FR-UI-8). Everything testable without eyes was
+tested from the container: `test/web/api_check.js` (17 wire-level checks
+against the board, live socket included), the apply path end-to-end (bind →
+PUT → restart → verify → byte-identical restore), and a jsdom smoke run
+that boots the real app against the real board and drives the learn flow
+through DOM events — which also caught the one bug of the session: absent
+document sections rendered as `0 Hz` instead of "build default". What
+remains is the human half: the §4 mapping flow with the test card.*
+
 ## 6. Test strategy
 
 Written when the repo had no tests at all. As of 2026-08-15 there are

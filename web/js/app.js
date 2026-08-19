@@ -485,8 +485,18 @@
                            esc(r[1]) + "</dd></dl>";
                 }).join("") + "</div>";
         }
-        var g = c.geometry || {}, p = c.pins || {}, sc = c.scan || {},
-            r = c.render || {};
+        // Absence means "inherit the build default" throughout the document
+        // (the append-only rule) — showing an absent value as 0 Hz would be
+        // reporting a configuration nobody wrote.
+        var kDefault = "build default";
+        function v(section, field, fmt) {
+            if (!section || section[field] === undefined ||
+                section[field] === null || section[field] === 0)
+                return kDefault;
+            return fmt ? fmt(section[field]) : String(section[field]);
+        }
+        var g = c.geometry || {}, sc = c.scan, p = c.pins, r = c.render;
+        var gpio = function (x) { return "GPIO " + x; };
         $("install-cards").innerHTML =
             card("Geometry", [
                 ["Modules", g.numModules || 0],
@@ -494,23 +504,25 @@
                 ["Total channels", channelCount()],
                 ["LEDs in string", g.ledCount || 0]]) +
             card("Pins", [
-                ["CLK", "GPIO " + p.clk], ["/PL", "GPIO " + p.pl],
-                ["DATA", "GPIO " + p.data], ["LED string", "GPIO " + p.led]]) +
+                ["CLK", v(p, "clk", gpio)], ["/PL", v(p, "pl", gpio)],
+                ["DATA", v(p, "data", gpio)], ["LED string", v(p, "led", gpio)]]) +
             card("Scan", [
-                ["Sample rate", (sc.sampleRateHz || 0) + " Hz"],
-                ["Chain clock", (sc.spiHz || 0) + " Hz"],
-                ["SPI mode", sc.spiMode || 0],
-                ["Active polarity", sc.activeLow ? "low" : "high"]]) +
+                ["Sample rate", v(sc, "sampleRateHz", function (x) { return x + " Hz"; })],
+                ["Chain clock", v(sc, "spiHz", function (x) { return x + " Hz"; })],
+                ["SPI mode", v(sc, "spiMode")],
+                ["Active polarity", sc ? (sc.activeLow ? "low" : "high") : kDefault]]) +
             card("Render", [
-                ["Refresh", (r.refreshHz || 0) + " Hz"],
-                ["Gamma", ((r.gammaX100 || 0) / 100).toFixed(2)],
-                ["Brightness cap", (r.brightnessCap || 0) + " / 255"],
-                ["Colour order", String(r.colorOrder || "GRB")
-                    .replace("COLOR_ORDER_", "").replace("UNSPECIFIED", "GRB")]]);
+                ["Refresh", v(r, "refreshHz", function (x) { return x + " Hz"; })],
+                ["Gamma", v(r, "gammaX100", function (x) { return (x / 100).toFixed(2); })],
+                ["Brightness cap", v(r, "brightnessCap", function (x) { return x + " / 255"; })],
+                ["Colour order", r && r.colorOrder ? String(r.colorOrder)
+                    .replace("COLOR_ORDER_", "").replace("UNSPECIFIED", "GRB")
+                    : kDefault]]);
         $("rail-foot").innerHTML =
-            "scan <b>" + ((sc.sampleRateHz || 0) / 1000).toFixed(1) +
-            " kHz</b><br>render <b>" + (r.refreshHz || 0) +
-            " Hz</b><br>live <b><span id='foot-rate'>—</span></b>";
+            "scan <b>" + (sc && sc.sampleRateHz
+                ? (sc.sampleRateHz / 1000).toFixed(1) + " kHz" : "default") +
+            "</b><br>render <b>" + (r && r.refreshHz ? r.refreshHz + " Hz" : "default") +
+            "</b><br>live <b><span id='foot-rate'>—</span></b>";
     }
 
     // -------------------------------------------------------- files & JSON --
