@@ -314,24 +314,26 @@ instead of quietly corrupting every time constant:
    to spare (§5.1 step 0). *(**Done, steps 0–8**, and verified on the 8 MB
    board after the swap: 169 host cases, and 11/11 on the bench checklist
    including the destructive rescue step.)*
-8. **M4 — UI and updates.** SPA shell served from the device, bundle in S3
-   (FR-UI-1/2), API versioning (FR-UI-4), standalone offline bundle (FR-UI-8),
-   browser-mediated OTA with button arming (FR-OTA-1/2/3), device identity and
-   author attribution (FR-REG-1). The mapping flow is the acceptance test:
-   fire a lamp from the test card and bind it by clicking.
+8. **M4 — UI and updates.** Status indicator (FR-IND-1..8), browser-mediated
+   OTA with confirmation by button (FR-OTA-1/2/3/6/7), API versioning
+   (FR-UI-4), device identity and author attribution (FR-REG-1), SPA shell
+   served from the device with the bundle in S3 (FR-UI-1/2) and a standalone
+   offline bundle (FR-UI-8). The mapping flow is the acceptance test: fire a
+   lamp from the test card and bind it by clicking. Ordered in §5.2 below.
 
-   **No longer waiting on hardware.** The FN8C0 went in 2026-08-15, so `ota_1`
-   exists — 3 MB of empty second slot, which is what FR-OTA-1 needs and what
-   nothing before now could provide. What M4 adds to the firmware is small: one
-   endpoint (`POST /ota`), its arming, and an author handle in NVS. The rest is
+   **Nothing is outstanding before it starts.** The FN8C0 went in 2026-08-15,
+   so `ota_1` exists — 3 MB of empty second slot, which is what FR-OTA-1 needs
+   and what nothing before now could provide. The three design questions M4
+   was waiting on all closed on 2026-08-16: lamp numbering was never a schema
+   question, an ill-fitting profile is applied partially and the shortfall
+   reported by the UI (`WEBUI.md` §8), and the arming gesture needed neither a
+   third duration nor a second pin — a short press **confirms a staged image
+   when one is staged and re-profiles otherwise** (FR-OTA-7, HW-16), with the
+   indicator carrying the mode (FR-IND-3).
+
+   What M4 adds to the firmware is still small: the indicator, one endpoint
+   (`POST /ota`) and its confirmation, and an author handle in NVS. The rest is
    a web application.
-
-   Two things to settle *before* writing much of it, because both can reach
-   back into the schema: how lamps are numbered across manufacturers, and what
-   an imported profile that does not fit the install should do (`WEBUI.md` §8).
-   And one mechanical snag: FR-OTA-2 wants a physical arming press, but GPIO 0
-   already has both durations spoken for — short re-profiles, long erases the
-   network — so arming needs a third gesture or a second pin.
 9. **M5 — polish.** Gamma/dither tuning, docs, release BOM.
 
 ### 5.1 M3, in order
@@ -925,6 +927,64 @@ bugs were in the parts that looked trivial:
 Both are the same mistake, and it is the one worth remembering from this step:
 a feature verified in the state convenient to reach. Holding the button for
 five seconds exercises neither the threshold nor the click path.
+
+### 5.2 M4, in order
+
+Same two principles as §5.1: the host-testable part lands before anything that
+needs a board, and the prerequisite lands before the thing that depends on it.
+The visible milestone is last again, because it is the least risky part and the
+largest.
+
+**Step 1 — the status indicator (FR-IND-1..8, HW-15).** First, and not because
+it is the smallest. It is the *prerequisite for step 2*: FR-OTA-7 makes the
+button modal, and HW-16 accepts that only because FR-IND-3 makes the mode
+visible. A modal control with no indicator is the trap the requirement was
+written to avoid, so the indicator cannot follow the modality that needs it.
+
+It is also the step that makes everything after it observable. The bench has
+had exactly one feedback channel — a serial console that resets the board when
+you open it — and every bring-up session so far has been read through it. A
+device that says what it is doing while standing on a bench with no cable
+changes how the remaining steps are tested.
+
+Split so the thinking is host-testable:
+
+- **Pattern generation is pure logic**: a state plus an elapsed-milliseconds
+  value in, a colour out. No IDF, no timer, no LED. That is where the fault
+  numbering (FR-IND-4), the accelerating stage countdown (FR-IND-3), the press
+  blip (FR-IND-7) and the hold ramp (FR-IND-8) live, and all of it can be
+  asserted on the host by stepping a clock — including the cases that are
+  tedious to stage on hardware, like two faults active at once resolving to the
+  lowest number.
+- **The driver is thin**: one RMT channel, one pixel, a low-priority task at a
+  fixed cadence sampling the generator (FR-IND-6). On the QT Py the pixel is
+  GPIO 39 with power-enable on 38.
+- **The state source is an atomic word** written by whoever changes state and
+  read by the indicator task. A dropped update is of no consequence, which is
+  what FR-IND-6 says, and it keeps the indicator off every hot path.
+
+Acceptance is by eye and by a host suite: every state distinguishable by
+rhythm with the colour ignored (FR-IND-2), and brightness `0` genuinely dark
+(FR-IND-5).
+
+**Step 2 — OTA (FR-OTA-1/2/3/6/7).** `POST /ota` streaming into the inactive
+slot, staged-not-booted, a ~30 s confirmation window readable from the API,
+short press confirms, expiry discards. Rollback enabled, with the image marking
+itself valid once it is serving the API (FR-OTA-6). The staging state machine
+is the profiler's atomic-phase pattern again — a phase and a generation packed
+in one word, so a second upload during a pending window is a refusal and not a
+silent replacement — and the button task already knows how to ask "what does a
+short press mean right now".
+
+**Step 3 — identity and versioning (FR-UI-4, FR-REG-1).** API version in
+`/api/v1/info`, distinct from the firmware version; device ID from the eFuse
+MAC with no provisioning step; an optional author handle in NVS. Small, no
+hardware, no dependencies, and it wants doing before the SPA has to negotiate
+with it.
+
+**Step 4 — the SPA (FR-UI-1/2/8).** The bulk, and a web application rather than
+firmware. The acceptance test is the mapping flow: fire a lamp from the test
+card, bind it by clicking, watch the live view confirm it.
 
 ## 6. Test strategy
 

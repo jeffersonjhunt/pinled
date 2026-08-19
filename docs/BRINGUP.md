@@ -464,6 +464,82 @@ behave identically on the FN8C0 as on the FH4R2 — same 750 ms window, same
 7500 frames, 30.2 Hz push with no sequence gaps, the locked channel still
 locked. The MCU swap changed the flash size and the MAC and nothing else.
 
+## 5d. Verifying the status pixel
+
+The indicator is the one part of this firmware whose correctness cannot be
+read off a log: the log says what the pattern generator was *asked* for, and
+the question is what a person standing at the board actually sees. The
+pattern generation itself is covered by 31 host cases, so what is left here is
+genuinely only the eye and the hand — is it lit, is it the right colour, does
+the button feel acknowledged.
+
+On the QT Py bench board the pixel is the onboard NeoPixel: **GPIO 39, with
+power-enable on GPIO 38**. It is dark without 38 driven high, and that looks
+exactly like a dead driver — check the boot line before suspecting anything
+else:
+
+```
+I (237) indicator: status pixel on GPIO 39 (power enabled) (RMT), brightness 64/255, byte order GRB (default)
+```
+
+RMT, not I2S. The playfield string uses zorxx/neopixel, which is an I2S
+driver, and the S3 has two I2S controllers against four RMT channels — the
+first version of this shared the I2S driver and the board complained on the
+first boot (`i2s controller 0 has been occupied`). If that warning ever comes
+back, something has moved the status pixel back onto the strip's driver.
+
+| # | Do | Expect |
+|---|---|---|
+| 1 | Power on and watch from reset. | **White** while booting, then **dim green** once the API line prints. The whole boot is about 3 s, so the white is brief. |
+| 2 | Nothing, for a minute. | **Perfectly still.** FR-IND-3: a healthy machine does not move. Anything blinking here is a fault, and the log names it. |
+| 3 | Pull the network (or boot with the router down). | **Green, breathing** at about 0.5 Hz — works, not reachable. It never goes fully dark, which is what separates it from a blink. |
+| 4 | Hold BOOT the full 5 s, let it reboot unprovisioned. | **Blue, fast blink.** Blue rather than green because it is a mode awaiting action, and it keeps the two states you must tell apart off the red/green axis entirely (FR-IND-2). |
+| 5 | Click BOOT — a normal press. | An **80 ms white blip the instant the press registers**, then the profiler pass's own brief white flash. |
+| 6 | Tap BOOT faster than 150 ms. | **Nothing.** The absence is the answer (FR-IND-7); the log gives the duration. |
+| 7 | Hold BOOT and watch, releasing at ~4 s. | From 1 s: **red, blinking faster each second.** Release and it returns to whatever it was showing, with no trace of the ramp. |
+| 8 | `PINLED_STATUS_BRIGHTNESS=0`, rebuild, boot — or set `indicator.brightness: 0` in the install config, no rebuild needed (FR-IND-5). | **Dark, in every state including a fault.** A backbox the owner asked to be dark stays dark; the API still reports the fault. The Kconfig value is only the build default; a stored install overrides it a moment after the store loads, so with both set the stored one wins. |
+
+Step 5 and step 6 are the pair that matters, and they have to be run together.
+Either alone is meaningless: a blip that fires on every press including the
+ones too short to act on would answer nothing, and silence on every press
+would too. What makes the acknowledgement useful is that it fires **exactly
+when the press was accepted** — which is why it is wired to the debounce
+threshold in `rescue.cpp` and not to `on_short_press`, where it would only
+fire on release once the outcome was already known.
+
+Step 7's red deliberately overlaps the fault colour. It is a destructive
+action one second away and red is what that deserves; it is distinguishable
+because it only happens while the button is held, and because it accelerates.
+
+### Reading a fault
+
+*N* red blinks, a 1.2 s pause, repeat. Counting starts at **2** — one blink
+and a pause reads as a heartbeat rather than a count — and where several are
+active the **lowest** is shown, with `GET /api/v1/info` reporting all of them.
+
+| Blinks | Class | Where to look first |
+|---|---|---|
+| 2 | Sense bus | `CLK INH` floating, or a missing `QH`→`SER`. The top two rev D wiring faults. |
+| 3 | Configuration | A stored document was rejected — CRC, decode, or a value out of range. Running on defaults; re-apply from the UI. |
+| 4 | LED string | Strip init failed or the geometry is impossible. Data line and LED count. |
+| 5 | Storage | The filesystem would not mount or would not write. Run `PINLED_STORE_SELFTEST`. |
+| 6 | Internal | Out of memory, or a task or the HTTP server would not start. A firmware bug, not a wiring fault. |
+
+Two of these are easy to stage and worth staging once, because a fault path
+nobody has ever seen is a fault path nobody has ever seen:
+
+- **3, configuration**: corrupt a stored document — `printf 'x' | dd of=... conv=notrunc` on `/cfg/install.pb` through the API, or seed a deliberately bad fixture. The device should come up on defaults, blinking 3, with the API still answering.
+- **5, storage**: not currently reachable without physically breaking the filesystem, which is why it is listed last.
+
+**Classes 2, 4 and 6 are not reachable today**, and that is a real gap rather
+than an oversight in this table: every path that would raise them sits behind
+an `ESP_ERROR_CHECK` in `Main::init()`, which panics before the pixel can show
+anything. A board that cannot bring up its scan hardware currently boot-loops
+rather than sitting there blinking twice, which is the opposite of what
+FR-IND-4 asks for — "red means *not doing what you asked*", not "dead".
+Making those failures survivable is its own change, because each one needs the
+subsystems downstream of it to tolerate an uninitialised peer.
+
 ## 6. Tooling traps
 
 These are not hardware faults, but they present as one.
@@ -543,10 +619,14 @@ Superseded by rev D — do not carry these forward:
 - Counter/address-decode results, `/MR` clearing, mux drive. No such parts.
 - **Mode 0 and the 74HC14 in the `CLK` path.** That inverter existed to make the
   rig's '161 advance on the falling edge. Rev D handles phase with the SPI mode
-  and needs no inverter — the expected mode is **2**, and it is unverified.
+  and needs no inverter — the mode is **2**, measured on the rev D rig
+  2026-08-06/07 and recorded below.
 - **The 1–16 MHz clock ceiling and the ~55–60 ns endpoint delay.** Measured on
-  HC parts in a counter+mux topology; says nothing about a '165 chain. Re-run
-  `PINLED_SPI_SWEEP` on the new rig.
+  HC parts in a counter+mux topology; says nothing about a '165 chain. The
+  sweep has since been re-run on the rev D rig: 4 MHz qualified on 74HC165,
+  and the SN74LVC165 rebuild matched its reference at every rate from 1 to
+  40 MHz (§4b). Neither result raises HW-3's 4 MHz default, for the reasons
+  §4b gives.
 
 ### Outstanding for rev D
 

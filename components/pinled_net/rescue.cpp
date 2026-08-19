@@ -29,6 +29,7 @@ namespace ooe::pinled
             uint32_t hold_ms;
             void (*on_short_press)(void *);
             void *arg;
+            ButtonFeedback feedback;
         };
 
         /// 20 Hz. A person pressing a button thinks in tens of milliseconds,
@@ -83,6 +84,11 @@ namespace ooe::pinled
                         ESP_LOGI(TAG, "press of %u ms was too short; hold it for %u ms",
                                  (unsigned)held, (unsigned)kShortPressMinMs);
                     }
+                    // Only on an actual release: while the button sits idle
+                    // this branch runs every poll, and the contract is one
+                    // zero per release, not twenty a second forever.
+                    if (held > 0 && cfg.feedback.held)
+                        cfg.feedback.held(cfg.feedback.arg, 0);
                     held = 0;
                     announced = 0;
                     continue;
@@ -92,7 +98,19 @@ namespace ooe::pinled
                 // were two independent constants that happened to agree, so
                 // changing the poll rate silently rescaled every threshold
                 // measured against `held`.
+                const uint32_t before = held;
                 held += kPollMs;
+
+                // FR-IND-7, and the reason this is here rather than beside the
+                // short-press callback below: the acknowledgement belongs to
+                // the press, not to what the press turns out to mean. At this
+                // instant that is still unknown — this could equally be the
+                // first tenth of a hold that erases the network.
+                if (before < kShortPressMinMs && held >= kShortPressMinMs &&
+                    cfg.feedback.accepted)
+                    cfg.feedback.accepted(cfg.feedback.arg);
+                if (cfg.feedback.held)
+                    cfg.feedback.held(cfg.feedback.arg, held);
 
                 // Counted down out loud, because the only other feedback is a
                 // reboot and there is no way to tell "holding it long enough"
@@ -114,7 +132,8 @@ namespace ooe::pinled
     } // namespace
 
     esp_err_t rescue_button_start(int gpio, uint32_t hold_ms,
-                                  void (*on_short_press)(void *), void *arg)
+                                  void (*on_short_press)(void *), void *arg,
+                                  const ButtonFeedback *feedback)
     {
         if (gpio < 0)
             return ESP_ERR_INVALID_ARG;
@@ -128,7 +147,8 @@ namespace ooe::pinled
             return err;
 
         auto *args = new (std::nothrow) Args{static_cast<gpio_num_t>(gpio), hold_ms,
-                                             on_short_press, arg};
+                                             on_short_press, arg,
+                                             feedback ? *feedback : ButtonFeedback{}};
         if (args == nullptr)
             return ESP_ERR_NO_MEM;
 

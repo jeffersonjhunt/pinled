@@ -38,6 +38,40 @@ menu "pinled configuration"
             help
                 A3 on the QT Py ESP32-S3; IO8 on the S3-DevKitC-1.
 
+        config PINLED_STATUS_GPIO
+            int "Status pixel data GPIO (-1 = not fitted)"
+            default 39
+            range -1 48
+            help
+                The QT Py ESP32-S3's onboard NeoPixel. On the mainboard this is
+                a WS2812-class part of its own (HW-15).
+
+                Its own GPIO, and never the first pixel of the playfield string
+                (FR-IND-1): the string is the product and is routed out to the
+                playfield, whereas this has to be readable at the board.
+
+                -1 disables the indicator entirely. Everything else still runs
+                -- the pixel is feedback, not function.
+        config PINLED_STATUS_POWER_GPIO
+            int "Status pixel power-enable GPIO (-1 = always powered)"
+            default 38
+            range -1 48
+            help
+                The QT Py gates power to its onboard pixel and it is dark
+                without this driven high, which looks exactly like a dead
+                driver. Set -1 where the pixel is permanently powered.
+        config PINLED_STATUS_BRIGHTNESS
+            int "Status pixel brightness (0-255, 0 = off)"
+            default 64
+            range 0 255
+            help
+                The build default. FR-IND-5 makes this a stored setting, so a
+                configured install overrides it; this is what an unprovisioned
+                board and a board running on defaults show.
+
+                Low on purpose: the board may sit in a backbox and the
+                indicator must never compete with the playfield.
+
         # Note: the POC defaults (25/27/26/15) are unusable here. GPIO 26 and 27
         # are SPI flash pins on the ESP32-S3, and 15 and 25 are not broken out
         # on this board.

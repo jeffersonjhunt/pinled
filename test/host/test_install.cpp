@@ -45,6 +45,7 @@ namespace
         c.decay_ms = 40.0f;
         c.gamma = 2.2f;
         c.led_count = 16;
+        c.status_brightness = 77;
         return c;
     }
 
@@ -373,6 +374,51 @@ TEST(a_tau_that_cannot_be_represented_is_rejected)
     CHECK(install_to_machine(in, out, fallback()) == InstallStatus::ValueOutOfRange);
 }
 
+// --------------------------------------------------------- status indicator --
+
+TEST(indicator_brightness_reaches_the_device_record)
+{
+    pinled_v1_InstallConfig in = blank();
+    in.has_indicator = true;
+    in.indicator.brightness = 200;
+
+    MachineConfig out{};
+    CHECK(install_to_machine(in, out, fallback()) == InstallStatus::Ok);
+    CHECK_EQ(out.status_brightness, static_cast<uint8_t>(200));
+}
+
+TEST(an_absent_indicator_message_inherits_the_build_default)
+{
+    // The additive rule: a document written before the message existed keeps
+    // whatever the build was already showing.
+    const pinled_v1_InstallConfig in = blank();
+    MachineConfig out{};
+    CHECK(install_to_machine(in, out, fallback()) == InstallStatus::Ok);
+    CHECK_EQ(out.status_brightness, static_cast<uint8_t>(77));
+}
+
+TEST(indicator_brightness_zero_means_off_not_inherit)
+{
+    // FR-IND-5's whole reason for a separate message: with it present, zero
+    // is a decision. A backboxed board configured dark must stay dark.
+    pinled_v1_InstallConfig in = blank();
+    in.has_indicator = true;
+    in.indicator.brightness = 0;
+
+    MachineConfig out{};
+    CHECK(install_to_machine(in, out, fallback()) == InstallStatus::Ok);
+    CHECK_EQ(out.status_brightness, static_cast<uint8_t>(0));
+}
+
+TEST(an_indicator_brightness_past_a_byte_is_rejected)
+{
+    MachineConfig out{};
+    pinled_v1_InstallConfig in = blank();
+    in.has_indicator = true;
+    in.indicator.brightness = 256;
+    CHECK(install_to_machine(in, out, fallback()) == InstallStatus::ValueOutOfRange);
+}
+
 // --------------------------------------------------------------- atomicity --
 
 TEST(a_rejected_document_leaves_the_defaults_untouched)
@@ -509,6 +555,27 @@ TEST(the_reverse_projection_does_not_invent_a_gain)
     machine_to_install(fallback(), nullptr, 0, doc);
     CHECK(doc.has_filament);
     CHECK_EQ(doc.filament.gain_permille, static_cast<uint32_t>(0));
+}
+
+TEST(the_reverse_projection_carries_the_indicator_brightness)
+{
+    // Unlike gain, the running brightness IS known, so exporting it settled
+    // is the truth — including a settled zero, which must survive the trip.
+    pinled_v1_InstallConfig doc = blank();
+    machine_to_install(fallback(), nullptr, 0, doc);
+    CHECK(doc.has_indicator);
+    CHECK_EQ(doc.indicator.brightness, static_cast<uint32_t>(77));
+
+    MachineConfig dark = fallback();
+    dark.status_brightness = 0;
+    pinled_v1_InstallConfig doc2 = blank();
+    machine_to_install(dark, nullptr, 0, doc2);
+    CHECK(doc2.has_indicator);
+    CHECK_EQ(doc2.indicator.brightness, static_cast<uint32_t>(0));
+
+    MachineConfig back{};
+    CHECK(install_to_machine(doc2, back, fallback()) == InstallStatus::Ok);
+    CHECK_EQ(back.status_brightness, static_cast<uint8_t>(0));
 }
 
 int main() { return ooe::test::run_all(); }

@@ -39,6 +39,31 @@
 
 namespace ooe::pinled
 {
+    /// Live reporting of what the button is doing, as distinct from what it
+    /// will eventually mean.
+    ///
+    /// FR-IND-7 is the reason this exists separately from @p on_short_press:
+    /// the acknowledgement has to fire the instant a press is *accepted*, not
+    /// on release when the outcome is finally known, because a press whose
+    /// only feedback is its outcome is indistinguishable from a press that
+    /// never registered. That ambiguity cost a bench session on 2026-08-14.
+    ///
+    /// Both callbacks run on the button task, so neither may block.
+    struct ButtonFeedback
+    {
+        /// The press just passed the debounce threshold. Fires once per press,
+        /// before anything has decided what the press is for.
+        void (*accepted)(void *arg){nullptr};
+
+        /// How long the button has been held, every poll while it is down,
+        /// and once with 0 on release. FR-IND-8 needs both halves: the rising
+        /// count drives the erase countdown and the 0 returns the indicator to
+        /// whatever it was showing before.
+        void (*held)(void *arg, uint32_t held_ms){nullptr};
+
+        void *arg{nullptr};
+    };
+
     /// Watch the button: wipe credentials when it is held, and report a short
     /// press to the caller.
     ///
@@ -49,7 +74,10 @@ namespace ooe::pinled
     ///                       ignored. Runs on the button task, so it must not
     ///                       block — post a request and return.
     /// @param arg            passed through to @p on_short_press
+    /// @param feedback       optional live press/hold reporting; copied, so
+    ///                       the caller's struct need not outlive the call
     esp_err_t rescue_button_start(int gpio, uint32_t hold_ms,
                                   void (*on_short_press)(void *) = nullptr,
-                                  void *arg = nullptr);
+                                  void *arg = nullptr,
+                                  const ButtonFeedback *feedback = nullptr);
 } // namespace ooe::pinled

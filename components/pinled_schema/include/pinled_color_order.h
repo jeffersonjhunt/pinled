@@ -87,6 +87,43 @@ namespace ooe::pinled
                static_cast<uint32_t>(third);
     }
 
+    /**
+     * @brief The same three bytes, in the order they go on the wire.
+     *
+     * `pack_for_order()` returns a word in the *neopixel component's* packing
+     * convention, which is a property of that driver rather than of WS2812.
+     * A driver that transmits bytes -- the status pixel's RMT encoder does --
+     * wants the order itself, and forcing it through a packed word to unpack
+     * it again is how the middle-byte mistake gets back in.
+     *
+     * One table, two presentations: the host tests assert the two agree for
+     * every order, so neither can drift.
+     *
+     * @param out receives the three bytes, first transmitted first
+     */
+    constexpr void bytes_for_order(ColorOrder order, uint8_t r, uint8_t g, uint8_t b,
+                                   uint8_t out[3])
+    {
+        uint8_t first = g, second = r, third = b; // GRB, and the default
+
+        switch (order)
+        {
+        case ColorOrder::RGB: first = r; second = g; third = b; break;
+        case ColorOrder::BGR: first = b; second = g; third = r; break;
+        case ColorOrder::BRG: first = b; second = r; third = g; break;
+        case ColorOrder::RBG: first = r; second = b; third = g; break;
+        case ColorOrder::GBR: first = g; second = b; third = r; break;
+        case ColorOrder::GRB:
+        case ColorOrder::UNSPECIFIED:
+        default:
+            break;
+        }
+
+        out[0] = first;
+        out[1] = second;
+        out[2] = third;
+    }
+
     /// Human-readable name, for logs.
     const char *color_order_str(ColorOrder o);
 } // namespace ooe::pinled
