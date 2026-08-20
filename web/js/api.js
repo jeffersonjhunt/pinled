@@ -280,9 +280,10 @@
     /// The colour lab: pin one LED to exact bytes, live. raw=true bypasses
     /// the device's sRGB->linear conversion, which is the A/B that lets a
     /// person at the strip judge the conversion itself.
-    PinledApi.prototype.colorTest = function (led, rgb, level, raw) {
+    PinledApi.prototype.colorTest = function (led, rgb, level, gammaX100) {
         return this._send("colortest", "POST", this.encode("ColorTest", {
-            led: led, color: rgb, level: level || 0, raw: !!raw,
+            led: led, color: rgb, level: level || 0,
+            gammaX100: gammaX100 || 0, // 0 = the device's configured gamma
         }));
     };
     PinledApi.prototype.colorTestClear = function () {

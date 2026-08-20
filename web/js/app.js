@@ -404,7 +404,7 @@
         $("f-preview").addEventListener("click", function () {
             var lampNow = lampEntry(w.lamp, false) || {};
             var rgb = hexColor(colorHex(lampNow.color));
-            S.api.colorTest(w.ledIndex, rgb, 255, false).then(function (r) {
+            S.api.colorTest(w.ledIndex, rgb, 255, 0).then(function (r) {
                 toast("Previewing on LED " + w.ledIndex, r.message, "ok");
             }).catch(function (e) { toast("Preview failed", e.message, "crit"); });
         });
@@ -805,14 +805,27 @@
             }).catch(function (e) { toast("Could not re-arm", e.message, "crit"); });
         });
 
-        $("lab-pin").addEventListener("click", function () {
+        var labPin = function () {
             S.api.colorTest(parseInt($("lab-led").value, 10) || 0,
                             hexColor($("lab-color").value),
                             parseInt($("lab-level").value, 10) || 255,
-                            $("lab-raw").checked)
+                            parseInt($("lab-gamma").value, 10) || 0)
                 .then(function (r) { toast("Pinned", r.message, "ok"); })
                 .catch(function (e) { toast("Colour lab", e.message, "crit"); });
+        };
+        $("lab-pin").addEventListener("click", labPin);
+        // Sliders re-pin live, so the sweep is a drag rather than a loop of
+        // clicks — the whole point of the lab.
+        $("lab-gamma").addEventListener("input", function () {
+            $("lab-gamma-v").textContent =
+                (parseInt($("lab-gamma").value, 10) / 100).toFixed(2);
         });
+        $("lab-level").addEventListener("input", function () {
+            $("lab-level-v").textContent = $("lab-level").value;
+        });
+        $("lab-gamma").addEventListener("change", labPin);
+        $("lab-level").addEventListener("change", labPin);
+        $("lab-color").addEventListener("change", labPin);
         $("lab-clear").addEventListener("click", function () {
             S.api.colorTestClear().then(function () {
                 toast("Override cleared", "", "ok");

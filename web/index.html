@@ -210,16 +210,19 @@
           <div class="card">
             <h3 class="card-title">Colour lab</h3>
             <p class="prose" style="font-size:12px;">Pin one LED to exact bytes, live —
-              no apply, no restart. <b>Raw</b> bypasses the device's sRGB→linear
-              conversion, so the two can be compared at the strip.</p>
+              no apply, no restart. Sweep <b>gamma</b> until the LED matches the
+              swatch (1.00 = raw bytes; the runtime default is 2.20), and judge hue
+              at a moderate level — a bare LED at full power blooms the eye toward
+              white no matter what the bytes say. The gamma that wins here goes
+              into the install config as <code>render.gammaX100</code>.</p>
             <div class="btn-row" style="align-items:center; gap:10px; flex-wrap:wrap; margin-top:8px;">
               <label class="lb-title" for="lab-led" style="margin:0;">LED</label>
               <input class="input" id="lab-led" type="number" min="0" value="0" style="width:70px;">
               <input type="color" id="lab-color" value="#c9203a" title="colour">
-              <label class="lb-title" for="lab-level" style="margin:0;">Level</label>
-              <input class="slider" id="lab-level" type="range" min="1" max="255" value="255" style="width:110px;">
-              <label class="lb-title" style="margin:0;">
-                <input type="checkbox" id="lab-raw"> raw</label>
+              <label class="lb-title" for="lab-level" style="margin:0;">Level <span id="lab-level-v">128</span></label>
+              <input class="slider" id="lab-level" type="range" min="1" max="255" value="128" style="width:110px;">
+              <label class="lb-title" for="lab-gamma" style="margin:0;">Gamma <span id="lab-gamma-v">2.20</span></label>
+              <input class="slider" id="lab-gamma" type="range" min="100" max="300" step="5" value="220" style="width:110px;">
             </div>
             <div class="btn-row" style="margin-top:10px;">
               <button class="btn sm" id="lab-pin">Pin it</button>

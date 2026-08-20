@@ -314,7 +314,15 @@ message ColorTest {
   int32  led = 1;
   Color  color = 2;
   uint32 level = 3;   // 0..255 output scale; 0 (absent) means full
-  bool   raw = 4;
+  bool   raw = 4;     // shorthand for gamma_x100 = 100
+
+  // Try a specific conversion, not just the built-in A/B: 160 = x^1.6.
+  // 0 (absent) uses the device's configured render gamma. Added when the
+  // bench showed neither 1.0 nor 2.2 matched a bare LED consistently —
+  // the answer is somewhere between, and this is the knob that finds it.
+  // Once found, it becomes render.gamma_x100 in the install config: the
+  // lab's gamma and the runtime's gamma are the same arithmetic.
+  uint32 gamma_x100 = 5;
 }
 
 // The author handle (FR-REG-1): optional attribution the SPA stamps into

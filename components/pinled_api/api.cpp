@@ -7,6 +7,7 @@
 #include "api.h"
 
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 
 #include <unistd.h> // close(), for the httpd close_fn contract
@@ -1102,21 +1103,32 @@ namespace ooe::pinled
                 msg.level > 255)
                 return fail(req, HTTPD_400_BAD_REQUEST, "bytes are 0..255");
 
+            if (msg.gamma_x100 > 400)
+                return fail(req, HTTPD_400_BAD_REQUEST, "gamma_x100 is 0..400");
+
+            // The conversion happens HERE, once per request, so the lab can
+            // sweep gamma without the renderer growing a per-frame pow().
+            // Priority: raw beats an explicit gamma beats the device's own.
+            const float gamma = msg.raw ? 1.0f
+                                : msg.gamma_x100 ? msg.gamma_x100 / 100.0f
+                                                 : g_ctx.running->gamma;
+            auto convert = [gamma](uint32_t c) -> uint8_t {
+                const float y = std::pow(static_cast<float>(c) / 255.0f, gamma);
+                return static_cast<uint8_t>(y * 255.0f + 0.5f);
+            };
             const uint8_t level =
                 msg.level == 0 ? 255 : static_cast<uint8_t>(msg.level);
             g_ctx.lab.set(g_ctx.lab.arg, static_cast<int>(msg.led),
-                          static_cast<uint8_t>(msg.color.r),
-                          static_cast<uint8_t>(msg.color.g),
-                          static_cast<uint8_t>(msg.color.b), level,
-                          msg.raw);
+                          convert(msg.color.r), convert(msg.color.g),
+                          convert(msg.color.b), level,
+                          true /* already converted */);
 
             char out[96];
             std::snprintf(out, sizeof(out),
-                          "LED %d pinned to (%u,%u,%u) level %u, %s",
+                          "LED %d <- (%u,%u,%u) level %u, gamma %.2f",
                           (int)msg.led, (unsigned)msg.color.r,
                           (unsigned)msg.color.g, (unsigned)msg.color.b,
-                          (unsigned)level,
-                          msg.raw ? "raw bytes" : "linearised");
+                          (unsigned)level, (double)gamma);
             return send_apply_result(req, nullptr, true, out);
         }
 

@@ -251,6 +251,7 @@ def cmd_colortest(args) -> int:
         msg.color.r, msg.color.g, msg.color.b = args.r, args.g, args.b
         msg.level = args.level
         msg.raw = args.raw
+        msg.gamma_x100 = args.gamma
         body = _http(url, data=msg.SerializeToString(), method="POST")
     result = _message("ApplyResult")
     result.ParseFromString(body)
@@ -566,6 +567,8 @@ def main(argv: list[str] | None = None) -> int:
     ct.add_argument("b", nargs="?", type=int)
     ct.add_argument("--level", type=int, default=0, help="0..255 output scale (default full)")
     ct.add_argument("--raw", action="store_true", help="bypass the sRGB->linear conversion")
+    ct.add_argument("--gamma", type=int, default=0,
+                    help="gamma x100 to try (160 = x^1.6); 0 = the device's configured gamma")
     ct.add_argument("--clear", action="store_true", help="remove the override")
     ct.set_defaults(func=cmd_colortest)
 
