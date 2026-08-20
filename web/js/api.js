@@ -277,6 +277,18 @@
         return this._send("ota", "DELETE");
     };
 
+    /// The colour lab: pin one LED to exact bytes, live. raw=true bypasses
+    /// the device's sRGB->linear conversion, which is the A/B that lets a
+    /// person at the strip judge the conversion itself.
+    PinledApi.prototype.colorTest = function (led, rgb, level, raw) {
+        return this._send("colortest", "POST", this.encode("ColorTest", {
+            led: led, color: rgb, level: level || 0, raw: !!raw,
+        }));
+    };
+    PinledApi.prototype.colorTestClear = function () {
+        return this._send("colortest", "DELETE");
+    };
+
     /// The live socket (FR-UI-5). onFrame receives {seq, channelCount,
     /// samples} with samples a Uint8Array, 2 bytes per channel: level, then
     /// flags (bit0 active-since-last-push, bit1 bound, bits 2..4 DriveClass).

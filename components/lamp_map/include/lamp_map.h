@@ -24,6 +24,7 @@
  */
 
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 
 #include "esp_err.h"
@@ -92,6 +93,25 @@ namespace ooe::pinled
         esp_err_t render(const uint8_t *levels, size_t n);
 
         /**
+         * @brief The colour lab (bench harness): pin one LED to exact bytes.
+         *
+         * Overrides whatever render() computed for @p led, every frame,
+         * until cleared — no profile write, no restart, no lamp drive
+         * needed. @p raw sends the bytes to PWM untouched; otherwise they
+         * pass through the same sRGB->linear LUT as set_entry, which is
+         * precisely the A/B a person at the strip needs to judge the
+         * conversion. @p level scales the final bytes like a channel level
+         * would (255 = as given).
+         *
+         * One packed atomic word, because render() reads it from its own
+         * task every frame and a half-written override would paint one
+         * frame of a colour nobody asked for.
+         */
+        void set_override(int16_t led, uint8_t r, uint8_t g, uint8_t b,
+                          uint8_t level, bool raw);
+        void clear_override();
+
+        /**
          * @brief Walk a single lit pixel along the whole string, in order.
          *
          * A power-on proof that every LED is present, wired the right way
@@ -146,6 +166,11 @@ namespace ooe::pinled
     private:
         /// sRGB byte -> linear-light byte, built once from cfg_.gamma.
         uint8_t tint_lut_[256]{};
+
+        /// Colour-lab override, packed so one load is one coherent request:
+        /// [48+] flags (bit0 active, bit1 raw) [40] level [32] b [24] g
+        /// [16] r [0..15] led as uint16. Zero = no override.
+        std::atomic<uint64_t> override_{0};
 
         LampMapConfig cfg_{};
         LampMapEntry *map_{nullptr};

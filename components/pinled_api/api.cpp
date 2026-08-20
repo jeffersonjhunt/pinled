@@ -58,6 +58,7 @@ namespace ooe::pinled
             LiveState *live;
             ProfilerControl *profiler; ///< null on a build with no scan task
             OtaManager *ota;           ///< null on a build with no OTA slots
+            ColorLabHooks lab;         ///< set == nullptr when unavailable
             httpd_handle_t server;
         };
 
@@ -1056,6 +1057,79 @@ namespace ooe::pinled
             return send_apply_result(req, nullptr, true, out);
         }
 
+        // --- the colour lab (bench harness) --------------------------------
+
+        /// Pin one LED to exact bytes, live. Nothing persists — a reboot or
+        /// a DELETE ends it — so this is a measurement instrument, not a
+        /// configuration path.
+        esp_err_t post_colortest(httpd_req_t *req)
+        {
+            add_cors(req);
+            if (g_ctx.lab.set == nullptr)
+                return send_apply_result(req, "503 Service Unavailable", false,
+                                         "no LED stack on this build");
+
+            const size_t len = static_cast<size_t>(req->content_len);
+            if (len == 0 || len > 64)
+                return fail(req, HTTPD_400_BAD_REQUEST, "implausible body");
+            uint8_t body[64];
+            size_t got = 0;
+            int stalls = 0;
+            while (got < len)
+            {
+                const int n = httpd_req_recv(req,
+                                             reinterpret_cast<char *>(body) + got,
+                                             len - got);
+                if (n == HTTPD_SOCK_ERR_TIMEOUT)
+                {
+                    if (++stalls > 4)
+                        return fail(req, HTTPD_408_REQ_TIMEOUT, "body never arrived");
+                    continue;
+                }
+                if (n <= 0)
+                    return fail(req, HTTPD_400_BAD_REQUEST, "truncated body");
+                stalls = 0;
+                got += static_cast<size_t>(n);
+            }
+
+            pinled_v1_ColorTest msg = pinled_v1_ColorTest_init_zero;
+            pb_istream_t is = pb_istream_from_buffer(body, got);
+            if (!pb_decode(&is, pinled_v1_ColorTest_fields, &msg))
+                return fail(req, HTTPD_400_BAD_REQUEST, "not a ColorTest");
+            if (msg.led < 0 || msg.led > 0x7FFF)
+                return fail(req, HTTPD_400_BAD_REQUEST, "led out of range");
+            if (msg.color.r > 255 || msg.color.g > 255 || msg.color.b > 255 ||
+                msg.level > 255)
+                return fail(req, HTTPD_400_BAD_REQUEST, "bytes are 0..255");
+
+            const uint8_t level =
+                msg.level == 0 ? 255 : static_cast<uint8_t>(msg.level);
+            g_ctx.lab.set(g_ctx.lab.arg, static_cast<int>(msg.led),
+                          static_cast<uint8_t>(msg.color.r),
+                          static_cast<uint8_t>(msg.color.g),
+                          static_cast<uint8_t>(msg.color.b), level,
+                          msg.raw);
+
+            char out[96];
+            std::snprintf(out, sizeof(out),
+                          "LED %d pinned to (%u,%u,%u) level %u, %s",
+                          (int)msg.led, (unsigned)msg.color.r,
+                          (unsigned)msg.color.g, (unsigned)msg.color.b,
+                          (unsigned)level,
+                          msg.raw ? "raw bytes" : "linearised");
+            return send_apply_result(req, nullptr, true, out);
+        }
+
+        esp_err_t delete_colortest(httpd_req_t *req)
+        {
+            add_cors(req);
+            if (g_ctx.lab.clear == nullptr)
+                return send_apply_result(req, "503 Service Unavailable", false,
+                                         "no LED stack on this build");
+            g_ctx.lab.clear(g_ctx.lab.arg);
+            return send_apply_result(req, nullptr, true, "override cleared");
+        }
+
         /// Forget the handle. Idempotent: absence was the request, absence
         /// is the result, so clearing a device that never had one is a 200.
         esp_err_t delete_author(httpd_req_t *req)
@@ -1191,7 +1265,8 @@ namespace ooe::pinled
                          const Net &net,
                          LiveState &live,
                          ProfilerControl *profiler,
-                         OtaManager *ota)
+                         OtaManager *ota,
+                         const ColorLabHooks *lab)
     {
         g_ctx.store = &store;
         g_ctx.running = &running;
@@ -1205,6 +1280,7 @@ namespace ooe::pinled
         g_ctx.live = &live;
         g_ctx.profiler = profiler;
         g_ctx.ota = ota;
+        g_ctx.lab = lab ? *lab : ColorLabHooks{};
         g_ctx.server = nullptr;
 
         httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -1262,6 +1338,9 @@ namespace ooe::pinled
             {"/api/v1/author", HTTP_PUT, put_author},
             {"/api/v1/author", HTTP_DELETE, delete_author},
             {"/api/v1/author", HTTP_OPTIONS, handle_options},
+            {"/api/v1/colortest", HTTP_POST, post_colortest},
+            {"/api/v1/colortest", HTTP_DELETE, delete_colortest},
+            {"/api/v1/colortest", HTTP_OPTIONS, handle_options},
             {"/api/v1/scan", HTTP_GET, get_scan},
             {"/api/v1/provision", HTTP_POST, post_provision},
             {"/api/v1/provision", HTTP_DELETE, delete_provision},

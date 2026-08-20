@@ -348,6 +348,8 @@
             w.ledIndex + '"></div>' +
             '<dl class="readout"><dt>Reconstructed</dt><dd id="ro-level">—</dd></dl>' +
             '<div class="btn-row" style="margin-top:12px;">' +
+            '<button class="btn sm" id="f-preview">Preview on LED</button>' +
+            '<button class="btn sm ghost" id="f-preview-stop">Stop</button>' +
             '<button class="btn sm ghost" id="f-unbind">Unbind channel</button>' +
             "</div></div>";
 
@@ -398,6 +400,16 @@
             if (isNaN(w.ledIndex)) w.ledIndex = -1;
             S.dirtyConfig = true;
             setDirty();
+        });
+        $("f-preview").addEventListener("click", function () {
+            var lampNow = lampEntry(w.lamp, false) || {};
+            var rgb = hexColor(colorHex(lampNow.color));
+            S.api.colorTest(w.ledIndex, rgb, 255, false).then(function (r) {
+                toast("Previewing on LED " + w.ledIndex, r.message, "ok");
+            }).catch(function (e) { toast("Preview failed", e.message, "crit"); });
+        });
+        $("f-preview-stop").addEventListener("click", function () {
+            S.api.colorTestClear().catch(function () {});
         });
         $("f-unbind").addEventListener("click", function () {
             S.config.wiring = S.config.wiring.filter(function (x) {
@@ -791,6 +803,20 @@
                 toast("Classification pass started",
                       ps.windowMs + " ms observation window.", "ok");
             }).catch(function (e) { toast("Could not re-arm", e.message, "crit"); });
+        });
+
+        $("lab-pin").addEventListener("click", function () {
+            S.api.colorTest(parseInt($("lab-led").value, 10) || 0,
+                            hexColor($("lab-color").value),
+                            parseInt($("lab-level").value, 10) || 255,
+                            $("lab-raw").checked)
+                .then(function (r) { toast("Pinned", r.message, "ok"); })
+                .catch(function (e) { toast("Colour lab", e.message, "crit"); });
+        });
+        $("lab-clear").addEventListener("click", function () {
+            S.api.colorTestClear().then(function () {
+                toast("Override cleared", "", "ok");
+            }).catch(function (e) { toast("Colour lab", e.message, "crit"); });
         });
 
         $("fw-pick").addEventListener("click", function () {

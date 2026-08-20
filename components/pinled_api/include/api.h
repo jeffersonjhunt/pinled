@@ -26,6 +26,8 @@
  * | DELETE | `/api/v1/ota` | none → discard staged, `ApplyResult` |
  * | PUT | `/api/v1/author` | `AuthorHandle` → stored, no restart |
  * | DELETE | `/api/v1/author` | none → cleared |
+ * | POST | `/api/v1/colortest` | `ColorTest` → one LED pinned, live |
+ * | DELETE | `/api/v1/colortest` | none → override cleared |
  *
  * @par `profile` and `profiler` are different things
  * `/profile` is the stored `MachineProfile` document — which lamps are named
@@ -95,6 +97,18 @@ namespace ooe::pinled
     /// pointer crosses here.
     class OtaManager;
 
+    /// The colour lab (`/api/v1/colortest`): callbacks into the renderer, so
+    /// this component stays ignorant of the LED stack the same way
+    /// ProfilerControl keeps it ignorant of the application. Null on a build
+    /// with no strip.
+    struct ColorLabHooks
+    {
+        void (*set)(void *arg, int led, uint8_t r, uint8_t g, uint8_t b,
+                    uint8_t level, bool raw){nullptr};
+        void (*clear)(void *arg){nullptr};
+        void *arg{nullptr};
+    };
+
     /**
      * @brief What the API is allowed to ask of the auto-profiler.
      *
@@ -151,6 +165,7 @@ namespace ooe::pinled
          *                 build" is a better answer to a UI than absence
          * @param ota     staging and discard; may be null, in which case
          *                 `/api/v1/ota` answers 503 for the same reason
+         * @param lab     the colour lab; may be null → `/colortest` is 503
          */
         esp_err_t start(MachineConfigStore &store,
                         const MachineConfig &running,
@@ -158,7 +173,8 @@ namespace ooe::pinled
                         const Net &net,
                         LiveState &live,
                         ProfilerControl *profiler,
-                        OtaManager *ota);
+                        OtaManager *ota,
+                        const ColorLabHooks *lab);
 
         void stop();
 

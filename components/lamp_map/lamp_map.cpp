@@ -196,6 +196,25 @@ namespace ooe::pinled
         return neopixel_GetRefreshRate(static_cast<tNeopixelContext>(neopixel_));
     }
 
+    void LampMap::set_override(int16_t led, uint8_t r, uint8_t g, uint8_t b,
+                               uint8_t level, bool raw)
+    {
+        const uint64_t w =
+            (uint64_t{1} << 48) | (raw ? (uint64_t{1} << 49) : 0) |
+            (uint64_t{level} << 40) | (uint64_t{b} << 32) |
+            (uint64_t{g} << 24) | (uint64_t{r} << 16) |
+            static_cast<uint16_t>(led);
+        override_.store(w, std::memory_order_release);
+        ESP_LOGI(TAG, "colour lab: LED %d <- (%u,%u,%u) level %u %s",
+                 (int)led, r, g, b, level, raw ? "raw" : "linearised");
+    }
+
+    void LampMap::clear_override()
+    {
+        if (override_.exchange(0, std::memory_order_acq_rel) != 0)
+            ESP_LOGI(TAG, "colour lab: override cleared");
+    }
+
     esp_err_t LampMap::render(const uint8_t *levels, size_t n)
     {
         if (!initialized_)
@@ -227,6 +246,31 @@ namespace ooe::pinled
             // first lives in the middle of the word.
             frame[e.led_index].rgb =
                 pack_for_order(cfg_.color_order, scale8(e.r, v), scale8(e.g, v), scale8(e.b, v));
+        }
+
+        // The colour lab wins over everything (bench harness, cleared on
+        // request or reboot): one coherent load, then exactly the same
+        // packing the mapped path uses, so what it proves transfers.
+        const uint64_t ov = override_.load(std::memory_order_acquire);
+        if (ov & (uint64_t{1} << 48))
+        {
+            const uint16_t led = static_cast<uint16_t>(ov & 0xFFFF);
+            if (led < cfg_.led_count)
+            {
+                const bool raw = (ov >> 49) & 1;
+                const uint8_t lv = (ov >> 40) & 0xFF;
+                uint8_t r = (ov >> 16) & 0xFF, g = (ov >> 24) & 0xFF,
+                        b = (ov >> 32) & 0xFF;
+                if (!raw)
+                {
+                    r = tint_lut_[r];
+                    g = tint_lut_[g];
+                    b = tint_lut_[b];
+                }
+                frame[led].rgb = pack_for_order(cfg_.color_order,
+                                                scale8(r, lv), scale8(g, lv),
+                                                scale8(b, lv));
+            }
         }
 
         // ONE transmit per refresh (FR-LED-6). The driver drops SetPixel calls

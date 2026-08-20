@@ -304,6 +304,19 @@ message DeviceInfo {
   string build_id = 9;
 }
 
+// The colour lab (bench harness): pin one LED to exact bytes, live — no
+// document write, no restart, no lamp drive needed. POST sets it, DELETE
+// clears it, nothing persists across a reboot. `raw` bypasses the device's
+// sRGB->linear tint conversion, so the conversion itself can be judged by
+// A/B at the strip — added 2026-08-20 when "the colours are not right"
+// proved undebuggable through the press-apply-restart loop.
+message ColorTest {
+  int32  led = 1;
+  Color  color = 2;
+  uint32 level = 3;   // 0..255 output scale; 0 (absent) means full
+  bool   raw = 4;
+}
+
 // The author handle (FR-REG-1): optional attribution the SPA stamps into
 // exported profiles. Lives in NVS beside the Wi-Fi credentials — the two
 // small boot-time settings FR-CFG-7 keeps out of the filesystem — and no
