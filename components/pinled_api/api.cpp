@@ -1286,7 +1286,11 @@ namespace ooe::pinled
         httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
         // Well past the default cap of eight, which fails at registration time
         // with a log line nobody reads.
-        cfg.max_uri_handlers = 32;
+        // Counted, not guessed: the table below is 33 routes as of the
+        // colour lab, and registration past the cap is an ESP_ERROR_CHECK
+        // abort — a boot loop that presents as "the board died right after
+        // joining Wi-Fi", measured 2026-08-20. Room for the next few steps.
+        cfg.max_uri_handlers = 44;
         cfg.max_open_sockets = 7;
         // LRU purging closes the least recently used socket when a new one
         // arrives — and a live WebSocket looks idle to httpd, because the
