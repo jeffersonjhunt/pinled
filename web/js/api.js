@@ -129,8 +129,8 @@
         this.T = {};
         var self = this;
         ["DeviceInfo", "InstallConfig", "MachineProfile", "ApplyResult",
-         "LiveFrame", "ProfilerStatus", "AuthorHandle", "DriveClass",
-         "ColorOrder"].forEach(function (n) {
+         "LiveFrame", "ProfilerStatus", "AuthorHandle", "ColorTest",
+         "Version", "DriveClass", "ColorOrder"].forEach(function (n) {
             self.T[n] = n === "DriveClass" || n === "ColorOrder"
                 ? self.root.lookupEnum("pinled.v1." + n)
                 : self.root.lookupType("pinled.v1." + n);
