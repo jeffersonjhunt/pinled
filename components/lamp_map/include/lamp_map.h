@@ -50,6 +50,9 @@ namespace ooe::pinled
         /// Byte order the strip expects (FR-CFG-6). Default GRB — standard
         /// WS2812B, and what this driver emits natively.
         ColorOrder color_order{ColorOrder::UNSPECIFIED};
+        /// For linearising base colours (see set_entry). The same figure the
+        /// filament bank uses for levels, so one knob governs both.
+        float gamma{2.2f};
     };
 
     class LampMap
@@ -60,6 +63,23 @@ namespace ooe::pinled
 
         /// Default 1:1 mapping: channel i -> LED i, warm white base.
         void set_default_mapping();
+
+        /**
+         * @brief Install one channel's mapping and base colour.
+         *
+         * The colour arrives as the sRGB-ish bytes a person picked from a
+         * screen swatch and is stored LINEARISED (x^gamma), because WS2812
+         * PWM is linear light while a screen's 178 means ~45% luminance,
+         * not 70%. Feeding swatch bytes straight to PWM overdrives every
+         * mid-range component — deep red rendered pink, amber rendered pale
+         * yellow, found on the bench 2026-08-20 by the first real mapping
+         * session. Pure 0 and 255 are fixed points, which is why the
+         * primary-colour byte-order test could not see it.
+         *
+         * Converted once here, never per frame (NFR-4): render() multiplies
+         * two already-linear quantities, which is the correct place for a
+         * multiply to happen.
+         */
         esp_err_t set_entry(size_t channel, const LampMapEntry &e);
 
         /**
@@ -106,6 +126,10 @@ namespace ooe::pinled
          *
          * @warning At full white this is the worst-case current the string can
          *          draw. Know your supply before calling it on a long string.
+         *
+         * @note Raw PWM bytes, NOT linearised like set_entry's colours: this
+         *       is an electrical test, and fill(128,...) meaning "half duty"
+         *       is exactly what a current measurement wants.
          */
         esp_err_t fill(uint8_t r, uint8_t g, uint8_t b);
 
@@ -120,6 +144,9 @@ namespace ooe::pinled
         uint32_t max_refresh_hz() const;
 
     private:
+        /// sRGB byte -> linear-light byte, built once from cfg_.gamma.
+        uint8_t tint_lut_[256]{};
+
         LampMapConfig cfg_{};
         LampMapEntry *map_{nullptr};
         void *neopixel_{nullptr}; ///< tNeopixelContext (opaque here)

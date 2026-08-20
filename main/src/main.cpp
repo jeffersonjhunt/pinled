@@ -193,6 +193,7 @@ namespace ooe::pinled
         mc.led_count = cfg_.led_count;
         mc.channel_count = num_channels_;
         mc.color_order = cfg_.color_order;
+        mc.gamma = cfg_.gamma; // one knob: the filament level LUT uses it too
         ESP_ERROR_CHECK(map_.init(mc));
         clamp_refresh(); // FR-LED-8
 

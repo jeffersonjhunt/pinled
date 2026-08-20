@@ -12,6 +12,7 @@
 #include "pinled_channel_config.h" // ResolveDefaults — the one definition of the default tint
 #include "pinled_color_order.h"
 
+#include <cmath>
 #include <new>
 
 #include "freertos/FreeRTOS.h"
@@ -36,6 +37,16 @@ namespace ooe::pinled
 
         deinit();
         cfg_ = cfg;
+
+        // The same shape as the filament bank's level LUT, and deliberately
+        // the same gamma figure: one knob. Identity when gamma is 1 or
+        // nonsense, so a linear build renders exactly what it is given.
+        const float gamma = (cfg_.gamma > 0.0f) ? cfg_.gamma : 1.0f;
+        for (int i = 0; i < 256; ++i)
+        {
+            const float y = std::pow(static_cast<float>(i) / 255.0f, gamma);
+            tint_lut_[i] = static_cast<uint8_t>(y * 255.0f + 0.5f);
+        }
 
         map_ = new (std::nothrow) LampMapEntry[cfg_.channel_count];
         if (!map_)
@@ -94,9 +105,11 @@ namespace ooe::pinled
             // through apply_channel_config().
             static constexpr ResolveDefaults kDefaults{};
             e.led_index = (ch < cfg_.led_count) ? static_cast<int16_t>(ch) : -1;
-            e.r = kDefaults.r;
-            e.g = kDefaults.g;
-            e.b = kDefaults.b;
+            // Through the same LUT as set_entry: the default tint is a
+            // swatch too, and it rendered washed-out for the same reason.
+            e.r = tint_lut_[kDefaults.r];
+            e.g = tint_lut_[kDefaults.g];
+            e.b = tint_lut_[kDefaults.b];
         }
     }
 
@@ -166,7 +179,13 @@ namespace ooe::pinled
     {
         if (channel >= cfg_.channel_count)
             return ESP_ERR_INVALID_ARG;
-        map_[channel] = e;
+        // Stored linearised — see the header. render() then multiplies two
+        // linear quantities, and the swatch someone picked is what they get.
+        LampMapEntry lin = e;
+        lin.r = tint_lut_[e.r];
+        lin.g = tint_lut_[e.g];
+        lin.b = tint_lut_[e.b];
+        map_[channel] = lin;
         return ESP_OK;
     }
 
