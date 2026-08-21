@@ -30,6 +30,23 @@ namespace ooe::pinled
         return static_cast<uint8_t>((static_cast<uint16_t>(value) * scale) / 255);
     }
 
+    /// The zorxx/neopixel 1.1.0 I2S path transmits every colour byte
+    /// BIT-REVERSED on this S3 / IDF 5.5 build. Measured 2026-08-20 with a
+    /// logic analyser: the firmware handed the driver 0x80 and the wire
+    /// carried 0x01, while the palindrome 0x7E crossed unchanged
+    /// (raw/R0G255B0.csv, raw/R0G254B0.csv) — which is why pure 0x00/0xFF
+    /// primaries always looked right and every mixed colour was wrong.
+    /// Each byte is pre-reversed HERE, at the driver boundary and nowhere
+    /// else, so the wire carries what the pipeline computed. Upstream has
+    /// open "bits transposed" issues; replacing the driver outright is the
+    /// recorded follow-up (HARDWARE.md).
+    static inline uint8_t wire8(uint8_t v)
+    {
+        v = static_cast<uint8_t>((v & 0xF0) >> 4 | (v & 0x0F) << 4);
+        v = static_cast<uint8_t>((v & 0xCC) >> 2 | (v & 0x33) << 2);
+        return static_cast<uint8_t>((v & 0xAA) >> 1 | (v & 0x55) << 1);
+    }
+
     esp_err_t LampMap::init(const LampMapConfig &cfg)
     {
         if (cfg.led_pin == GPIO_NUM_NC || cfg.led_count == 0 || cfg.channel_count == 0)
@@ -130,7 +147,7 @@ namespace ooe::pinled
         // that looks identical whatever byte order the strip uses, which is
         // correct here: this answers "is the pixel alive", and the fixture in
         // fs_seed answers "is the order right".
-        const uint32_t lit = pack_for_order(cfg_.color_order, 255, 255, 255);
+        const uint32_t lit = pack_for_order(cfg_.color_order, wire8(255), wire8(255), wire8(255));
 
         for (size_t on = 0; on < cfg_.led_count; ++on)
         {
@@ -163,7 +180,7 @@ namespace ooe::pinled
             return ESP_ERR_INVALID_STATE;
 
         tNeopixel *frame = static_cast<tNeopixel *>(frame_);
-        const uint32_t rgb = pack_for_order(cfg_.color_order, r, g, b);
+        const uint32_t rgb = pack_for_order(cfg_.color_order, wire8(r), wire8(g), wire8(b));
         for (size_t i = 0; i < cfg_.led_count; ++i)
         {
             frame[i].index = static_cast<uint32_t>(i);
@@ -245,7 +262,8 @@ namespace ooe::pinled
             // declared order — see pinled_color_order.h for why the byte sent
             // first lives in the middle of the word.
             frame[e.led_index].rgb =
-                pack_for_order(cfg_.color_order, scale8(e.r, v), scale8(e.g, v), scale8(e.b, v));
+                pack_for_order(cfg_.color_order, wire8(scale8(e.r, v)),
+                               wire8(scale8(e.g, v)), wire8(scale8(e.b, v)));
         }
 
         // The colour lab wins over everything (bench harness, cleared on
@@ -268,8 +286,9 @@ namespace ooe::pinled
                     b = tint_lut_[b];
                 }
                 frame[led].rgb = pack_for_order(cfg_.color_order,
-                                                scale8(r, lv), scale8(g, lv),
-                                                scale8(b, lv));
+                                                wire8(scale8(r, lv)),
+                                                wire8(scale8(g, lv)),
+                                                wire8(scale8(b, lv)));
             }
         }
 
