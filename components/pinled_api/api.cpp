@@ -1251,6 +1251,12 @@ namespace ooe::pinled
                         httpd_ws_send_frame_async(g_ctx.server, g_clients[i], &ws);
                     if (err == ESP_OK)
                     {
+                        // A live socket's traffic is all outbound, so httpd's
+                        // LRU counter never moves on its own and the purge
+                        // (enabled in start()) would evict the monitor as
+                        // "idle". Each successful push marks it recent —
+                        // which is the truth.
+                        httpd_sess_update_lru_counter(g_ctx.server, g_clients[i]);
                         ++i;
                         continue;
                     }
@@ -1303,13 +1309,20 @@ namespace ooe::pinled
         // abort — a boot loop that presents as "the board died right after
         // joining Wi-Fi", measured 2026-08-20. Room for the next few steps.
         cfg.max_uri_handlers = 44;
-        cfg.max_open_sockets = 7;
-        // LRU purging closes the least recently used socket when a new one
-        // arrives — and a live WebSocket looks idle to httpd, because the
-        // traffic is all outbound. With purging on, opening a second browser
-        // tab would silently kill the first one's monitor. Dead sockets are
-        // reaped by close_fn and by the send-failure path instead.
-        cfg.lru_purge_enable = false;
+        // Thirteen, because seven wedged a real browser (2026-08-21): Safari
+        // holds up to six keep-alive connections per host, the live socket
+        // holds one more, and at exactly seven every further fetch was
+        // refused — "Load failed" on random requests, while single-connection
+        // clients (pbtool, node) never saw it. Sized as 3 WS slots + 6
+        // keep-alive + headroom; needs CONFIG_LWIP_MAX_SOCKETS ≥ 16.
+        cfg.max_open_sockets = 13;
+        // LRU purging ON, so a browser can never wedge the server by holding
+        // sockets — the least recently used one is closed to admit a new
+        // connection. The live WebSocket would look idle to httpd (its
+        // traffic is all outbound) and be purged first; the push task
+        // prevents that by marking each client recent on every successful
+        // push, which is the truth about who is active.
+        cfg.lru_purge_enable = true;
         cfg.close_fn = on_socket_closed;
         cfg.stack_size = 6144; // protobuf encode plus TLS-free httpd
 
