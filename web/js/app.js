@@ -781,20 +781,26 @@
                 });
         });
 
+        // The write and the follow-up refresh are separate failures and must
+        // say so: a merged catch once reported "Rejected" for a store the
+        // device had already committed, because the REFRESH was what failed.
         $("author-save").addEventListener("click", function () {
             var h = $("author-input").value.trim();
             if (!h) return toast("Type a handle first", "Or use Clear.", "warn");
             S.api.setAuthor(h).then(function (r) {
                 toast("Author handle stored", r.message, "ok");
-                return refreshInfo();
-            }).catch(function (e) { toast("Rejected", e.message, "crit"); });
+                refreshInfo().catch(function () {
+                    toast("Stored — but the page could not refresh",
+                          "The device has it; reload to see it.", "warn");
+                });
+            }, function (e) { toast("Store failed", e.message, "crit"); });
         });
         $("author-clear").addEventListener("click", function () {
             S.api.clearAuthor().then(function () {
                 $("author-input").value = "";
                 toast("Author handle cleared", "", "ok");
-                return refreshInfo();
-            }).catch(function (e) { toast("Failed", e.message, "crit"); });
+                refreshInfo().catch(function () {});
+            }, function (e) { toast("Clear failed", e.message, "crit"); });
         });
 
         $("profiler-rearm").addEventListener("click", function () {

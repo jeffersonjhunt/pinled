@@ -162,11 +162,26 @@
 
     PinledApi.prototype._get = function (path, type) {
         var self = this;
-        return fetch(this.url(path)).then(function (r) {
-            return self._check(r);
-        }).then(function (r) {
-            return r.arrayBuffer();
-        }).then(function (buf) {
+        // One quiet retry, GETs only: they are idempotent by construction,
+        // and Safari occasionally loses a request on a reused connection
+        // ("Load failed" with no HTTP status). An actual HTTP error from
+        // _check carries "HTTP" in its message and is never retried —
+        // the device said no, and asking again would be pretending
+        // otherwise.
+        function attempt(left) {
+            return fetch(self.url(path)).then(function (r) {
+                return self._check(r);
+            }).then(function (r) {
+                return r.arrayBuffer();
+            }).catch(function (e) {
+                if (left > 0 && !/HTTP /.test(String(e.message)))
+                    return new Promise(function (res) {
+                        setTimeout(res, 400);
+                    }).then(function () { return attempt(left - 1); });
+                throw e;
+            });
+        }
+        return attempt(1).then(function (buf) {
             return type.decode(new Uint8Array(buf));
         });
     };
