@@ -144,6 +144,14 @@ namespace ooe::pinled
         /// FR-UI-3. Applied to every response including errors — a CORS-blocked
         /// error body is indistinguishable from a network failure in a browser,
         /// which turns a clear 400 into a mystery.
+        ///
+        /// AT MOST ONCE PER RESPONSE: httpd_resp_set_hdr APPENDS, so a second
+        /// call emits every header twice, and a doubled Allow-Origin is a
+        /// CORS *failure* in every browser — the device does the work and the
+        /// browser reports "Load failed", which cost a day to see because
+        /// non-browser clients ignore CORS entirely (found by WebKit under
+        /// Playwright, 2026-08-21). fail() and send_protobuf() call this;
+        /// handlers that exit through them must not.
         void add_cors(httpd_req_t *req)
         {
             httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -872,7 +880,6 @@ namespace ooe::pinled
         /// worst the network can do is fill a slot nobody boots.
         esp_err_t post_ota(httpd_req_t *req)
         {
-            add_cors(req);
             if (g_ctx.ota == nullptr)
                 return send_apply_result(req, "503 Service Unavailable", false,
                                        "no OTA support on this build");
@@ -986,7 +993,6 @@ namespace ooe::pinled
         /// confirm: that belongs to the button alone.
         esp_err_t delete_ota(httpd_req_t *req)
         {
-            add_cors(req);
             if (g_ctx.ota == nullptr)
                 return send_apply_result(req, "503 Service Unavailable", false,
                                        "no OTA support on this build");
@@ -1012,7 +1018,6 @@ namespace ooe::pinled
         /// reports it back. Ownership and verification are cloud-side.
         esp_err_t put_author(httpd_req_t *req)
         {
-            add_cors(req);
 
             // An AuthorHandle at max_size encodes in ~34 bytes; 64 is
             // implausibility, not a limit anyone hits legitimately.
@@ -1065,7 +1070,6 @@ namespace ooe::pinled
         /// configuration path.
         esp_err_t post_colortest(httpd_req_t *req)
         {
-            add_cors(req);
             if (g_ctx.lab.set == nullptr)
                 return send_apply_result(req, "503 Service Unavailable", false,
                                          "no LED stack on this build");
@@ -1134,7 +1138,6 @@ namespace ooe::pinled
 
         esp_err_t delete_colortest(httpd_req_t *req)
         {
-            add_cors(req);
             if (g_ctx.lab.clear == nullptr)
                 return send_apply_result(req, "503 Service Unavailable", false,
                                          "no LED stack on this build");
@@ -1146,7 +1149,6 @@ namespace ooe::pinled
         /// is the result, so clearing a device that never had one is a 200.
         esp_err_t delete_author(httpd_req_t *req)
         {
-            add_cors(req);
             if (author_erase() != ESP_OK)
                 return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not erase");
             return send_apply_result(req, nullptr, true, "author handle cleared");
