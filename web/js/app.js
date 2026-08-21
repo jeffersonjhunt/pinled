@@ -41,6 +41,7 @@
         frames: 0,       // for the rail-foot rate readout
         framesAt: 0,
         fwWatch: null,   // interval while an image is staged
+        uploading: false, // background polling pauses while true
     };
 
     var PRESETS = [
@@ -847,6 +848,11 @@
                 text.hidden = false;
                 fill.style.width = "0%";
                 text.textContent = "Hashing " + f.name + "…";
+                // Background polling pauses for the duration: an upload
+                // shares the board's one radio and one httpd task, and every
+                // concurrent request measurably slows it (51 -> 10 KB/s on
+                // the bench).
+                S.uploading = true;
                 return f.arrayBuffer().then(function (buf) {
                     return S.api.otaUpload(new Uint8Array(buf),
                         function (loaded, total) {
@@ -858,6 +864,7 @@
                         });
                 });
             }).then(function (r) {
+                S.uploading = false;
                 bar.hidden = true;
                 text.hidden = true;
                 toast("Staged", r.message, "ok");
@@ -866,6 +873,7 @@
                     watchStaged(prev.build, prev.slot);
                 });
             }).catch(function (e) {
+                S.uploading = false;
                 bar.hidden = true;
                 text.hidden = true;
                 if (e.message !== "no file") toast("Upload failed", e.message, "crit");
@@ -934,6 +942,7 @@
             wireStatic();
             startLive();
             setInterval(function () {
+                if (S.uploading) return;
                 if (document.querySelector('[data-panel="device"][data-active="true"]'))
                     S.api.profiler().then(renderProfiler, function () {});
             }, 2000);
