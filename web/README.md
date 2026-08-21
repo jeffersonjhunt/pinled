@@ -36,11 +36,24 @@ to both sides.
 
 ## Testing
 
+Two layers, and the second exists because the first was not enough:
+
 `test/web/api_check.js` runs `js/api.js` under node against a real board —
-the wire-level half that does not need eyes:
+the wire-level half:
 
 ```sh
 node test/web/api_check.js http://192.168.3.129
+```
+
+`test/web/browser_check.js` drives the whole app in real WebKit and
+Chromium against a real board — CORS, preflights, connection pools and
+rendering, the rule layers node does not enforce. Two shipped bugs were
+invisible to node and one Playwright run each to find. **Run it before
+claiming any web-facing change works**:
+
+```sh
+npm i playwright && npx playwright install chromium webkit --with-deps
+node test/web/browser_check.js http://192.168.3.129 both
 ```
 
 The visual half is the acceptance test from `FIRMWARE_PLAN.md` §5.2 step 4:
