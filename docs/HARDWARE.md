@@ -322,9 +322,12 @@ S3. Full derivation in `TIMING.md` §5.
   the zorxx/neopixel 1.1.0 I2S transmit path on this S3/IDF 5.5 build
   (upstream has open "bits transposed" issues); the status pixel's own raw
   RMT path was never wrong, which was the tell. Compensated at the driver
-  boundary (`wire8()` in lamp_map.cpp) with the capture as evidence;
-  **replacing the driver with espressif's `led_strip` (RMT) is the recorded
-  follow-up**, owner's call on timing.
+  boundary (`wire8()` in lamp_map.cpp) with the capture as evidence, the
+  bug reported upstream, and the dependency **pinned to ==1.1.0** so a
+  silent upstream fix cannot double-reverse through the shim. **Decided
+  2026-08-21: replace the driver after `feat/webui` closes** — espressif's
+  `led_strip` (RMT), or an in-house driver (the indicator's raw-RMT path
+  is a working seed). The pin and the shim leave together.
 
   HW-9 itself still stands as mainboard engineering — 3.3 V into a 3.5 V
   threshold is legitimately out of spec even though this bench strip reads
