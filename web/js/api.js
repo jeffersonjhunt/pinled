@@ -269,23 +269,43 @@
     /// Stage a firmware image (FR-OTA-1/3). Success means STAGED — the
     /// physical button decides whether it ever boots (FR-OTA-2), and there
     /// is deliberately no way to confirm from here.
-    PinledApi.prototype.otaUpload = function (bytes) {
-        var digest = sha256(bytes);
+    ///
+    /// XHR rather than fetch, for one reason: upload progress events.
+    /// fetch() cannot report them, and a megabyte at Safari's measured pace
+    /// took 80 seconds of apparent silence — an upload with no progress bar
+    /// is indistinguishable from a dead one, which is exactly how it read
+    /// on the bench (2026-08-21).
+    PinledApi.prototype.otaUpload = function (bytes, onProgress) {
         var self = this;
-        return fetch(this.url("ota"), {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/octet-stream",
-                "X-Image-SHA256": digest,
-            },
-            body: bytes,
-        }).then(function (r) {
-            return self._check(r);
-        }).then(function (r) {
-            return r.arrayBuffer();
-        }).then(function (buf) {
-            return self.T.ApplyResult.toObject(
-                self.T.ApplyResult.decode(new Uint8Array(buf)), { defaults: true });
+        var digest = sha256(bytes);
+        return new Promise(function (resolve, reject) {
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", self.url("ota"));
+            xhr.responseType = "arraybuffer";
+            xhr.timeout = 300000; // five minutes: measured 80 s, plus margin
+            xhr.setRequestHeader("Content-Type", "application/octet-stream");
+            xhr.setRequestHeader("X-Image-SHA256", digest);
+            if (xhr.upload && onProgress)
+                xhr.upload.onprogress = function (ev) {
+                    if (ev.lengthComputable) onProgress(ev.loaded, ev.total);
+                };
+            xhr.onload = function () {
+                var result = null;
+                try {
+                    result = self.T.ApplyResult.toObject(
+                        self.T.ApplyResult.decode(
+                            new Uint8Array(xhr.response || new ArrayBuffer(0))),
+                        { defaults: true });
+                } catch (e) { /* a non-protobuf error body; status carries it */ }
+                if (xhr.status >= 200 && xhr.status < 300)
+                    resolve(result || { accepted: true, restarted: false, message: "" });
+                else
+                    reject(new Error("HTTP " + xhr.status +
+                        (result && result.message ? ": " + result.message : "")));
+            };
+            xhr.onerror = function () { reject(new Error("upload connection failed")); };
+            xhr.ontimeout = function () { reject(new Error("upload timed out")); };
+            xhr.send(bytes);
         });
     };
     PinledApi.prototype.otaDiscard = function () {

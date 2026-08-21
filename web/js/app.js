@@ -839,19 +839,35 @@
         });
 
         $("fw-pick").addEventListener("click", function () {
+            var bar = $("fw-progress");
+            var fill = bar.querySelector("i");
+            var text = $("fw-progress-text");
             pickFile(".bin").then(function (f) {
-                toast("Uploading " + f.name,
-                      Math.round(f.size / 1024) + " KB — hashing and sending.", "");
+                bar.hidden = false;
+                text.hidden = false;
+                fill.style.width = "0%";
+                text.textContent = "Hashing " + f.name + "…";
                 return f.arrayBuffer().then(function (buf) {
-                    return S.api.otaUpload(new Uint8Array(buf));
+                    return S.api.otaUpload(new Uint8Array(buf),
+                        function (loaded, total) {
+                            var pct = Math.round((loaded / total) * 100);
+                            fill.style.width = pct + "%";
+                            text.textContent = "Uploading " + f.name + " — " +
+                                Math.round(loaded / 1024) + " of " +
+                                Math.round(total / 1024) + " KB (" + pct + "%)";
+                        });
                 });
             }).then(function (r) {
+                bar.hidden = true;
+                text.hidden = true;
                 toast("Staged", r.message, "ok");
                 var prev = { build: S.info.buildId, slot: S.info.runningSlot };
                 return refreshInfo().then(function () {
                     watchStaged(prev.build, prev.slot);
                 });
             }).catch(function (e) {
+                bar.hidden = true;
+                text.hidden = true;
                 if (e.message !== "no file") toast("Upload failed", e.message, "crit");
             });
         });

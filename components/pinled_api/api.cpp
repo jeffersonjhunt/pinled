@@ -83,6 +83,18 @@ namespace ooe::pinled
         uint32_t g_seq = 0;
         uint32_t g_dropped = 0;
 
+        /// The table is touched from TWO tasks — httpd (add on upgrade,
+        /// remove in close_fn) and the push task (remove on send failure) —
+        /// so every touch is a critical section, and removal is BY FD, never
+        /// by index: an index-based remove racing a concurrent remove
+        /// double-decremented g_client_count, a size_t, and the push loop
+        /// then walked four billion garbage entries logging "client 0
+        /// dropped" until the watchdog gave up (1.3 million lines on the
+        /// bench, 2026-08-21, triggered by an 80-second OTA upload keeping
+        /// httpd busy while a browser's sockets churned). By-fd removal is
+        /// idempotent, so the race collapses to "one of them wins".
+        portMUX_TYPE g_clients_mux = portMUX_INITIALIZER_UNLOCKED;
+
         /// False when the slot table is full. The caller must then FAIL the
         /// request rather than accept it: httpd has already completed the
         /// handshake, so a silent refusal leaves the client holding an open
@@ -90,18 +102,51 @@ namespace ooe::pinled
         /// dead device.
         bool add_client(int fd)
         {
-            for (size_t i = 0; i < g_client_count; ++i)
-                if (g_clients[i] == fd)
-                    return true;
-            if (g_client_count >= kMaxLiveClients)
-                return false;
-            g_clients[g_client_count++] = fd;
-            return true;
+            bool ok = true;
+            taskENTER_CRITICAL(&g_clients_mux);
+            size_t i = 0;
+            while (i < g_client_count && g_clients[i] != fd)
+                ++i;
+            if (i == g_client_count)
+            {
+                if (g_client_count < kMaxLiveClients)
+                    g_clients[g_client_count++] = fd;
+                else
+                    ok = false;
+            }
+            taskEXIT_CRITICAL(&g_clients_mux);
+            return ok;
         }
 
-        void drop_client(size_t index)
+        /// True if @p fd was present (and is now gone). Safe from any task,
+        /// any number of times.
+        bool remove_client(int fd)
         {
-            g_clients[index] = g_clients[--g_client_count];
+            bool removed = false;
+            taskENTER_CRITICAL(&g_clients_mux);
+            for (size_t i = 0; i < g_client_count; ++i)
+            {
+                if (g_clients[i] == fd)
+                {
+                    g_clients[i] = g_clients[--g_client_count];
+                    removed = true;
+                    break;
+                }
+            }
+            taskEXIT_CRITICAL(&g_clients_mux);
+            return removed;
+        }
+
+        /// A coherent copy for the push loop to send against, so no send —
+        /// which can block — ever happens inside the critical section.
+        size_t snapshot_clients(int (&out)[kMaxLiveClients])
+        {
+            taskENTER_CRITICAL(&g_clients_mux);
+            const size_t n = g_client_count;
+            for (size_t i = 0; i < n; ++i)
+                out[i] = g_clients[i];
+            taskEXIT_CRITICAL(&g_clients_mux);
+            return n;
         }
 
         /// httpd tells us when it closes a socket, which is the only reliable
@@ -115,16 +160,9 @@ namespace ooe::pinled
         /// same second.
         void on_socket_closed(httpd_handle_t, int fd)
         {
-            for (size_t i = 0; i < g_client_count; ++i)
-            {
-                if (g_clients[i] == fd)
-                {
-                    drop_client(i);
-                    ESP_LOGI(TAG, "live: client %d closed (%u remain)",
-                             fd, (unsigned)g_client_count);
-                    break;
-                }
-            }
+            if (remove_client(fd))
+                ESP_LOGI(TAG, "live: client %d closed (%u remain)",
+                         fd, (unsigned)g_client_count);
             close(fd); // httpd's default close_fn does exactly this
         }
 
@@ -1247,10 +1285,12 @@ namespace ooe::pinled
                 ws.payload = frame_buf;
                 ws.len = os.bytes_written;
 
-                for (size_t i = 0; i < g_client_count;)
+                int fds[kMaxLiveClients];
+                const size_t n = snapshot_clients(fds);
+                for (size_t i = 0; i < n; ++i)
                 {
                     const esp_err_t err =
-                        httpd_ws_send_frame_async(g_ctx.server, g_clients[i], &ws);
+                        httpd_ws_send_frame_async(g_ctx.server, fds[i], &ws);
                     if (err == ESP_OK)
                     {
                         // A live socket's traffic is all outbound, so httpd's
@@ -1258,22 +1298,21 @@ namespace ooe::pinled
                         // (enabled in start()) would evict the monitor as
                         // "idle". Each successful push marks it recent —
                         // which is the truth.
-                        httpd_sess_update_lru_counter(g_ctx.server, g_clients[i]);
-                        ++i;
+                        httpd_sess_update_lru_counter(g_ctx.server, fds[i]);
                         continue;
                     }
                     // A client that will not take a frame is dropped, not
                     // waited for. FR-UI-9: the monitor never becomes a reason
                     // the scan is late, and the sticky bit means the next push
-                    // carries whatever this one could not.
-                    // Counts CLIENTS reaped, not pushes lost — the sticky bit
-                    // means no push is ever lost, only deferred, and a log line
-                    // claiming otherwise would send someone hunting a data-loss
-                    // bug that cannot exist.
-                    ++g_dropped;
-                    ESP_LOGW(TAG, "live: client %d dropped (%s), %u dropped since boot",
-                             g_clients[i], esp_err_to_name(err), (unsigned)g_dropped);
-                    drop_client(i);
+                    // carries whatever this one could not. remove_client is
+                    // by-fd and idempotent, so racing close_fn is harmless —
+                    // and the log fires only for the copy that actually won.
+                    if (remove_client(fds[i]))
+                    {
+                        ++g_dropped;
+                        ESP_LOGW(TAG, "live: client %d dropped (%s), %u dropped since boot",
+                                 fds[i], esp_err_to_name(err), (unsigned)g_dropped);
+                    }
                 }
             }
         }
