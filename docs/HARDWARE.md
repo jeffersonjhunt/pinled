@@ -309,6 +309,22 @@ S3. Full derivation in `TIMING.md` §5.
   regulator. Level-shift the LED data line or run the strip at reduced VDD
   (HW-9): WS2812B wants V_IH ≥ 0.7 × VDD = 3.5 V, above a 3.3 V S3 output.
 
+  **HW-9 stopped being theoretical 2026-08-20.** The bench rig (3.3 V GPIO
+  straight into a 5 V strip) rendered mixed colours wrong in ways no colour
+  math explained, and the colour-lab harness reduced it to a deterministic
+  hue cliff at a bit-carry boundary — (126,128,128) showing RED while
+  (128,128,128) shows white — which is marginal-V_IH pattern corruption,
+  not photometry. Uniform-bit primaries (0x00/0xFF) pass, which is exactly
+  why the byte-order test saw nothing. The Adafruit Überguide corroborates
+  the 70%-of-VDD threshold and its remedies match: a **74AHCT125 or
+  74HCT245 at 5 V** in the data line (the mainboard BOM answer), or strip
+  VDD below ~4.7 V (a series diode or a 4.5 V bench supply — also the
+  fastest proof, since the cliff should vanish). While in there: **300–500 Ω
+  in the data line at the first pixel's end**, and **500–1000 µF across the
+  strip's power**. Software colour tuning (gamma, white balance) resumes
+  only after the data line is clean — tuning against corrupted bytes fits
+  noise, not the strip.
+
   **Measured 2026-08-11**, 16 LEDs off the QT Py's USB 5 V, all white:
   170 mA at 25% duty, **530 mA at 50%**, and a **brown-out entering 75%**.
   530 mA over 16 LEDs is 33 mA/LED at half brightness, so ~66 mA at full —
