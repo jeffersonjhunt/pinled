@@ -24,6 +24,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # The schema text ships inside the bundle; regenerate so it can never lag
 # the .proto.
 python3 "$ROOT/tools/gen_proto_js.py"
+python3 "$ROOT/tools/gen_openapi_js.py"
 
 # Assets first, index last: a visitor mid-publish gets old-index+old-assets
 # or new-index+new-assets, never new-index over missing assets.

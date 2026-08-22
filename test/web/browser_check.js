@@ -102,6 +102,17 @@ async function run(name, engine, base, shellMode) {
     await page.click("#lab-clear");
     await page.waitForTimeout(1000);
 
+    // The API reference: the link resolves (respecting <base> under the
+    // shell) and the vendored Swagger UI actually renders operations —
+    // from S3 in shell mode, from disk in file mode, fetching nothing.
+    const docsHref = await page.$eval("#api-docs-link", (a) => a.href);
+    const docs = await browser.newPage();
+    await docs.goto(docsHref);
+    const rendered = await docs.waitForSelector(".swagger-ui .opblock",
+        { timeout: 15000 }).then(() => true, () => false);
+    check("API reference renders", rendered, docsHref);
+    await docs.close();
+
     check("no failed network requests", netFail.length === 0,
           netFail.join(" | "));
     await browser.close();

@@ -1,0 +1,52 @@
+<!doctype html>
+<!--
+  The device API reference, rendered by a vendored Swagger UI — no CDN,
+  so this page works from the S3 bundle AND from a file:// download of
+  the standalone app (FR-UI-8), same as everything else in web/.
+
+  Docs-only on purpose: every body is protobuf, so "try it out" with a
+  hand-typed JSON body cannot produce a valid request. pbtool and the
+  app's js/api.js are the executable clients; this page is the contract,
+  written from api.h and the handlers.
+
+  Copyright (c) 2024-2026 Jefferson J. Hunt (MIT)
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pinled API</title>
+  <link rel="stylesheet" href="../js/vendor/swagger/swagger-ui.css">
+  <style>
+    body { margin: 0; }
+    .topbar { display: none; }
+    #note {
+      font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #12100d; color: #ede7de; padding: 12px 20px;
+    }
+    #note a { color: #ffb23f; }
+  </style>
+</head>
+<body>
+<div id="note">
+  pinled device API — protobuf bodies throughout, so this reference is
+  read-only; <code>tools/pbtool.py</code> is the curl equivalent.
+  <a href="../index.html">back to the app</a>
+</div>
+<div id="swagger-ui"></div>
+<script src="../js/vendor/swagger/swagger-ui-bundle.js"></script>
+<!-- The spec ships as a script, not a fetch: file:// pages cannot fetch,
+     and the standalone download must render these docs too. openapi.yaml
+     stays the source; tools/gen_openapi_js.py regenerates spec.js. -->
+<script src="spec.js"></script>
+<script>
+  SwaggerUIBundle({
+    spec: window.PINLED_OPENAPI,
+    dom_id: "#swagger-ui",
+    supportedSubmitMethods: [], // docs-only: protobuf bodies (see the note)
+    defaultModelsExpandDepth: -1,
+    docExpansion: "list",
+  });
+</script>
+</body>
+</html>
