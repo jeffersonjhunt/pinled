@@ -34,6 +34,16 @@ Three pieces, and the split is deliberate:
 | SPA **bundle** — the actual application, images, help pages, config registry | **S3**, over HTTPS | pushed any time, independently |
 | **Profile registry / sharing API** | cloud, over HTTPS | independently |
 
+> **Applied 2026-08-22.** The bundle lives at
+> `https://oneoffendeavors-pinled-webui.s3.us-east-1.amazonaws.com` (public
+> GET, CORS for any origin — the shell fetches it cross-origin from a
+> `http://<device>` page). `tools/publish_webui.sh` publishes; the bucket
+> policy and CORS are code in `tools/cloud/`. The shell's `<base>` tag
+> taught the one lesson of the hookup: relative URLs — fetch() included —
+> resolve against it, so the app addresses the device by absolute origin,
+> and `test/web/browser_check.js shell` guards the whole path in real
+> browsers.
+
 The browser is the only participant that talks to both the device and the
 cloud. **The ESP32 makes no outbound calls to any web service, ever** — not for
 updates, not for registration, not for the profile library. It is a LAN device

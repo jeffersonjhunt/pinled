@@ -336,7 +336,7 @@ menu "pinled configuration"
 
         config PINLED_BUNDLE_URL
             string "SPA bundle base URL (empty = none)"
-            default ""
+            default "https://oneoffendeavors-pinled-webui.s3.us-east-1.amazonaws.com"
             help
                 Where the device-served shell loads the application from
                 (FR-UI-1, WEBUI.md §1) — an https:// base URL whose
