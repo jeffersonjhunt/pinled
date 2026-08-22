@@ -1,11 +1,9 @@
 dependencies:
   idf: '>=5.5'
-  # PINNED, deliberately, 2026-08-21. This exact version transmits every
-  # colour byte bit-reversed (measured — see wire8() in lamp_map.cpp and
-  # raw/R0G255B0.csv), and wire8() compensates for exactly that behaviour.
-  # An upstream fix arriving silently through '*' would DOUBLE-reverse and
-  # break every mixed colour again. The pin and the shim leave together:
-  # the recorded plan is to replace this driver (espressif/led_strip, or
-  # our own — the indicator's raw-RMT path is a working seed) once
-  # feat/webui closes.
-  zorxx/neopixel: '==1.1.0'
+  # The in-house driver (github.com/jeffersonjhunt/esp32-idf-ws2812b),
+  # born when its predecessor was caught transmitting every colour byte
+  # bit-reversed. Pinned to a commit, same policy as before: the wire
+  # contract is proven per-version on the bench, not assumed.
+  esp32-idf-ws2812b:
+    git: "https://github.com/jeffersonjhunt/esp32-idf-ws2812b.git"
+    version: "b0eea3feef42"
