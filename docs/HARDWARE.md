@@ -341,13 +341,24 @@ S3. Full derivation in `TIMING.md` §5.
 
   HW-9 itself still stands as mainboard engineering — 3.3 V into a 3.5 V
   threshold is legitimately out of spec even though this bench strip reads
-  it reliably. **Decided 2026-08-22: a 74HCT14 at 5 V, two gates in
-  series**, is the shifter — TTL inputs (V_IH 2.0 V) hear the 3.3 V GPIO
-  with margin, the output is push-pull 5 V, and the Schmitt action squares
-  the edges on the way through; the 74AHCT125 remains an equivalent
-  substitute. **The family letters are the whole game**: the front end's
-  74LVC14 cannot be powered at 5 V at all (LVC maxes ~3.6 V), and a plain
-  HC14 at 5 V has the very 3.5 V threshold being solved — it must be HCT.
+  it reliably. **Decided 2026-08-22, refined same day:**
+
+  - **Rev D mainboard: SN74AHCT1G08 in SOT-23-5, inputs tied together** —
+    a single-gate AND as a buffer, the classic idiom. TTL input
+    (V_IH 2.0 V) hears the 3.3 V S3 with 1.3 V of margin, push-pull 5 V
+    out, ~5 ns edges, one tiny package. Equivalent substitutes if
+    sourcing stalls: SN74AHCT1G125 (/OE to ground) or 74LVC1T45.
+  - **Bench prototype: the HC14 in the bin, two gates in series — powered
+    from a diode-dropped ~4.3 V rail**, not from 5 V. At 4.3 V its input
+    threshold is ~3.0 V (the 3.3 V GPIO clears spec) and its ~4.3 V output
+    high clears the 5 V strip's 3.5 V V_IH. At a full 5 V supply a plain
+    HC gate has the very 3.5 V threshold being solved and merely relocates
+    the gamble.
+
+  **The family letters are the whole game**: the front end's 74LVC14
+  cannot be powered at 5 V at all (LVC maxes ~3.6 V), plain HC at 5 V has
+  the threshold problem itself, and only T-suffix (TTL-input) parts hear
+  3.3 V from a 5 V supply by spec.
   Unused inputs tied to ground, 100 nF at the chip, and the Überguide's
   supporting cast (**300–500 Ω data resistor at the first pixel,
   500–1000 µF across strip power**) worth fitting on any rig. The lesson the wrong diagnosis teaches: a signal
