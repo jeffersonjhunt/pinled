@@ -323,7 +323,9 @@ S3. Full derivation in `TIMING.md` §5.
   (upstream has open "bits transposed" issues); the status pixel's own raw
   RMT path was never wrong, which was the tell. Compensated at the driver
   boundary (`wire8()` in lamp_map.cpp) with the capture as evidence, the
-  bug reported upstream, and the dependency **pinned to ==1.1.0** so a
+  bug reported upstream
+  ([zorxx/neopixel#16](https://github.com/zorxx/neopixel/issues/16)),
+  and the dependency **pinned to ==1.1.0** so a
   silent upstream fix cannot double-reverse through the shim. **Decided
   2026-08-21: replace the driver after `feat/webui` closes.**
 
