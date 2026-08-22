@@ -14,8 +14,8 @@ partition and the plain-'165 daisy chain were confirmed by the owner
 ```mermaid
 flowchart LR
     subgraph FE["Front end (×16 per module) — unchanged since rev B"]
-      TAP["Lamp socket tap<br/>5–20 V AC/DC"] --> DIV["divider + diode<br/>+ clamp to 3V3"]
-      DIV --> FET["N-ch MOSFET<br/>(inverting)"]
+      TAP["Lamp socket tap<br/>5–20 V AC/DC"] --> DIV["divider + diode"]
+      DIV --> FET["N-ch MOSFET (inverting)<br/>output clamped to 3V3"]
       FET --> ST["74LVC14 Schmitt<br/>(inverting) → net non-inverting"]
     end
 
