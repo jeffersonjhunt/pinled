@@ -105,12 +105,30 @@ async function run(name, engine, base, shellMode) {
     // The API reference: the link resolves (respecting <base> under the
     // shell) and the vendored Swagger UI actually renders operations —
     // from S3 in shell mode, from disk in file mode, fetching nothing.
-    const docsHref = await page.$eval("#api-docs-link", (a) => a.href);
-    const docs = await browser.newPage();
-    await docs.goto(docsHref);
+    // CLICKED, not goto()'d: the back link is computed from the referrer,
+    // and only a real click carries one — a navigated copy of the docs
+    // page would test a page no user sees.
+    const [docs] = await Promise.all([
+        page.waitForEvent("popup"),
+        page.click("#api-docs-link"),
+    ]);
+    await docs.waitForLoadState();
     const rendered = await docs.waitForSelector(".swagger-ui .opblock",
         { timeout: 15000 }).then(() => true, () => false);
-    check("API reference renders", rendered, docsHref);
+    check("API reference renders", rendered, docs.url());
+    // The back link's one job: return to where you came from. Under the
+    // shell that is the DEVICE origin — never the bundle's own index.html,
+    // which is a mixed-content dead end (shipped once, caught on the
+    // bench: S3's AccessDenied XML where the app should have been).
+    const backHref = await docs.$eval("#back-link", (a) => a.href)
+        .catch(() => "(no link)");
+    if (shellMode)
+        check("docs back link returns to the device",
+              backHref === base + "/", backHref);
+    else
+        check("docs back link stays local",
+              backHref.startsWith("file://") && backHref.endsWith("/web/index.html"),
+              backHref);
     await docs.close();
 
     check("no failed network requests", netFail.length === 0,

@@ -31,8 +31,25 @@
 <div id="note">
   pinled device API — protobuf bodies throughout, so this reference is
   read-only; <code>tools/pbtool.py</code> is the curl equivalent.
-  <a href="../index.html">back to the app</a>
+  <a href="../index.html" id="back-link">back to the app</a>
 </div>
+<script>
+  // "Back" means back to WHERE YOU CAME FROM. Under the shell that is the
+  // device (the referrer), and it must never be this bucket's copy of the
+  // app: an https bundle origin cannot call an http device (mixed
+  // content), so the S3 index.html is a dead end by architecture. The
+  // relative default stays for the file:// download, whose referrer is
+  // empty.
+  (function () {
+    try {
+      if (document.referrer) {
+        var from = new URL(document.referrer);
+        if (from.origin !== location.origin)
+          document.getElementById("back-link").href = from.origin + "/";
+      }
+    } catch (e) { /* keep the relative default */ }
+  })();
+</script>
 <div id="swagger-ui"></div>
 <script src="../js/vendor/swagger/swagger-ui-bundle.js"></script>
 <!-- The spec ships as a script, not a fetch: file:// pages cannot fetch,

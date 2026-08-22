@@ -978,9 +978,25 @@
         // location itself is unaffected by <base>, so it still names the
         // device that served the shell.
         boot(location.origin).catch(function (e) {
+            // An https origin that has no API is the BUNDLE HOST — someone
+            // opened the S3 copy directly (or followed a link to it). No
+            // connection can ever work from here: an https page cannot call
+            // an http device (mixed content, unconditional). Say that, with
+            // directions, instead of relaying S3's AccessDenied XML.
+            var bundleHost = location.protocol === "https:";
             document.body.innerHTML =
                 "<div class='connect'><div class='card'><h3 class='card-title'>" +
-                "Could not reach the device API</h3><p class='prose'>" + esc(e.message) +
+                (bundleHost ? "This is the app bundle, not a device"
+                            : "Could not reach the device API") +
+                "</h3><p class='prose'>" +
+                (bundleHost
+                    ? "Open the app from your controller instead — browse to " +
+                      "<code>http://pinled.local/</code> or the numeric address " +
+                      "the setup page reported. The device serves this same app " +
+                      "from its own address, which is the only origin that can " +
+                      "reach an <code>http://</code> API. Offline, download the " +
+                      "standalone app and open its <code>index.html</code> from disk."
+                    : esc(e.message)) +
                 "</p></div></div>";
         });
     }
