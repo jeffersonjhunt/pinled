@@ -243,7 +243,7 @@ clamps to 60% of that, so **Fs ≈ 12 kHz**. See `TIMING.md` §2.4.
 | J1, J2 | 5-pin JST-SH | 2 | chain in (toward master) / chain out. **Not interchangeable** (HW-13). |
 | Q1–Q16 | N-ch MOSFET (e.g. 2N7002 / BSS138) | 16 | per-channel level-shift 5–20 V → 3.3 V logic (inverting common-source). |
 | D1–D16 | signal diode (e.g. 1N4148 / BAT54 Schottky) | 16 | AC-signal rectification / input steering. |
-| — | gate series R + pull, drain pull-up, clamp to 3V3 | — | protection + defined trip point with hysteresis. |
+| — | gate series R + 12 V G–S zener, drain pull-up | — | protection + defined trip point with hysteresis. |
 | U5 | ESP32 module | 1 | POC: Adafruit QT Py ESP32 Pico. Original ESP32 target. |
 | — | WS2812B / SK6812 | n | addressable LEDs, one data line for the string. |
 | — | 3V3 regulator + decoupling | 1 | onboard reg from 5–12 V rail; 0.1 µF per IC. |
@@ -258,7 +258,8 @@ clamps to 60% of that, so **Fs ≈ 12 kHz**. See `TIMING.md` §2.4.
 - **Voltage span:** design the divider/clamp for the worst case across eras
   (~6.3 V GI up to ~18–20 V feature-lamp drive), AC or DC, either polarity, with
   hysteresis so marginal signals don't chatter.
-- **Protection:** series gate resistors + clamp the FET output to the 3V3 rail
+- **Protection:** series gate resistors + 12 V gate–source zener per channel
+  (V_GS max ±20 V vs the ~24 V input span; see HARDWARE.md). No output clamp
   (Schottky or the input's own protection diodes via series R, or a TVS). The
   machine is electrically noisy — the machine's own filtering helps, but don't
   rely on it exceeding the HC absolute-max of VCC + 0.5 V.
