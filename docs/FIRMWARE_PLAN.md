@@ -1049,7 +1049,9 @@ what rule it followed; the honest answer was "none", which is why
   truth between bumps.
 
 0.3.0 is the catch-up: the M4 era plus the in-house LED driver, taken as
-one acknowledged step rather than six retroactive ones.
+one acknowledged step rather than six retroactive ones. Docs-only merges
+carry no bump — the binary is unchanged, and a version that moves without
+the firmware moving would make the number lie in the other direction.
 
 ## 6. Test strategy
 
