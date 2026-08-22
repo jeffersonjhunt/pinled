@@ -1006,6 +1006,33 @@ serves it back.*
 firmware. The acceptance test is the mapping flow: fire a lamp from the test
 card, bind it by clicking, watch the live view confirm it.
 
+*Landed 2026-08-19 on `feat/webui`, pending the acceptance flow on the bench.
+`web/` holds the app — no build step, classic scripts, protobuf.js parsing
+the `.proto` at runtime, the mockup's approved design as the stylesheet. The
+firmware side is one page: `GET /` serves the setup portal while
+unprovisioned and the shell otherwise, which loads the bundle from
+`PINLED_BUNDLE_URL` (empty for now — no cloud exists — so it explains the
+standalone `file://` path, FR-UI-8). Everything testable without eyes was
+tested from the container: `test/web/api_check.js` (17 wire-level checks
+against the board, live socket included), the apply path end-to-end (bind →
+PUT → restart → verify → byte-identical restore), and a jsdom smoke run
+that boots the real app against the real board and drives the learn flow
+through DOM events. What remained was the human half: the §4 mapping flow
+with the test card.*
+
+*Closed out 2026-08-21 after the full §5f checklist passed on the bench —
+and the bench earned its keep. The mapping flow's "colours are not right"
+unwound, via a colour-lab harness added to the API and a logic-analyser
+capture, into a bit-reversed lookup table inside the third-party LED
+driver (HARDWARE.md carries that story, the shim, the pin, and the
+replacement plan). The browser half of the stack then surfaced what
+node-based validation structurally cannot: a doubled CORS header that let
+the device do the work while every browser reported failure, a
+two-task race on the live-client table that a slow upload turned into a
+1.3-million-line log flood, and an upload with no progress feedback.
+`test/web/browser_check.js` — the app in real WebKit and Chromium against
+a real board — is the permanent gate that class of bug now has to pass.*
+
 ## 6. Test strategy
 
 Written when the repo had no tests at all. As of 2026-08-15 there are

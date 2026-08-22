@@ -309,6 +309,36 @@ S3. Full derivation in `TIMING.md` §5.
   regulator. Level-shift the LED data line or run the strip at reduced VDD
   (HW-9): WS2812B wants V_IH ≥ 0.7 × VDD = 3.5 V, above a 3.3 V S3 output.
 
+  **The 2026-08-20 bench colour faults were NOT this** — recorded here
+  because the first diagnosis said they were, and the correction matters
+  more than the guess. Mixed colours rendered wrong in ways no colour math
+  explained, with a deterministic hue cliff at a bit-carry boundary
+  ((126,128,128) RED, (128,128,128) white), which pattern-matched marginal
+  V_IH. A logic-analyser capture then showed cleanly framed WS2812 data
+  whose colour bytes were **bit-reversed**: the firmware handed the driver
+  0x80 and the wire carried 0x01, while palindromes (0x00, 0xFF, 0x7E)
+  crossed unchanged — which is why primaries always passed and every mixed
+  colour lied (`raw/R0G255B0.csv`, `raw/R0G254B0.csv`). The defect is in
+  the zorxx/neopixel 1.1.0 I2S transmit path on this S3/IDF 5.5 build
+  (upstream has open "bits transposed" issues); the status pixel's own raw
+  RMT path was never wrong, which was the tell. Compensated at the driver
+  boundary (`wire8()` in lamp_map.cpp) with the capture as evidence, the
+  bug reported upstream, and the dependency **pinned to ==1.1.0** so a
+  silent upstream fix cannot double-reverse through the shim. **Decided
+  2026-08-21: replace the driver after `feat/webui` closes** — espressif's
+  `led_strip` (RMT), or an in-house driver (the indicator's raw-RMT path
+  is a working seed). The pin and the shim leave together.
+
+  HW-9 itself still stands as mainboard engineering — 3.3 V into a 3.5 V
+  threshold is legitimately out of spec even though this bench strip reads
+  it reliably — so the **74AHCT125 (or 74HCT245) at 5 V** stays on the
+  rev D BOM, with the Überguide's supporting cast (**300–500 Ω data
+  resistor at the first pixel, 500–1000 µF across strip power**) worth
+  fitting on any rig. The lesson the wrong diagnosis teaches: a signal
+  that pattern-matches a known failure can have a different cause, and a
+  $10 logic capture settles in minutes what eyes-and-theory circled for a
+  day.
+
   **Measured 2026-08-11**, 16 LEDs off the QT Py's USB 5 V, all white:
   170 mA at 25% duty, **530 mA at 50%**, and a **brown-out entering 75%**.
   530 mA over 16 LEDs is 33 mA/LED at half brightness, so ~66 mA at full —

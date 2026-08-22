@@ -573,6 +573,23 @@ and the next reset falls back to the previous slot. Until someone runs that,
 rollback rests on ESP-IDF's contract plus the `PENDING_VERIFY` check in
 `OtaManager::mark_running_valid()` — believed, not measured.
 
+## 5f. The SPA on the bench
+
+Everything wire-level was verified from the container 2026-08-19 —
+`test/web/api_check.js` against the live board, the apply path with a
+byte-identical restore, and a headless DOM run that drives the learn flow.
+What is left needs eyes and the test card, and it is the M4 acceptance test
+(FIRMWARE_PLAN.md §5.2 step 4):
+
+| # | Do | Expect |
+|---|---|---|
+| 1 | Open `web/index.html` from disk (file://), enter the board's address. | The app connects, the grid shows the live channels, the badge says **live**. |
+| 2 | `http://<board>/` in a browser. | The shell page: no cloud bundle is configured, so it explains the standalone path and shows the API base. |
+| 3 | Turn on **Learn wiring**, fire a lamp from the Alltek test card, click the cell that lit. | The cell gains the lamp number; the top bar shows **unapplied edits**. The sticky dot makes the flash visible even between pushes. |
+| 4 | Name it in the inspector, pick a colour, **Apply & restart**. | The board restarts, comes back, and the LED renders that lamp in that colour — the mapping flow, end to end. |
+| 5 | Export the profile, re-import it. | The file is readable JSON with your author handle stamped in; the shortfall line reports how many lamps match the wiring. |
+| 6 | Device panel → upload a `.bin`. | Staged countdown mirrors the amber blink; the page says only the button can boot it; after the press it reports the new build id and slot. |
+
 ## 6. Tooling traps
 
 These are not hardware faults, but they present as one.

@@ -193,6 +193,7 @@ namespace ooe::pinled
         mc.led_count = cfg_.led_count;
         mc.channel_count = num_channels_;
         mc.color_order = cfg_.color_order;
+        mc.gamma = cfg_.gamma; // one knob: the filament level LUT uses it too
         ESP_ERROR_CHECK(map_.init(mc));
         clamp_refresh(); // FR-LED-8
 
@@ -286,8 +287,21 @@ namespace ooe::pinled
 
         start_ota();
 
+        // The colour lab (bench harness): straight through to the renderer's
+        // override word, on whichever task the httpd handler runs.
+        ColorLabHooks lab{};
+        lab.arg = this;
+        lab.set = [](void *self, int led, uint8_t r, uint8_t g, uint8_t b,
+                     uint8_t level, bool raw) {
+            static_cast<Main *>(self)->map_.set_override(
+                static_cast<int16_t>(led), r, g, b, level, raw);
+        };
+        lab.clear = [](void *self) {
+            static_cast<Main *>(self)->map_.clear_override();
+        };
+
         if (api_.start(store_, cfg_, channels_, num_channels_, net_, live_, this,
-                       &ota_) != ESP_OK)
+                       &ota_, &lab) != ESP_OK)
         {
             ESP_LOGE(TAG, "API did not start");
             status_.set_fault(FaultClass::INTERNAL, true);

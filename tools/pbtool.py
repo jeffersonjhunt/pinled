@@ -236,6 +236,29 @@ def cmd_author(args) -> int:
     return 0
 
 
+def cmd_colortest(args) -> int:
+    """The colour lab: pin one LED to exact bytes, live (no restart)."""
+    url = args.url.rstrip("/")
+    if not url.endswith("/colortest"):
+        url += "/api/v1/colortest"
+    if args.clear:
+        body = _http(url, method="DELETE")
+    else:
+        if args.led is None or args.r is None:
+            _die("give LED R G B, or --clear")
+        msg = _message("ColorTest")
+        msg.led = args.led
+        msg.color.r, msg.color.g, msg.color.b = args.r, args.g, args.b
+        msg.level = args.level
+        msg.raw = args.raw
+        msg.gamma_x100 = args.gamma
+        body = _http(url, data=msg.SerializeToString(), method="POST")
+    result = _message("ApplyResult")
+    result.ParseFromString(body)
+    print(_to_json(result))
+    return 0
+
+
 def cmd_ota_discard(args) -> int:
     url = args.url.rstrip("/")
     if not url.endswith("/ota"):
@@ -535,6 +558,19 @@ def main(argv: list[str] | None = None) -> int:
     od = sub.add_parser("ota-discard", help="discard a staged image (DELETE /api/v1/ota)")
     od.add_argument("url")
     od.set_defaults(func=cmd_ota_discard)
+
+    ct = sub.add_parser("colortest", help="pin one LED to exact bytes, live (the colour lab)")
+    ct.add_argument("url")
+    ct.add_argument("led", nargs="?", type=int)
+    ct.add_argument("r", nargs="?", type=int)
+    ct.add_argument("g", nargs="?", type=int)
+    ct.add_argument("b", nargs="?", type=int)
+    ct.add_argument("--level", type=int, default=0, help="0..255 output scale (default full)")
+    ct.add_argument("--raw", action="store_true", help="bypass the sRGB->linear conversion")
+    ct.add_argument("--gamma", type=int, default=0,
+                    help="gamma x100 to try (160 = x^1.6); 0 = the device's configured gamma")
+    ct.add_argument("--clear", action="store_true", help="remove the override")
+    ct.set_defaults(func=cmd_colortest)
 
     au = sub.add_parser("author", help="store or clear the author handle (FR-REG-1)")
     au.add_argument("url", help="device base URL, or .../api/v1/author")

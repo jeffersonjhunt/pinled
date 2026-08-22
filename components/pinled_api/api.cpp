@@ -7,6 +7,7 @@
 #include "api.h"
 
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 
 #include <unistd.h> // close(), for the httpd close_fn contract
@@ -58,6 +59,7 @@ namespace ooe::pinled
             LiveState *live;
             ProfilerControl *profiler; ///< null on a build with no scan task
             OtaManager *ota;           ///< null on a build with no OTA slots
+            ColorLabHooks lab;         ///< set == nullptr when unavailable
             httpd_handle_t server;
         };
 
@@ -81,6 +83,18 @@ namespace ooe::pinled
         uint32_t g_seq = 0;
         uint32_t g_dropped = 0;
 
+        /// The table is touched from TWO tasks — httpd (add on upgrade,
+        /// remove in close_fn) and the push task (remove on send failure) —
+        /// so every touch is a critical section, and removal is BY FD, never
+        /// by index: an index-based remove racing a concurrent remove
+        /// double-decremented g_client_count, a size_t, and the push loop
+        /// then walked four billion garbage entries logging "client 0
+        /// dropped" until the watchdog gave up (1.3 million lines on the
+        /// bench, 2026-08-21, triggered by an 80-second OTA upload keeping
+        /// httpd busy while a browser's sockets churned). By-fd removal is
+        /// idempotent, so the race collapses to "one of them wins".
+        portMUX_TYPE g_clients_mux = portMUX_INITIALIZER_UNLOCKED;
+
         /// False when the slot table is full. The caller must then FAIL the
         /// request rather than accept it: httpd has already completed the
         /// handshake, so a silent refusal leaves the client holding an open
@@ -88,18 +102,51 @@ namespace ooe::pinled
         /// dead device.
         bool add_client(int fd)
         {
-            for (size_t i = 0; i < g_client_count; ++i)
-                if (g_clients[i] == fd)
-                    return true;
-            if (g_client_count >= kMaxLiveClients)
-                return false;
-            g_clients[g_client_count++] = fd;
-            return true;
+            bool ok = true;
+            taskENTER_CRITICAL(&g_clients_mux);
+            size_t i = 0;
+            while (i < g_client_count && g_clients[i] != fd)
+                ++i;
+            if (i == g_client_count)
+            {
+                if (g_client_count < kMaxLiveClients)
+                    g_clients[g_client_count++] = fd;
+                else
+                    ok = false;
+            }
+            taskEXIT_CRITICAL(&g_clients_mux);
+            return ok;
         }
 
-        void drop_client(size_t index)
+        /// True if @p fd was present (and is now gone). Safe from any task,
+        /// any number of times.
+        bool remove_client(int fd)
         {
-            g_clients[index] = g_clients[--g_client_count];
+            bool removed = false;
+            taskENTER_CRITICAL(&g_clients_mux);
+            for (size_t i = 0; i < g_client_count; ++i)
+            {
+                if (g_clients[i] == fd)
+                {
+                    g_clients[i] = g_clients[--g_client_count];
+                    removed = true;
+                    break;
+                }
+            }
+            taskEXIT_CRITICAL(&g_clients_mux);
+            return removed;
+        }
+
+        /// A coherent copy for the push loop to send against, so no send —
+        /// which can block — ever happens inside the critical section.
+        size_t snapshot_clients(int (&out)[kMaxLiveClients])
+        {
+            taskENTER_CRITICAL(&g_clients_mux);
+            const size_t n = g_client_count;
+            for (size_t i = 0; i < n; ++i)
+                out[i] = g_clients[i];
+            taskEXIT_CRITICAL(&g_clients_mux);
+            return n;
         }
 
         /// httpd tells us when it closes a socket, which is the only reliable
@@ -113,16 +160,9 @@ namespace ooe::pinled
         /// same second.
         void on_socket_closed(httpd_handle_t, int fd)
         {
-            for (size_t i = 0; i < g_client_count; ++i)
-            {
-                if (g_clients[i] == fd)
-                {
-                    drop_client(i);
-                    ESP_LOGI(TAG, "live: client %d closed (%u remain)",
-                             fd, (unsigned)g_client_count);
-                    break;
-                }
-            }
+            if (remove_client(fd))
+                ESP_LOGI(TAG, "live: client %d closed (%u remain)",
+                         fd, (unsigned)g_client_count);
             close(fd); // httpd's default close_fn does exactly this
         }
 
@@ -142,6 +182,14 @@ namespace ooe::pinled
         /// FR-UI-3. Applied to every response including errors — a CORS-blocked
         /// error body is indistinguishable from a network failure in a browser,
         /// which turns a clear 400 into a mystery.
+        ///
+        /// AT MOST ONCE PER RESPONSE: httpd_resp_set_hdr APPENDS, so a second
+        /// call emits every header twice, and a doubled Allow-Origin is a
+        /// CORS *failure* in every browser — the device does the work and the
+        /// browser reports "Load failed", which cost a day to see because
+        /// non-browser clients ignore CORS entirely (found by WebKit under
+        /// Playwright, 2026-08-21). fail() and send_protobuf() call this;
+        /// handlers that exit through them must not.
         void add_cors(httpd_req_t *req)
         {
             httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -278,6 +326,62 @@ namespace ooe::pinled
             add_cors(req);
             httpd_resp_set_type(req, "text/html");
             return httpd_resp_send(req, kPortalPage, HTTPD_RESP_USE_STRLEN);
+        }
+
+        // --- the SPA shell (FR-UI-1) ---------------------------------------
+        //
+        // The one page the device serves in station mode, and the reason it
+        // serves any page at all: an https:// cloud page cannot call an
+        // http:// device (mixed content, unconditional), but an http:// page
+        // may pull https:// assets freely — so the ORIGIN must be the device
+        // and the weight may live in the cloud (WEBUI.md §1). The shell
+        // fetches the bundle's index and writes it into this origin with a
+        // <base> pointing back at the bundle, so every asset resolves there
+        // while every API call stays here.
+        //
+        // No bundle configured, or the fetch fails (offline, S3 gone, bucket
+        // CORS wrong): the shell says exactly that and points at the
+        // standalone path (FR-UI-8), which is the offline story working as
+        // designed rather than a degraded mode.
+        constexpr char kShellPage[] =
+            "<!doctype html><meta charset=utf-8>"
+            "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+            "<title>pinled</title>"
+            "<style>body{font:15px system-ui,sans-serif;margin:0;padding:32px;"
+            "background:#12100D;color:#EDE6DA}h1{font-size:20px}"
+            "a{color:#FFB23F}code{color:#A89C8E}p{max-width:34em}</style>"
+            "<h1>pinled</h1><div id=s>Loading the app\xE2\x80\xA6</div>"
+            "<script>"
+            "var B='" CONFIG_PINLED_BUNDLE_URL "';"
+            "function offline(msg){document.getElementById('s').innerHTML="
+            "'<p>'+msg+'</p>'"
+            "+'<p>The device API is up at <code>'+location.origin+'/api/v1/</code>.</p>'"
+            "+'<p>Offline path (FR-UI-8): download the standalone app once,'"
+            "+' open its <code>index.html</code> from disk, and point it at'"
+            "+' <code>'+location.origin+'</code>.</p>'}"
+            "if(!B){offline('No cloud bundle is configured in this firmware, "
+            "so there is no app to load from here.')}"
+            "else{fetch(B+'/index.html').then(function(r){"
+            "if(!r.ok)throw new Error('HTTP '+r.status);return r.text()})"
+            ".then(function(html){"
+            "document.open();"
+            "document.write(html.replace(/<head>/i,"
+            "'<head><base href=\"'+B+'/\">'));"
+            "document.close()})"
+            ".catch(function(e){offline('The app bundle at <code>'+B+"
+            "'</code> did not load ('+e.message+').')})}"
+            "</script>";
+
+        /// "/" is modal on the network state: a provisioned device serves
+        /// the app shell, an unprovisioned one (or a fallback SoftAP) serves
+        /// the setup portal — the page a person standing there needs next.
+        esp_err_t get_root(httpd_req_t *req)
+        {
+            if (g_ctx.net != nullptr && g_ctx.net->awaiting_provisioning())
+                return get_portal(req);
+            add_cors(req);
+            httpd_resp_set_type(req, "text/html");
+            return httpd_resp_send(req, kShellPage, HTTPD_RESP_USE_STRLEN);
         }
 
         /// Every OS probes a different URL to decide whether a network is
@@ -814,7 +918,6 @@ namespace ooe::pinled
         /// worst the network can do is fill a slot nobody boots.
         esp_err_t post_ota(httpd_req_t *req)
         {
-            add_cors(req);
             if (g_ctx.ota == nullptr)
                 return send_apply_result(req, "503 Service Unavailable", false,
                                        "no OTA support on this build");
@@ -928,7 +1031,6 @@ namespace ooe::pinled
         /// confirm: that belongs to the button alone.
         esp_err_t delete_ota(httpd_req_t *req)
         {
-            add_cors(req);
             if (g_ctx.ota == nullptr)
                 return send_apply_result(req, "503 Service Unavailable", false,
                                        "no OTA support on this build");
@@ -954,7 +1056,6 @@ namespace ooe::pinled
         /// reports it back. Ownership and verification are cloud-side.
         esp_err_t put_author(httpd_req_t *req)
         {
-            add_cors(req);
 
             // An AuthorHandle at max_size encodes in ~34 bytes; 64 is
             // implausibility, not a limit anyone hits legitimately.
@@ -1000,11 +1101,92 @@ namespace ooe::pinled
             return send_apply_result(req, nullptr, true, out);
         }
 
+        // --- the colour lab (bench harness) --------------------------------
+
+        /// Pin one LED to exact bytes, live. Nothing persists — a reboot or
+        /// a DELETE ends it — so this is a measurement instrument, not a
+        /// configuration path.
+        esp_err_t post_colortest(httpd_req_t *req)
+        {
+            if (g_ctx.lab.set == nullptr)
+                return send_apply_result(req, "503 Service Unavailable", false,
+                                         "no LED stack on this build");
+
+            const size_t len = static_cast<size_t>(req->content_len);
+            if (len == 0 || len > 64)
+                return fail(req, HTTPD_400_BAD_REQUEST, "implausible body");
+            uint8_t body[64];
+            size_t got = 0;
+            int stalls = 0;
+            while (got < len)
+            {
+                const int n = httpd_req_recv(req,
+                                             reinterpret_cast<char *>(body) + got,
+                                             len - got);
+                if (n == HTTPD_SOCK_ERR_TIMEOUT)
+                {
+                    if (++stalls > 4)
+                        return fail(req, HTTPD_408_REQ_TIMEOUT, "body never arrived");
+                    continue;
+                }
+                if (n <= 0)
+                    return fail(req, HTTPD_400_BAD_REQUEST, "truncated body");
+                stalls = 0;
+                got += static_cast<size_t>(n);
+            }
+
+            pinled_v1_ColorTest msg = pinled_v1_ColorTest_init_zero;
+            pb_istream_t is = pb_istream_from_buffer(body, got);
+            if (!pb_decode(&is, pinled_v1_ColorTest_fields, &msg))
+                return fail(req, HTTPD_400_BAD_REQUEST, "not a ColorTest");
+            if (msg.led < 0 || msg.led > 0x7FFF)
+                return fail(req, HTTPD_400_BAD_REQUEST, "led out of range");
+            if (msg.color.r > 255 || msg.color.g > 255 || msg.color.b > 255 ||
+                msg.level > 255)
+                return fail(req, HTTPD_400_BAD_REQUEST, "bytes are 0..255");
+
+            if (msg.gamma_x100 > 400)
+                return fail(req, HTTPD_400_BAD_REQUEST, "gamma_x100 is 0..400");
+
+            // The conversion happens HERE, once per request, so the lab can
+            // sweep gamma without the renderer growing a per-frame pow().
+            // Priority: raw beats an explicit gamma beats the device's own.
+            const float gamma = msg.raw ? 1.0f
+                                : msg.gamma_x100 ? msg.gamma_x100 / 100.0f
+                                                 : g_ctx.running->gamma;
+            auto convert = [gamma](uint32_t c) -> uint8_t {
+                const float y = std::pow(static_cast<float>(c) / 255.0f, gamma);
+                return static_cast<uint8_t>(y * 255.0f + 0.5f);
+            };
+            const uint8_t level =
+                msg.level == 0 ? 255 : static_cast<uint8_t>(msg.level);
+            g_ctx.lab.set(g_ctx.lab.arg, static_cast<int>(msg.led),
+                          convert(msg.color.r), convert(msg.color.g),
+                          convert(msg.color.b), level,
+                          true /* already converted */);
+
+            char out[96];
+            std::snprintf(out, sizeof(out),
+                          "LED %d <- (%u,%u,%u) level %u, gamma %.2f",
+                          (int)msg.led, (unsigned)msg.color.r,
+                          (unsigned)msg.color.g, (unsigned)msg.color.b,
+                          (unsigned)level, (double)gamma);
+            return send_apply_result(req, nullptr, true, out);
+        }
+
+        esp_err_t delete_colortest(httpd_req_t *req)
+        {
+            if (g_ctx.lab.clear == nullptr)
+                return send_apply_result(req, "503 Service Unavailable", false,
+                                         "no LED stack on this build");
+            g_ctx.lab.clear(g_ctx.lab.arg);
+            return send_apply_result(req, nullptr, true, "override cleared");
+        }
+
         /// Forget the handle. Idempotent: absence was the request, absence
         /// is the result, so clearing a device that never had one is a 200.
         esp_err_t delete_author(httpd_req_t *req)
         {
-            add_cors(req);
             if (author_erase() != ESP_OK)
                 return fail(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not erase");
             return send_apply_result(req, nullptr, true, "author handle cleared");
@@ -1103,27 +1285,34 @@ namespace ooe::pinled
                 ws.payload = frame_buf;
                 ws.len = os.bytes_written;
 
-                for (size_t i = 0; i < g_client_count;)
+                int fds[kMaxLiveClients];
+                const size_t n = snapshot_clients(fds);
+                for (size_t i = 0; i < n; ++i)
                 {
                     const esp_err_t err =
-                        httpd_ws_send_frame_async(g_ctx.server, g_clients[i], &ws);
+                        httpd_ws_send_frame_async(g_ctx.server, fds[i], &ws);
                     if (err == ESP_OK)
                     {
-                        ++i;
+                        // A live socket's traffic is all outbound, so httpd's
+                        // LRU counter never moves on its own and the purge
+                        // (enabled in start()) would evict the monitor as
+                        // "idle". Each successful push marks it recent —
+                        // which is the truth.
+                        httpd_sess_update_lru_counter(g_ctx.server, fds[i]);
                         continue;
                     }
                     // A client that will not take a frame is dropped, not
                     // waited for. FR-UI-9: the monitor never becomes a reason
                     // the scan is late, and the sticky bit means the next push
-                    // carries whatever this one could not.
-                    // Counts CLIENTS reaped, not pushes lost — the sticky bit
-                    // means no push is ever lost, only deferred, and a log line
-                    // claiming otherwise would send someone hunting a data-loss
-                    // bug that cannot exist.
-                    ++g_dropped;
-                    ESP_LOGW(TAG, "live: client %d dropped (%s), %u dropped since boot",
-                             g_clients[i], esp_err_to_name(err), (unsigned)g_dropped);
-                    drop_client(i);
+                    // carries whatever this one could not. remove_client is
+                    // by-fd and idempotent, so racing close_fn is harmless —
+                    // and the log fires only for the copy that actually won.
+                    if (remove_client(fds[i]))
+                    {
+                        ++g_dropped;
+                        ESP_LOGW(TAG, "live: client %d dropped (%s), %u dropped since boot",
+                                 fds[i], esp_err_to_name(err), (unsigned)g_dropped);
+                    }
                 }
             }
         }
@@ -1135,7 +1324,8 @@ namespace ooe::pinled
                          const Net &net,
                          LiveState &live,
                          ProfilerControl *profiler,
-                         OtaManager *ota)
+                         OtaManager *ota,
+                         const ColorLabHooks *lab)
     {
         g_ctx.store = &store;
         g_ctx.running = &running;
@@ -1149,19 +1339,31 @@ namespace ooe::pinled
         g_ctx.live = &live;
         g_ctx.profiler = profiler;
         g_ctx.ota = ota;
+        g_ctx.lab = lab ? *lab : ColorLabHooks{};
         g_ctx.server = nullptr;
 
         httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
         // Well past the default cap of eight, which fails at registration time
         // with a log line nobody reads.
-        cfg.max_uri_handlers = 32;
-        cfg.max_open_sockets = 7;
-        // LRU purging closes the least recently used socket when a new one
-        // arrives — and a live WebSocket looks idle to httpd, because the
-        // traffic is all outbound. With purging on, opening a second browser
-        // tab would silently kill the first one's monitor. Dead sockets are
-        // reaped by close_fn and by the send-failure path instead.
-        cfg.lru_purge_enable = false;
+        // Counted, not guessed: the table below is 33 routes as of the
+        // colour lab, and registration past the cap is an ESP_ERROR_CHECK
+        // abort — a boot loop that presents as "the board died right after
+        // joining Wi-Fi", measured 2026-08-20. Room for the next few steps.
+        cfg.max_uri_handlers = 44;
+        // Thirteen, because seven wedged a real browser (2026-08-21): Safari
+        // holds up to six keep-alive connections per host, the live socket
+        // holds one more, and at exactly seven every further fetch was
+        // refused — "Load failed" on random requests, while single-connection
+        // clients (pbtool, node) never saw it. Sized as 3 WS slots + 6
+        // keep-alive + headroom; needs CONFIG_LWIP_MAX_SOCKETS ≥ 16.
+        cfg.max_open_sockets = 13;
+        // LRU purging ON, so a browser can never wedge the server by holding
+        // sockets — the least recently used one is closed to admit a new
+        // connection. The live WebSocket would look idle to httpd (its
+        // traffic is all outbound) and be purged first; the push task
+        // prevents that by marking each client recent on every successful
+        // push, which is the truth about who is active.
+        cfg.lru_purge_enable = true;
         cfg.close_fn = on_socket_closed;
         cfg.stack_size = 6144; // protobuf encode plus TLS-free httpd
 
@@ -1206,6 +1408,9 @@ namespace ooe::pinled
             {"/api/v1/author", HTTP_PUT, put_author},
             {"/api/v1/author", HTTP_DELETE, delete_author},
             {"/api/v1/author", HTTP_OPTIONS, handle_options},
+            {"/api/v1/colortest", HTTP_POST, post_colortest},
+            {"/api/v1/colortest", HTTP_DELETE, delete_colortest},
+            {"/api/v1/colortest", HTTP_OPTIONS, handle_options},
             {"/api/v1/scan", HTTP_GET, get_scan},
             {"/api/v1/provision", HTTP_POST, post_provision},
             {"/api/v1/provision", HTTP_DELETE, delete_provision},
@@ -1213,7 +1418,7 @@ namespace ooe::pinled
             // The portal itself, plus the URLs each OS probes to decide a
             // network is captive. Registering them explicitly rather than with
             // a wildcard keeps the API paths unambiguous.
-            {"/", HTTP_GET, get_portal},
+            {"/", HTTP_GET, get_root},
             {"/generate_204", HTTP_GET, redirect_to_portal},          // Android
             {"/gen_204", HTTP_GET, redirect_to_portal},               // Android, older
             {"/hotspot-detect.html", HTTP_GET, redirect_to_portal},   // iOS, macOS

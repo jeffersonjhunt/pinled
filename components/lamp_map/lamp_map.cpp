@@ -12,6 +12,7 @@
 #include "pinled_channel_config.h" // ResolveDefaults — the one definition of the default tint
 #include "pinled_color_order.h"
 
+#include <cmath>
 #include <new>
 
 #include "freertos/FreeRTOS.h"
@@ -29,6 +30,23 @@ namespace ooe::pinled
         return static_cast<uint8_t>((static_cast<uint16_t>(value) * scale) / 255);
     }
 
+    /// The zorxx/neopixel 1.1.0 I2S path transmits every colour byte
+    /// BIT-REVERSED on this S3 / IDF 5.5 build. Measured 2026-08-20 with a
+    /// logic analyser: the firmware handed the driver 0x80 and the wire
+    /// carried 0x01, while the palindrome 0x7E crossed unchanged
+    /// (raw/R0G255B0.csv, raw/R0G254B0.csv) — which is why pure 0x00/0xFF
+    /// primaries always looked right and every mixed colour was wrong.
+    /// Each byte is pre-reversed HERE, at the driver boundary and nowhere
+    /// else, so the wire carries what the pipeline computed. Upstream has
+    /// open "bits transposed" issues; replacing the driver outright is the
+    /// recorded follow-up (HARDWARE.md).
+    static inline uint8_t wire8(uint8_t v)
+    {
+        v = static_cast<uint8_t>((v & 0xF0) >> 4 | (v & 0x0F) << 4);
+        v = static_cast<uint8_t>((v & 0xCC) >> 2 | (v & 0x33) << 2);
+        return static_cast<uint8_t>((v & 0xAA) >> 1 | (v & 0x55) << 1);
+    }
+
     esp_err_t LampMap::init(const LampMapConfig &cfg)
     {
         if (cfg.led_pin == GPIO_NUM_NC || cfg.led_count == 0 || cfg.channel_count == 0)
@@ -36,6 +54,16 @@ namespace ooe::pinled
 
         deinit();
         cfg_ = cfg;
+
+        // The same shape as the filament bank's level LUT, and deliberately
+        // the same gamma figure: one knob. Identity when gamma is 1 or
+        // nonsense, so a linear build renders exactly what it is given.
+        const float gamma = (cfg_.gamma > 0.0f) ? cfg_.gamma : 1.0f;
+        for (int i = 0; i < 256; ++i)
+        {
+            const float y = std::pow(static_cast<float>(i) / 255.0f, gamma);
+            tint_lut_[i] = static_cast<uint8_t>(y * 255.0f + 0.5f);
+        }
 
         map_ = new (std::nothrow) LampMapEntry[cfg_.channel_count];
         if (!map_)
@@ -94,9 +122,11 @@ namespace ooe::pinled
             // through apply_channel_config().
             static constexpr ResolveDefaults kDefaults{};
             e.led_index = (ch < cfg_.led_count) ? static_cast<int16_t>(ch) : -1;
-            e.r = kDefaults.r;
-            e.g = kDefaults.g;
-            e.b = kDefaults.b;
+            // Through the same LUT as set_entry: the default tint is a
+            // swatch too, and it rendered washed-out for the same reason.
+            e.r = tint_lut_[kDefaults.r];
+            e.g = tint_lut_[kDefaults.g];
+            e.b = tint_lut_[kDefaults.b];
         }
     }
 
@@ -117,7 +147,7 @@ namespace ooe::pinled
         // that looks identical whatever byte order the strip uses, which is
         // correct here: this answers "is the pixel alive", and the fixture in
         // fs_seed answers "is the order right".
-        const uint32_t lit = pack_for_order(cfg_.color_order, 255, 255, 255);
+        const uint32_t lit = pack_for_order(cfg_.color_order, wire8(255), wire8(255), wire8(255));
 
         for (size_t on = 0; on < cfg_.led_count; ++on)
         {
@@ -150,7 +180,7 @@ namespace ooe::pinled
             return ESP_ERR_INVALID_STATE;
 
         tNeopixel *frame = static_cast<tNeopixel *>(frame_);
-        const uint32_t rgb = pack_for_order(cfg_.color_order, r, g, b);
+        const uint32_t rgb = pack_for_order(cfg_.color_order, wire8(r), wire8(g), wire8(b));
         for (size_t i = 0; i < cfg_.led_count; ++i)
         {
             frame[i].index = static_cast<uint32_t>(i);
@@ -166,7 +196,13 @@ namespace ooe::pinled
     {
         if (channel >= cfg_.channel_count)
             return ESP_ERR_INVALID_ARG;
-        map_[channel] = e;
+        // Stored linearised — see the header. render() then multiplies two
+        // linear quantities, and the swatch someone picked is what they get.
+        LampMapEntry lin = e;
+        lin.r = tint_lut_[e.r];
+        lin.g = tint_lut_[e.g];
+        lin.b = tint_lut_[e.b];
+        map_[channel] = lin;
         return ESP_OK;
     }
 
@@ -175,6 +211,25 @@ namespace ooe::pinled
         if (!initialized_)
             return 0;
         return neopixel_GetRefreshRate(static_cast<tNeopixelContext>(neopixel_));
+    }
+
+    void LampMap::set_override(int16_t led, uint8_t r, uint8_t g, uint8_t b,
+                               uint8_t level, bool raw)
+    {
+        const uint64_t w =
+            (uint64_t{1} << 48) | (raw ? (uint64_t{1} << 49) : 0) |
+            (uint64_t{level} << 40) | (uint64_t{b} << 32) |
+            (uint64_t{g} << 24) | (uint64_t{r} << 16) |
+            static_cast<uint16_t>(led);
+        override_.store(w, std::memory_order_release);
+        ESP_LOGI(TAG, "colour lab: LED %d <- (%u,%u,%u) level %u %s",
+                 (int)led, r, g, b, level, raw ? "raw" : "linearised");
+    }
+
+    void LampMap::clear_override()
+    {
+        if (override_.exchange(0, std::memory_order_acq_rel) != 0)
+            ESP_LOGI(TAG, "colour lab: override cleared");
     }
 
     esp_err_t LampMap::render(const uint8_t *levels, size_t n)
@@ -207,7 +262,34 @@ namespace ooe::pinled
             // declared order — see pinled_color_order.h for why the byte sent
             // first lives in the middle of the word.
             frame[e.led_index].rgb =
-                pack_for_order(cfg_.color_order, scale8(e.r, v), scale8(e.g, v), scale8(e.b, v));
+                pack_for_order(cfg_.color_order, wire8(scale8(e.r, v)),
+                               wire8(scale8(e.g, v)), wire8(scale8(e.b, v)));
+        }
+
+        // The colour lab wins over everything (bench harness, cleared on
+        // request or reboot): one coherent load, then exactly the same
+        // packing the mapped path uses, so what it proves transfers.
+        const uint64_t ov = override_.load(std::memory_order_acquire);
+        if (ov & (uint64_t{1} << 48))
+        {
+            const uint16_t led = static_cast<uint16_t>(ov & 0xFFFF);
+            if (led < cfg_.led_count)
+            {
+                const bool raw = (ov >> 49) & 1;
+                const uint8_t lv = (ov >> 40) & 0xFF;
+                uint8_t r = (ov >> 16) & 0xFF, g = (ov >> 24) & 0xFF,
+                        b = (ov >> 32) & 0xFF;
+                if (!raw)
+                {
+                    r = tint_lut_[r];
+                    g = tint_lut_[g];
+                    b = tint_lut_[b];
+                }
+                frame[led].rgb = pack_for_order(cfg_.color_order,
+                                                wire8(scale8(r, lv)),
+                                                wire8(scale8(g, lv)),
+                                                wire8(scale8(b, lv)));
+            }
         }
 
         // ONE transmit per refresh (FR-LED-6). The driver drops SetPixel calls

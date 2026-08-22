@@ -76,3 +76,7 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 CONFIG_LWIP_TCP_WND_DEFAULT=32768
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=32
 
+# httpd runs 13 open sockets (see Api::start — Safari alone holds seven),
+# and lwIP needs headroom above that for mDNS, DNS and the Wi-Fi stack.
+CONFIG_LWIP_MAX_SOCKETS=16
+
