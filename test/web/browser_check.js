@@ -43,17 +43,22 @@ async function run(name, engine, base, shellMode) {
         // talk to the device — not to S3, which is what the shell's <base>
         // tag silently retargets relative URLs to. This mode exists because
         // that exact bug was caught the day the bundle went live.
-        await page.goto(base + "/");
-        const appVisible = await page.waitForSelector("#app:not([hidden])",
-            { timeout: 30000 }).then(() => true, () => false);
-        check("shell loads the bundle and the app boots", appVisible);
+        // Listener BEFORE navigation: boot's own API calls are the ones
+        // the <base> bug misdirected, and a listener attached after boot
+        // passes vacuously on a quiet page.
         const apiCalls = [];
         page.on("request", (r) => {
             if (r.url().includes("/api/v1/")) apiCalls.push(r.url());
         });
+        await page.goto(base + "/");
+        const appVisible = await page.waitForSelector("#app:not([hidden])",
+            { timeout: 30000 }).then(() => true, () => false);
+        check("shell loads the bundle and the app boots", appVisible);
         await page.waitForTimeout(1500);
         check("API calls go to the device, not the bundle",
+              apiCalls.length > 0 &&
               apiCalls.every((u) => u.startsWith(base)),
+              apiCalls.length + " calls; strays: " +
               apiCalls.filter((u) => !u.startsWith(base)).join(" | "));
     } else {
         const index = path.resolve(__dirname, "..", "..", "web", "index.html");

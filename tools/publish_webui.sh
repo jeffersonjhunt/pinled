@@ -42,6 +42,14 @@ aws s3 sync "$ROOT/web/" "$BUCKET/" \
     --cache-control "max-age=86400" \
     --delete
 
+# The docs page and its generated spec are entry points too: no-cache,
+# for the same reason as index.html — they reference each other unstamped.
+aws s3 cp "$ROOT/web/api/index.html" "$BUCKET/api/index.html" \
+    --content-type "text/html" \
+    --cache-control "no-cache"
+aws s3 cp "$ROOT/web/api/spec.js" "$BUCKET/api/spec.js" \
+    --cache-control "no-cache"
+
 STAMPED="$(mktemp)"
 sed -E "s/(href|src)=\"(css|js)\/([^\"?]+)\"/\1=\"\2\/\3?v=$REV\"/g" \
     "$ROOT/web/index.html" > "$STAMPED"
