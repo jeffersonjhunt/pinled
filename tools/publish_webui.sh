@@ -28,12 +28,26 @@ python3 "$ROOT/tools/gen_openapi_js.py"
 
 # Assets first, index last: a visitor mid-publish gets old-index+old-assets
 # or new-index+new-assets, never new-index over missing assets.
+#
+# Cache-busting, learned the hard way: an hour-cached app.js once served a
+# user the PREVIOUS build's behaviour under a fresh index. The published
+# index.html gets ?v=<git-sha> stamped on every local script/style URL, so
+# the no-cache index alone decides which assets a browser runs — and the
+# assets themselves can then be cached for a day. The repo's index.html is
+# untouched; file:// use never sees the stamp.
+REV="$(git -C "$ROOT" rev-parse --short HEAD)"
+
 aws s3 sync "$ROOT/web/" "$BUCKET/" \
     --exclude "index.html" \
-    --cache-control "max-age=3600" \
+    --cache-control "max-age=86400" \
     --delete
 
-aws s3 cp "$ROOT/web/index.html" "$BUCKET/index.html" \
+STAMPED="$(mktemp)"
+sed -E "s/(href|src)=\"(css|js)\/([^\"?]+)\"/\1=\"\2\/\3?v=$REV\"/g" \
+    "$ROOT/web/index.html" > "$STAMPED"
+aws s3 cp "$STAMPED" "$BUCKET/index.html" \
+    --content-type "text/html" \
     --cache-control "no-cache"
+rm -f "$STAMPED"
 
 echo "published: https://oneoffendeavors-pinled-webui.s3.us-east-1.amazonaws.com/index.html"

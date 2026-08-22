@@ -984,20 +984,30 @@
             // an http device (mixed content, unconditional). Say that, with
             // directions, instead of relaying S3's AccessDenied XML.
             var bundleHost = location.protocol === "https:";
-            document.body.innerHTML =
-                "<div class='connect'><div class='card'><h3 class='card-title'>" +
-                (bundleHost ? "This is the app bundle, not a device"
-                            : "Could not reach the device API") +
-                "</h3><p class='prose'>" +
-                (bundleHost
-                    ? "Open the app from your controller instead — browse to " +
-                      "<code>http://pinled.local/</code> or the numeric address " +
-                      "the setup page reported. The device serves this same app " +
-                      "from its own address, which is the only origin that can " +
-                      "reach an <code>http://</code> API. Offline, download the " +
-                      "standalone app and open its <code>index.html</code> from disk."
-                    : esc(e.message)) +
-                "</p></div></div>";
+            document.body.innerHTML = bundleHost
+                ? "<div class='connect'><div class='card'>" +
+                  "<h3 class='card-title'>This is the pinled app bundle — " +
+                  "not your controller</h3>" +
+                  "<p class='prose'>You've reached the cloud copy of the app. " +
+                  "It can't connect to a controller from here: this page is " +
+                  "<code>https://</code>, your controller's API is " +
+                  "<code>http://</code> on your own network, and browsers " +
+                  "never allow that mix. This is by design — the app is meant " +
+                  "to be served <i>by the controller</i>.</p>" +
+                  "<p class='prose'><b>To use the app:</b> browse to " +
+                  "<a href='http://pinled.local/'>http://pinled.local/</a> " +
+                  "or the numeric address the setup page reported (also " +
+                  "printed in the boot log). The controller serves this same " +
+                  "app from its own address, always current.</p>" +
+                  "<p class='prose'><b>No controller yet, or offline?</b> " +
+                  "The standalone copy works from disk: save this site's " +
+                  "files and open <code>index.html</code> locally, or see " +
+                  "the <a href='api/index.html'>API reference</a> — which " +
+                  "does work from here.</p>" +
+                  "</div></div>"
+                : "<div class='connect'><div class='card'><h3 class='card-title'>" +
+                  "Could not reach the device API</h3><p class='prose'>" +
+                  esc(e.message) + "</p></div></div>";
         });
     }
 })();

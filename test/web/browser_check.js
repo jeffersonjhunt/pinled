@@ -129,7 +129,23 @@ async function run(name, engine, base, shellMode) {
         check("docs back link stays local",
               backHref.startsWith("file://") && backHref.endsWith("/web/index.html"),
               backHref);
+    const docsUrl = docs.url();
     await docs.close();
+
+    if (shellMode) {
+        // Someone WILL open the bundle URL directly — bookmarks, shared
+        // links. That page can never connect (https page, http device:
+        // mixed content), so it must explain itself with directions, not
+        // relay S3's AccessDenied XML or a bare error.
+        const direct = await browser.newPage();
+        await direct.goto(new URL("../index.html", docsUrl).href);
+        const title = await direct.waitForSelector(".connect .card-title",
+            { timeout: 15000 })
+            .then((el) => el.textContent(), () => "(no card)");
+        check("direct bundle visit explains itself",
+              /app bundle/i.test(title), title);
+        await direct.close();
+    }
 
     check("no failed network requests", netFail.length === 0,
           netFail.join(" | "));
