@@ -15,7 +15,7 @@ partition and the plain-'165 daisy chain were confirmed by the owner
 flowchart LR
     subgraph FE["Front end (×16 per module) — unchanged since rev B"]
       TAP["Lamp socket tap<br/>5–20 V AC/DC"] --> DIV["divider + diode"]
-      DIV --> FET["N-ch MOSFET (inverting)<br/>output clamped to 3V3"]
+      DIV --> FET["N-ch MOSFET (inverting)<br/>12 V zener gate–source"]
       FET --> ST["74LVC14 Schmitt<br/>(inverting) → net non-inverting"]
     end
 
@@ -278,8 +278,23 @@ clean at 4 MHz for millions of frames.
   ≈18–20 V feature).
 - The Schmitt costs nothing in scan timing: it sits *before* the mux, so its
   ~10 ns t_pd has long settled by the time the counter addresses that channel.
-- **Protection:** gate series resistor, clamp FET output to 3V3 (Schottky/TVS or
-  input protection diodes via series R). Respect HC abs-max VCC + 0.5 V.
+- **Protection — owner's design, restored to the record 2026-08-22** (an
+  earlier conversation the docs had lost, then mis-remembered as an output
+  clamp):
+  - **Gate side, the one that matters: 12 V zener, gate to source, per
+    channel.** The 2N7000's V_GS absolute max is ±20 V and the input span
+    reaches ~24 V; the divider cannot double as protection because its
+    ratio is set by a different requirement — enough gate drive at 6.3 V GI
+    to enhance the FET, which forces roughly ½. The value must satisfy
+    `V_z > V_in_max_legit × ratio` (~10 V at ½ from 20 V feature lamps) and
+    `V_z < 20 V`: **12 V** at ratio ≈ ½. (9.1 V pairs with a ⅓ ratio, but
+    6.3 V GI ÷ 3 sits at the top of the Vth spread — marginal enhancement,
+    rejected.) Plus the gate series resistor.
+  - **Output side: NO discrete clamp.** The drain can only exceed the rail
+    via charge coupled through C_gd during fast HV transients (and ESD) —
+    nanocoulomb events. A small series R into the 74LVC14 lets its input
+    protection diodes absorb them; a dedicated Schottky there is redundant.
+    Respect HC abs-max VCC + 0.5 V.
 - **Decoupling:** 0.1 µF at every IC VCC; keep logic ground away from
   high-current solenoid returns.
 
