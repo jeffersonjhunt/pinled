@@ -1033,6 +1033,24 @@ two-task race on the live-client table that a slow upload turned into a
 `test/web/browser_check.js` — the app in real WebKit and Chromium against
 a real board — is the permanent gate that class of bug now has to pass.*
 
+## 5.3 Versioning, adopted 2026-08-22
+
+`version.txt` sat at 0.2.0 through six feature merges before anyone asked
+what rule it followed; the honest answer was "none", which is why
+`build_id` had to be invented mid-OTA-testing. The rule now:
+
+- **The bump is the last commit on a feature branch before its merge**, so
+  every merge to `main` carries its own version and "what is on the board"
+  is one number.
+- **MINOR** for a merge that adds a subsystem or capability; **PATCH** for
+  a fixes-only merge; **MAJOR** reserved for 1.0.0 on shipping hardware.
+- `kApiVersion` is separate on purpose (it tracks the API *contract*, and
+  stays 1 until the contract breaks); `build_id` remains the per-build
+  truth between bumps.
+
+0.3.0 is the catch-up: the M4 era plus the in-house LED driver, taken as
+one acknowledged step rather than six retroactive ones.
+
 ## 6. Test strategy
 
 Written when the repo had no tests at all. As of 2026-08-15 there are

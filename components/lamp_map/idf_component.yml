@@ -2,8 +2,8 @@ dependencies:
   idf: '>=5.5'
   # The in-house driver (github.com/jeffersonjhunt/esp32-idf-ws2812b),
   # born when its predecessor was caught transmitting every colour byte
-  # bit-reversed. Pinned to a commit, same policy as before: the wire
+  # bit-reversed. Pinned to its v0.1.0 tag, same policy as before: the wire
   # contract is proven per-version on the bench, not assumed.
   esp32-idf-ws2812b:
     git: "https://github.com/jeffersonjhunt/esp32-idf-ws2812b.git"
-    version: "b0eea3feef42"
+    version: "v0.1.0"
