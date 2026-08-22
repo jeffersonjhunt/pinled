@@ -325,9 +325,17 @@ S3. Full derivation in `TIMING.md` §5.
   boundary (`wire8()` in lamp_map.cpp) with the capture as evidence, the
   bug reported upstream, and the dependency **pinned to ==1.1.0** so a
   silent upstream fix cannot double-reverse through the shim. **Decided
-  2026-08-21: replace the driver after `feat/webui` closes** — espressif's
-  `led_strip` (RMT), or an in-house driver (the indicator's raw-RMT path
-  is a working seed). The pin and the shim leave together.
+  2026-08-21: replace the driver after `feat/webui` closes.**
+
+  **Replaced 2026-08-22** with the in-house
+  [esp32-idf-ws2812b](https://github.com/jeffersonjhunt/esp32-idf-ws2812b)
+  (RMT bytes encoder, `msb_first` by construction, copy-on-show, optional
+  DMA — reviewed at its `b0eea3f` merge). The pin and the `wire8()` shim
+  left together, as promised, and colour order now flows through the
+  host-tested `bytes_for_order()` into `write_raw()`, which transmits
+  verbatim: one component decides the bytes, one moves them. Bench
+  acceptance for the driver's two deferred criteria: the Saleae capture
+  (0x80 decodes as 0x80 on the wire) and the green 254-vs-255 probe.
 
   HW-9 itself still stands as mainboard engineering — 3.3 V into a 3.5 V
   threshold is legitimately out of spec even though this bench strip reads
