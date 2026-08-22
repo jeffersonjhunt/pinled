@@ -13,13 +13,14 @@
 #include "pinled_color_order.h"
 
 #include <cmath>
+#include <cstring>
 #include <new>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "esp_log.h"
-#include "neopixel.h"
+#include "ws2812b.h"
 
 namespace ooe::pinled
 {
@@ -28,23 +29,6 @@ namespace ooe::pinled
     static inline uint8_t scale8(uint8_t value, uint8_t scale)
     {
         return static_cast<uint8_t>((static_cast<uint16_t>(value) * scale) / 255);
-    }
-
-    /// The zorxx/neopixel 1.1.0 I2S path transmits every colour byte
-    /// BIT-REVERSED on this S3 / IDF 5.5 build. Measured 2026-08-20 with a
-    /// logic analyser: the firmware handed the driver 0x80 and the wire
-    /// carried 0x01, while the palindrome 0x7E crossed unchanged
-    /// (raw/R0G255B0.csv, raw/R0G254B0.csv) — which is why pure 0x00/0xFF
-    /// primaries always looked right and every mixed colour was wrong.
-    /// Each byte is pre-reversed HERE, at the driver boundary and nowhere
-    /// else, so the wire carries what the pipeline computed. Upstream has
-    /// open "bits transposed" issues; replacing the driver outright is the
-    /// recorded follow-up (HARDWARE.md).
-    static inline uint8_t wire8(uint8_t v)
-    {
-        v = static_cast<uint8_t>((v & 0xF0) >> 4 | (v & 0x0F) << 4);
-        v = static_cast<uint8_t>((v & 0xCC) >> 2 | (v & 0x33) << 2);
-        return static_cast<uint8_t>((v & 0xAA) >> 1 | (v & 0x55) << 1);
     }
 
     esp_err_t LampMap::init(const LampMapConfig &cfg)
@@ -70,22 +54,35 @@ namespace ooe::pinled
             return ESP_ERR_NO_MEM;
 
         // Allocated once here, never in the render path (NFR-4).
-        frame_ = new (std::nothrow) tNeopixel[cfg_.led_count];
+        frame_ = new (std::nothrow) uint8_t[cfg_.led_count * 3];
         if (!frame_)
         {
             deinit();
             return ESP_ERR_NO_MEM;
         }
 
-        tNeopixelContext ctx = neopixel_Init(cfg_.led_count, cfg_.led_pin);
-        if (ctx == nullptr)
+        // The driver moves bytes; THIS component decides them. Colour order
+        // is applied here via bytes_for_order (host-tested), so the driver's
+        // own order setting is irrelevant — everything goes through
+        // write_raw, which transmits verbatim. DMA on: the S3 has one
+        // DMA-capable RMT channel, nothing else claims it, and the render
+        // task shares a machine with Wi-Fi.
+        ws2812b_config_t sc = {};
+        sc.gpio = cfg_.led_pin;
+        sc.pixel_count = cfg_.led_count;
+        sc.order = WS2812B_ORDER_GRB; // unused: write_raw only
+        sc.reset_us = 0;              // driver default (300 us, V5-safe)
+        sc.with_dma = true;
+        auto *strip = new (std::nothrow) WS2812B(&sc);
+        if (strip == nullptr || !strip->ok())
         {
-            ESP_LOGE(TAG, "neopixel_Init failed (pin %d, count %u)",
+            ESP_LOGE(TAG, "ws2812b init failed (pin %d, count %u)",
                      (int)cfg_.led_pin, (unsigned)cfg_.led_count);
+            delete strip;
             deinit();
             return ESP_FAIL;
         }
-        neopixel_ = ctx;
+        strip_ = strip;
 
         set_default_mapping();
         initialized_ = true;
@@ -98,14 +95,14 @@ namespace ooe::pinled
 
     void LampMap::deinit()
     {
-        if (neopixel_)
+        if (strip_)
         {
-            neopixel_Deinit(static_cast<tNeopixelContext>(neopixel_));
-            neopixel_ = nullptr;
+            delete static_cast<WS2812B *>(strip_); // transmits a dark frame
+            strip_ = nullptr;
         }
         delete[] map_;
         map_ = nullptr;
-        delete[] static_cast<tNeopixel *>(frame_);
+        delete[] frame_;
         frame_ = nullptr;
         initialized_ = false;
     }
@@ -141,36 +138,27 @@ namespace ooe::pinled
                  (unsigned)cfg_.led_count, (unsigned)ms_per_led,
                  (unsigned)(cfg_.led_count * ms_per_led));
 
-        tNeopixel *frame = static_cast<tNeopixel *>(frame_);
+        auto *strip = static_cast<WS2812B *>(strip_);
 
         // White, so all three elements are exercised. It is also the one colour
         // that looks identical whatever byte order the strip uses, which is
         // correct here: this answers "is the pixel alive", and the fixture in
         // fs_seed answers "is the order right".
-        const uint32_t lit = pack_for_order(cfg_.color_order, wire8(255), wire8(255), wire8(255));
-
         for (size_t on = 0; on < cfg_.led_count; ++on)
         {
-            for (size_t i = 0; i < cfg_.led_count; ++i)
-            {
-                frame[i].index = static_cast<uint32_t>(i);
-                frame[i].rgb = (i == on) ? lit : 0;
-            }
-            neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_),
-                              frame, static_cast<uint32_t>(cfg_.led_count));
+            memset(frame_, 0, cfg_.led_count * 3);
+            bytes_for_order(cfg_.color_order, 255, 255, 255, &frame_[on * 3]);
+            strip->write_raw(frame_, cfg_.led_count * 3);
+            strip->show(true);
             vTaskDelay(pdMS_TO_TICKS(ms_per_led));
         }
 
         // Leave the string dark rather than holding the last pixel on: the
         // next thing to touch it is the render task, and a stuck pixel between
         // the two would look like a fault this test had just caused.
-        for (size_t i = 0; i < cfg_.led_count; ++i)
-        {
-            frame[i].index = static_cast<uint32_t>(i);
-            frame[i].rgb = 0;
-        }
-        neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_),
-                          frame, static_cast<uint32_t>(cfg_.led_count));
+        memset(frame_, 0, cfg_.led_count * 3);
+        strip->write_raw(frame_, cfg_.led_count * 3);
+        strip->show(true);
         return ESP_OK;
     }
 
@@ -179,17 +167,13 @@ namespace ooe::pinled
         if (!initialized_)
             return ESP_ERR_INVALID_STATE;
 
-        tNeopixel *frame = static_cast<tNeopixel *>(frame_);
-        const uint32_t rgb = pack_for_order(cfg_.color_order, wire8(r), wire8(g), wire8(b));
         for (size_t i = 0; i < cfg_.led_count; ++i)
-        {
-            frame[i].index = static_cast<uint32_t>(i);
-            frame[i].rgb = rgb;
-        }
-        return neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_),
-                                 frame, static_cast<uint32_t>(cfg_.led_count))
-                   ? ESP_OK
-                   : ESP_FAIL;
+            bytes_for_order(cfg_.color_order, r, g, b, &frame_[i * 3]);
+        auto *strip = static_cast<WS2812B *>(strip_);
+        esp_err_t err = strip->write_raw(frame_, cfg_.led_count * 3);
+        if (err != ESP_OK)
+            return err;
+        return strip->show(true);
     }
 
     esp_err_t LampMap::set_entry(size_t channel, const LampMapEntry &e)
@@ -210,7 +194,7 @@ namespace ooe::pinled
     {
         if (!initialized_)
             return 0;
-        return neopixel_GetRefreshRate(static_cast<tNeopixelContext>(neopixel_));
+        return static_cast<WS2812B *>(strip_)->max_refresh_hz();
     }
 
     void LampMap::set_override(int16_t led, uint8_t r, uint8_t g, uint8_t b,
@@ -239,15 +223,9 @@ namespace ooe::pinled
         if (!levels)
             return ESP_ERR_INVALID_ARG;
 
-        tNeopixel *frame = static_cast<tNeopixel *>(frame_);
-
         // Build the whole strip, dark by default, so an LED with no channel
         // mapped to it is driven off rather than left showing whatever it had.
-        for (size_t i = 0; i < cfg_.led_count; ++i)
-        {
-            frame[i].index = static_cast<uint32_t>(i);
-            frame[i].rgb = 0;
-        }
+        memset(frame_, 0, cfg_.led_count * 3);
 
         const size_t count = n < cfg_.channel_count ? n : cfg_.channel_count;
         for (size_t ch = 0; ch < count; ++ch)
@@ -256,14 +234,11 @@ namespace ooe::pinled
             if (e.led_index < 0 || static_cast<size_t>(e.led_index) >= cfg_.led_count)
                 continue;
             const uint8_t v = levels[ch];
-            // NOT NP_RGB: that macro hard-codes the driver's native GRB
-            // transmission order, which is wrong on an RGB-ordered strip. The
-            // packing is the same 24-bit layout, chosen by the install's
-            // declared order — see pinled_color_order.h for why the byte sent
-            // first lives in the middle of the word.
-            frame[e.led_index].rgb =
-                pack_for_order(cfg_.color_order, wire8(scale8(e.r, v)),
-                               wire8(scale8(e.g, v)), wire8(scale8(e.b, v)));
+            // Wire order decided HERE (bytes_for_order, host-tested), and
+            // nowhere else: the driver's write_raw transmits these bytes
+            // verbatim, MSB-first — proven per-version on the bench.
+            bytes_for_order(cfg_.color_order, scale8(e.r, v), scale8(e.g, v),
+                            scale8(e.b, v), &frame_[e.led_index * 3]);
         }
 
         // The colour lab wins over everything (bench harness, cleared on
@@ -285,18 +260,20 @@ namespace ooe::pinled
                     g = tint_lut_[g];
                     b = tint_lut_[b];
                 }
-                frame[led].rgb = pack_for_order(cfg_.color_order,
-                                                wire8(scale8(r, lv)),
-                                                wire8(scale8(g, lv)),
-                                                wire8(scale8(b, lv)));
+                bytes_for_order(cfg_.color_order, scale8(r, lv),
+                                scale8(g, lv), scale8(b, lv),
+                                &frame_[led * 3]);
             }
         }
 
-        // ONE transmit per refresh (FR-LED-6). The driver drops SetPixel calls
-        // spaced closer than a strip time, so the old per-channel loop was
-        // discarding most of its own updates, not merely wasting time.
-        const bool ok = neopixel_SetPixel(static_cast<tNeopixelContext>(neopixel_),
-                                          frame, static_cast<uint32_t>(cfg_.led_count));
-        return ok ? ESP_OK : ESP_FAIL;
+        // ONE transmit per refresh (FR-LED-6). write_raw copies into the
+        // driver's caller half; show(false) waits out any in-flight frame,
+        // copies to the transmit half, and queues — so back-to-back renders
+        // can never tear a frame on the wire.
+        auto *strip = static_cast<WS2812B *>(strip_);
+        const esp_err_t werr = strip->write_raw(frame_, cfg_.led_count * 3);
+        if (werr != ESP_OK)
+            return werr;
+        return strip->show(false);
     }
 } // namespace ooe::pinled

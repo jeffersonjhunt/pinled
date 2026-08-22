@@ -11,7 +11,13 @@
  *
  * Relates each sensed lamp channel to one or more addressable-LED indices with
  * a base color/tint, multiplies the base color by the channel's reconstructed
- * brightness, and pushes a frame over RMT (zorxx/neopixel, as in the POC).
+ * brightness, and pushes a frame over RMT via esp32-idf-ws2812b — the
+ * in-house driver written after its predecessor was caught, by logic
+ * analyzer, transmitting every colour byte bit-reversed. This component
+ * owns colour ORDER (bytes_for_order, host-tested) and hands the driver
+ * wire-ready bytes through write_raw, which transmits verbatim: one
+ * component decides the bytes, one moves them, and neither transforms
+ * the other's work.
  *
  * Rendering builds the **whole strip** into a frame buffer and issues a single
  * strip transmit per refresh (FR-LED-6). That is not just an optimization: the
@@ -174,8 +180,8 @@ namespace ooe::pinled
 
         LampMapConfig cfg_{};
         LampMapEntry *map_{nullptr};
-        void *neopixel_{nullptr}; ///< tNeopixelContext (opaque here)
-        void *frame_{nullptr};    ///< tNeopixel[led_count], built once per refresh
+        void *strip_{nullptr};    ///< WS2812B* (opaque here)
+        uint8_t *frame_{nullptr}; ///< led_count*3 wire bytes, built per refresh
         bool initialized_{false};
     };
 } // namespace ooe::pinled
