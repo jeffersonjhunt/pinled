@@ -972,7 +972,12 @@
         });
         if (saved) tryConnect();
     } else {
-        boot("").catch(function (e) {
+        // location.origin, never "": the shell injects <base href="<bundle>">
+        // so RELATIVE URLs — including fetch("/api/v1/...") — resolve to the
+        // S3 bundle, not the device. An explicit absolute origin is immune.
+        // location itself is unaffected by <base>, so it still names the
+        // device that served the shell.
+        boot(location.origin).catch(function (e) {
             document.body.innerHTML =
                 "<div class='connect'><div class='card'><h3 class='card-title'>" +
                 "Could not reach the device API</h3><p class='prose'>" + esc(e.message) +
